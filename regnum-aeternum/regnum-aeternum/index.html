@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Regnum Aeternum — Civic Portal</title>
+<meta name="description" content="The official civic portal of Regnum Aeternum — legal records, land registry, the state press, treasury, and ordnance office." />
+<link rel="icon" href="assets/logo.webp" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant:wght@500;600;700&family=Cormorant+SC:wght@500;600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/styles.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <img class="topbar__crest" src="assets/logo.webp" alt="Crest of Regnum Aeternum" />
+  <span class="topbar__name">Regnum Aeternum</span>
+  <span class="topbar__tag">Civic Portal</span>
+</header>
+
+<section class="hero">
+  <div class="hero__field" aria-hidden="true"></div>
+  <div class="hero__seam" aria-hidden="true"></div>
+  <div class="hero__vignette" aria-hidden="true"></div>
+
+  <p class="hero__eyebrow">By Decree of the Crown</p>
+
+  <div class="hero__crest">
+    <img src="assets/logo.webp" alt="Crest of Regnum Aeternum" />
+  </div>
+
+  <h1 class="hero__title">Regnum<br/>Aeternum</h1>
+  <p class="hero__motto">Regnum quod non cadit</p>
+  <p class="hero__lede">The official civic portal of the realm. Five offices of state, open to citizens, kept by the Crown.</p>
+
+  <a href="#directory" class="hero__scroll">
+    <span>Offices of the Realm</span>
+    <span class="hero__chevron" aria-hidden="true"></span>
+  </a>
+</section>
+
+<section class="directory" id="directory">
+  <div class="directory__head reveal">
+    <p class="directory__eyebrow">Departments of State</p>
+    <h2 class="directory__title">Offices of the Realm</h2>
+    <p class="directory__sub">Each office keeps its own records and its own rules of entry. Select one to proceed.</p>
+  </div>
+
+  <a href="legal/" class="office reveal">
+    <span class="office__seal" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M5 7l-3 5a3 3 0 006 0l-3-5zM19 7l-3 5a3 3 0 006 0l-3-5zM5 7h14M9 21h6"/></svg>
+    </span>
+    <span class="office__body">
+      <span class="office__row">
+        <span class="office__category">Civil Office</span>
+      </span>
+      <span class="office__name">Legal Information System</span>
+      <p class="office__charge">Statutes, rulings, and the legal code of the realm.</p>
+    </span>
+    <span class="office__meta">
+      <span class="tag tag--open">Open Access</span>
+      <span class="office__arrow" aria-hidden="true"></span>
+    </span>
+  </a>
+
+  <a href="land-registry/" class="office reveal">
+    <span class="office__seal" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l6-3 6 3 6-3v13l-6 3-6-3-6 3V7z"/><path d="M9 4v13M15 7v13"/></svg>
+    </span>
+    <span class="office__body">
+      <span class="office__row">
+        <span class="office__category">Cadastre</span>
+      </span>
+      <span class="office__name">Land Registry System</span>
+      <p class="office__charge">Claims, deeds, and the boundaries of every holding.</p>
+    </span>
+    <span class="office__meta">
+      <span class="tag tag--open">Open Access</span>
+      <span class="office__arrow" aria-hidden="true"></span>
+    </span>
+  </a>
+
+  <a href="newspaper/" class="office reveal">
+    <span class="office__seal" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h13a2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5z"/><path d="M4 5a2 2 0 00-2 2v9a2 2 0 002 2"/><path d="M8 9h6M8 12.5h6M8 16h3"/></svg>
+    </span>
+    <span class="office__body">
+      <span class="office__row">
+        <span class="office__category">Press Office</span>
+      </span>
+      <span class="office__name">Times of Regnum</span>
+      <p class="office__charge">Dispatches and notices, printed by order of the Crown.</p>
+    </span>
+    <span class="office__meta">
+      <span class="tag tag--open">Open Access</span>
+      <span class="office__arrow" aria-hidden="true"></span>
+    </span>
+  </a>
+
+  <a href="banking/" class="office reveal">
+    <span class="office__seal" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10l9-6 9 6"/><path d="M5 10v9M9 10v9M15 10v9M19 10v9"/><path d="M3 19h18"/></svg>
+    </span>
+    <span class="office__body">
+      <span class="office__row">
+        <span class="office__category">Treasury</span>
+      </span>
+      <span class="office__name">Banking System</span>
+      <p class="office__charge">Accounts and reserves of the realm — being fitted to the Crown's ledger engines.</p>
+    </span>
+    <span class="office__meta">
+      <span class="tag tag--dev">In Development</span>
+      <span class="office__arrow" aria-hidden="true"></span>
+    </span>
+  </a>
+
+  <a href="ballistics/" class="office office--restricted reveal">
+    <span class="office__seal" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>
+    </span>
+    <span class="office__body">
+      <span class="office__row">
+        <span class="office__category">Ordnance Office</span>
+      </span>
+      <span class="office__name">Ballistic Calculator</span>
+      <p class="office__charge">Trajectory tables for siege ordnance — Crown clearance required.</p>
+    </span>
+    <span class="office__meta">
+      <span class="tag tag--restricted">Restricted</span>
+      <span class="office__arrow" aria-hidden="true"></span>
+    </span>
+  </a>
+</section>
+
+<footer class="footer">
+  <div class="footer__inner">
+    <div class="footer__brand">
+      <img class="footer__crest" src="assets/logo.webp" alt="" />
+      <div>
+        <div class="footer__name">Regnum Aeternum</div>
+        <div class="footer__motto">Regnum quod non cadit</div>
+      </div>
+    </div>
+    <div class="footer__meta">
+      Maintained by the Office of Civil Administration<br/>
+      © 2026 Regnum Aeternum
+    </div>
+  </div>
+</footer>
+
+<script src="assets/script.js"></script>
+</body>
+</html>
