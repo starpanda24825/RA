@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Legal Act — Regnum Aeternum</title>
+<link rel="icon" href="../../assets/logo.webp" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant:wght@500;600;700&family=Cormorant+SC:wght@500;600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/styles.css" />
+<link rel="stylesheet" href="../assets/legal.css" />
+</head>
+<body>
+<header class="topbar">
+  <a href="../../" style="display:flex;align-items:center;gap:14px;">
+    <img class="topbar__crest" src="../../assets/logo.webp" alt="Crest of Regnum Aeternum" />
+    <span class="topbar__name">Regnum Aeternum</span>
+  </a>
+  <span class="topbar__tag">Legal Information System</span>
+</header>
+
+<main class="legalwrap">
+  <p style="margin:0 0 28px;"><a href="../" style="color:var(--gold-bright); font-family:var(--font-mono); font-size:12px; letter-spacing:0.06em; text-transform:uppercase;">&larr; Legal Acts Database</a></p>
+
+  <div class="actview" id="actview-root">
+    <p class="legalempty">Loading…</p>
+  </div>
+</main>
+
+<footer class="footer">
+  <div class="footer__inner">
+    <div class="footer__brand">
+      <img class="footer__crest" src="../../assets/logo.webp" alt="" />
+      <div>
+        <div class="footer__name">Regnum Aeternum</div>
+        <div class="footer__motto">Regnum quod non cadit</div>
+      </div>
+    </div>
+    <div class="footer__meta">
+      Maintained by the Office of Civil Administration<br/>
+      © 2026 Regnum Aeternum
+    </div>
+  </div>
+</footer>
+
+<script src="../assets/legal-data.js"></script>
+<script src="../assets/legal-app.js"></script>
+</body>
+</html>

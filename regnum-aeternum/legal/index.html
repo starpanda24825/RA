@@ -4,11 +4,13 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Legal Information System — Regnum Aeternum</title>
+<meta name="description" content="Search and browse the statutes, codes, and case law of Regnum Aeternum." />
 <link rel="icon" href="../assets/logo.webp" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant:wght@500;600;700&family=Cormorant+SC:wght@500;600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="../assets/styles.css" />
+<link rel="stylesheet" href="assets/legal.css" />
 </head>
 <body>
 <header class="topbar">
@@ -19,19 +21,74 @@
   <span class="topbar__tag">Legal Information System</span>
 </header>
 
-<main class="subpage">
-  <div class="subpage__panel">
-    <div class="subpage__seal" aria-hidden="true">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M5 7l-3 5a3 3 0 006 0l-3-5zM19 7l-3 5a3 3 0 006 0l-3-5zM5 7h14M9 21h6"/></svg>
+<main class="legalwrap">
+
+  <div class="legalhub__intro">
+    <p class="legalhub__eyebrow">Civil Office</p>
+    <h1 class="legalhub__title">Legal Information System</h1>
+    <p class="legalhub__lede">Search the statutes, codes, and rulings of the realm. Type an act name, a keyword, or an article reference like &quot;art. 1 penal code&quot;.</p>
+  </div>
+
+  <div class="legalsearch">
+    <input
+      id="hub-search-input"
+      class="legalsearch__input"
+      type="text"
+      placeholder="Search legal acts, provisions, or keywords…"
+      autocomplete="off"
+      spellcheck="false"
+    />
+    <div id="hub-search-suggestions" class="legalsearch__suggestions"></div>
+  </div>
+
+  <div class="legalhub__grid">
+    <div class="legalpanel">
+      <p class="legalpanel__eyebrow">Recently In Force</p>
+      <h2 class="legalpanel__title">Latest Acts</h2>
+      <div class="legalpanel__list" id="latest-acts-list"></div>
     </div>
-    <p class="subpage__eyebrow">Civil Office</p>
-    <h1 class="subpage__title">Legal Information System</h1>
-    <p class="subpage__body">The statutes, rulings, and legal code of the realm will be recorded here. This office is being prepared and will open to citizens shortly.</p>
-    <a href="../" class="subpage__back">
-      <span class="subpage__arrow-back" aria-hidden="true"></span>
-      Return to the Portal
+
+    <div class="legalpanel">
+      <p class="legalpanel__eyebrow">Full Registry</p>
+      <h2 class="legalpanel__title">Legal Database</h2>
+      <div class="legalpanel__list" id="legal-db-list"></div>
+      <a class="legalpanel__more" href="acts/">
+        Click to open full legal database
+        <span class="chevron-right" aria-hidden="true"></span>
+      </a>
+    </div>
+  </div>
+
+  <div class="legalhub__caselaw">
+    <div class="legalhub__caselaw-text">
+      <h2>Supreme Court Case Law Database</h2>
+      <p>Browse judgments, resolutions, and legal opinions of the Supreme Court of Regnum Aeternum — <span id="caselaw-count">0</span> documents on record.</p>
+    </div>
+    <a class="legalhub__caselaw-link" href="case-law/">
+      Open Database
+      <span class="chevron-right" aria-hidden="true"></span>
     </a>
   </div>
+
 </main>
+
+<footer class="footer">
+  <div class="footer__inner">
+    <div class="footer__brand">
+      <img class="footer__crest" src="../assets/logo.webp" alt="" />
+      <div>
+        <div class="footer__name">Regnum Aeternum</div>
+        <div class="footer__motto">Regnum quod non cadit</div>
+      </div>
+    </div>
+    <div class="footer__meta">
+      Maintained by the Office of Civil Administration<br/>
+      © 2026 Regnum Aeternum
+    </div>
+  </div>
+</footer>
+
+<script src="assets/legal-data.js"></script>
+<script src="assets/legal-app.js"></script>
 </body>
 </html>
