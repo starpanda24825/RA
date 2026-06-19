@@ -1,25 +1,281 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>Ballistic Calculator — Regnum Aeternum</title>
-<meta name="robots" content="noindex" />
-<link rel="icon" href="../assets/logo.webp" />
+<meta name="robots" content="noindex"/>
+<link rel="icon" href="../assets/logo.webp"/>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant:wght@500;600;700&family=Cormorant+SC:wght@500;600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="../assets/styles.css" />
+<link rel="stylesheet" href="../assets/styles.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+#auth-gate { display:none; }
+#app       { display:none; }
+
+.bc-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+#map-wrap {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
+}
+#map {
+  width: 100%;
+  height: 100%;
+  background: var(--ink);
+}
+
+#panel {
+  flex: 0 0 auto;
+  height: 360px;
+  overflow-y: auto;
+  background: var(--ink-soft);
+  border-top: 1px solid var(--slate-line);
+}
+
+.map-bar {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 500;
+  display: flex;
+  gap: 8px;
+  background: rgba(18,17,19,0.88);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--slate-line);
+  border-radius: 100px;
+  padding: 6px 12px;
+  align-items: center;
+}
+.map-bar__label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--parchment-faint);
+  padding-right: 6px;
+}
+.map-btn {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  background: transparent;
+  border: 1px solid var(--slate-line);
+  color: var(--parchment-dim);
+  border-radius: 100px;
+  padding: 5px 14px;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
+  white-space: nowrap;
+}
+.map-btn:hover { border-color: var(--gold-dim); color: var(--parchment); }
+.map-btn.active { background: var(--crimson-deep); border-color: var(--crimson-bright); color: var(--parchment); }
+.map-btn.danger { border-color: rgba(176,64,64,0.4); color: #e3a3a3; }
+.map-btn.danger:hover { background: rgba(176,64,64,0.18); }
+
+.coord-pill {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 500;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--parchment-faint);
+  background: rgba(18,17,19,0.72);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--slate-line);
+  border-radius: 100px;
+  padding: 5px 16px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.panel-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 22px 28px 32px;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+  gap: 20px 28px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .panel-inner { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 540px) {
+  .panel-inner { grid-template-columns: 1fr; }
+  #panel { height: auto; max-height: 55vh; }
+}
+
+.field-group { display: flex; flex-direction: column; gap: 6px; }
+.field-group label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--slate-soft);
+}
+.field-hint {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--slate-soft);
+  margin-top: 2px;
+}
+.coord-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+.bc-input {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--parchment);
+  background: var(--ink-elevated);
+  border: 1px solid var(--slate-line);
+  border-radius: 7px;
+  padding: 9px 12px;
+  width: 100%;
+  transition: border-color 0.2s;
+}
+.bc-input::placeholder { color: var(--parchment-faint); }
+.bc-input:focus { outline: none; border-color: var(--gold-dim); }
+.bc-input.set { border-color: var(--teal-bright); }
+
+.bc-select {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--parchment);
+  background: var(--ink-elevated);
+  border: 1px solid var(--slate-line);
+  border-radius: 7px;
+  padding: 9px 12px;
+  width: 100%;
+}
+
+.charges-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.charge-btn {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 9px 0;
+  flex: 1 1 28px;
+  text-align: center;
+  background: var(--ink-elevated);
+  border: 1px solid var(--slate-line);
+  color: var(--parchment-dim);
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.charge-btn.active { background: var(--crimson-deep); border-color: var(--crimson-bright); color: var(--parchment); }
+
+.calc-btn {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  background: var(--crimson);
+  border: 1px solid var(--crimson-bright);
+  color: var(--parchment);
+  border-radius: 8px;
+  padding: 12px 0;
+  width: 100%;
+  cursor: pointer;
+  transition: background 0.2s;
+  margin-top: 4px;
+}
+.calc-btn:hover { background: var(--crimson-bright); }
+.calc-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.results-wrap { grid-column: 1 / -1; display: none; }
+.results-wrap.visible { display: block; }
+
+.results-tabs { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--slate-line); }
+.rtab {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 6px 16px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--parchment-faint);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.rtab.active { color: var(--gold-bright); border-bottom-color: var(--gold-bright); }
+
+.result-panel { display: none; }
+.result-panel.active { display: block; }
+
+.result-grid { display: flex; flex-wrap: wrap; gap: 10px; }
+.result-stat {
+  background: var(--ink-elevated);
+  border: 1px solid var(--slate-line);
+  border-radius: 8px;
+  padding: 10px 16px;
+  min-width: 120px;
+}
+.result-stat__label {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--slate-soft);
+  margin-bottom: 4px;
+}
+.result-stat__value { font-family: var(--font-mono); font-size: 16px; font-weight: 600; color: var(--parchment); }
+.result-stat--highlight .result-stat__value { color: var(--gold-bright); }
+.result-stat--warn .result-stat__value { color: var(--teal-bright); }
+
+.result-error {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: #e3a3a3;
+  padding: 12px;
+  background: rgba(176,64,64,0.12);
+  border: 1px solid rgba(176,64,64,0.3);
+  border-radius: 8px;
+}
+
+#height-canvas {
+  width: 100%;
+  height: 130px;
+  background: var(--ink-elevated);
+  border: 1px solid var(--slate-line);
+  border-radius: 8px;
+  display: block;
+}
+
+.leaflet-container { background: #0a0a0c; }
+.leaflet-control-zoom a {
+  background: rgba(18,17,19,0.9) !important;
+  color: var(--parchment) !important;
+  border-color: var(--slate-line) !important;
+}
+
+.cannon-icon { width:18px; height:18px; background:var(--crimson-bright); border:2px solid var(--parchment); border-radius:50%; }
+.target-icon { width:18px; height:18px; background:var(--gold-bright);    border:2px solid var(--ink);        border-radius:50%; }
+</style>
 </head>
 <body>
+
+<!-- AUTH GATE -->
+<div id="auth-gate">
 <header class="topbar">
   <a href="../" style="display:flex;align-items:center;gap:14px;">
-    <img class="topbar__crest" src="../assets/logo.webp" alt="Crest of Regnum Aeternum" />
+    <img class="topbar__crest" src="../assets/logo.webp" alt="Crest of Regnum Aeternum"/>
     <span class="topbar__name">Regnum Aeternum</span>
   </a>
   <span class="topbar__tag">Ordnance Office</span>
 </header>
-
 <main class="subpage subpage--restricted">
   <div class="subpage__panel">
     <div class="subpage__seal" aria-hidden="true">
@@ -27,12 +283,628 @@
     </div>
     <p class="subpage__eyebrow">Ordnance Office</p>
     <h1 class="subpage__title">Ballistic Calculator</h1>
-    <p class="subpage__body">Trajectory tables for siege ordnance are restricted to accounts granted Crown clearance. Sign in with an authorised account to continue, or contact the Ordnance Office if you believe you should hold clearance.</p>
-    <a href="../" class="subpage__back">
+    <p class="subpage__body" id="gate-msg">Trajectory tables for siege ordnance are restricted to accounts granted Crown clearance. Sign in to continue.</p>
+
+    <form id="login-form" style="margin:24px 0 0;display:flex;flex-direction:column;gap:12px;max-width:320px;margin-left:auto;margin-right:auto;">
+      <input id="lg-user" class="bc-input" type="text"     placeholder="Username" autocomplete="username"  required/>
+      <input id="lg-pass" class="bc-input" type="password" placeholder="Password" autocomplete="current-password" required/>
+      <p id="lg-err" style="color:#e3a3a3;font-family:var(--font-mono);font-size:12px;display:none;margin:0;"></p>
+      <button type="submit" class="calc-btn">Sign In</button>
+    </form>
+
+    <a href="../" class="subpage__back" style="margin-top:28px;display:inline-flex;">
       <span class="subpage__arrow-back" aria-hidden="true"></span>
       Return to the Portal
     </a>
   </div>
 </main>
+</div>
+
+<!-- MAIN APP -->
+<div id="app" class="bc-layout">
+
+  <header class="topbar" style="flex-shrink:0;">
+    <a href="../" style="display:flex;align-items:center;gap:14px;">
+      <img class="topbar__crest" src="../assets/logo.webp" alt="Crest of Regnum Aeternum"/>
+      <span class="topbar__name">Regnum Aeternum</span>
+    </a>
+    <span class="topbar__tag">Ballistic Calculator</span>
+    <span id="user-badge" style="margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--parchment-faint);"></span>
+    <button id="logout-btn" class="map-btn" style="margin-left:10px;">Sign out</button>
+  </header>
+
+  <div id="map-wrap">
+    <div id="map"></div>
+    <div class="map-bar">
+      <span class="map-bar__label">Place:</span>
+      <button class="map-btn" id="btn-cannon" title="Click on map to set cannon position">Cannon</button>
+      <button class="map-btn" id="btn-target" title="Click on map to set target position">Target</button>
+      <button class="map-btn danger" id="btn-clear">Clear</button>
+    </div>
+    <div class="coord-pill" id="cursor-coords">X — Z —</div>
+  </div>
+
+  <div id="panel">
+    <div class="panel-inner">
+
+      <div class="field-group">
+        <label>Cannon Mount (X, Y, Z)</label>
+        <div class="coord-row">
+          <input class="bc-input" id="cx" type="number" placeholder="X"/>
+          <input class="bc-input" id="cy" type="number" placeholder="Y" value="64"/>
+          <input class="bc-input" id="cz" type="number" placeholder="Z"/>
+        </div>
+        <div class="field-hint">Click "Cannon" then click the map, or type coordinates directly</div>
+      </div>
+
+      <div class="field-group">
+        <label>Target (X, Y, Z)</label>
+        <div class="coord-row">
+          <input class="bc-input" id="tx" type="number" placeholder="X"/>
+          <input class="bc-input" id="ty" type="number" placeholder="Y" value="64"/>
+          <input class="bc-input" id="tz" type="number" placeholder="Z"/>
+        </div>
+        <div class="field-hint">Click "Target" then click the map, or type coordinates directly</div>
+      </div>
+
+      <div class="field-group">
+        <label>Shell Type</label>
+        <select class="bc-select" id="shell-select"></select>
+        <label style="margin-top:10px;">Cannon Length (blocks)</label>
+        <input class="bc-input" id="cannon-len" type="number" value="4" min="1" max="32"/>
+      </div>
+
+      <div class="field-group">
+        <label>Powder Charges</label>
+        <div class="charges-row" id="charges-row"></div>
+        <button class="calc-btn" id="calc-btn" disabled>Calculate Trajectory</button>
+      </div>
+
+      <div class="results-wrap" id="results-wrap">
+        <div class="results-tabs">
+          <button class="rtab active" data-tab="low">Low Arc</button>
+          <button class="rtab" data-tab="high">High Arc</button>
+          <button class="rtab" data-tab="profile">Height Profile</button>
+        </div>
+        <div class="result-panel active" id="tab-low"></div>
+        <div class="result-panel"        id="tab-high"></div>
+        <div class="result-panel"        id="tab-profile">
+          <canvas id="height-canvas"></canvas>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(async function () {
+  'use strict';
+
+  /* ════════════════════════════════════════════════════════════
+     This file is organised so every value is declared before it's
+     used — nothing here depends on code that appears later in the
+     file. Order: physics engine → state → map → UI wiring → auth
+     (auth is last because showApp() needs the map to already exist).
+     ════════════════════════════════════════════════════════════ */
+
+  // ── DOM refs used throughout ──────────────────────────────────
+  const gate      = document.getElementById('auth-gate');
+  const app       = document.getElementById('app');
+  const gateMsgEl = document.getElementById('gate-msg');
+  const loginForm = document.getElementById('login-form');
+  const lgUser    = document.getElementById('lg-user');
+  const lgPass    = document.getElementById('lg-pass');
+  const lgErr     = document.getElementById('lg-err');
+  const userBadge = document.getElementById('user-badge');
+
+  // ════════════════════════════════════════════════════════════
+  // 1. BALLISTICS ENGINE
+  //
+  //    Per-tick integration order (assumed — confirm in-game and
+  //    adjust here if it doesn't match Create: Big Cannons):
+  //      position += velocity
+  //      velocity *= drag           (all 3 axes)
+  //      velocity.y -= gravity
+  //
+  //    Constants are the ones supplied for the mod:
+  //      gravity            = 0.05 blocks/tick² (downward)
+  //      velocity/charge    = 2 blocks/tick
+  //      drag               = per-shell, default 0.99 (shells.json)
+  //
+  //    There is no closed-form solution once drag is involved, so
+  //    the firing angle is found numerically: simulate the shot at
+  //    many candidate pitches, and bisect wherever the simulated
+  //    height at the target's horizontal distance crosses the
+  //    target's actual height. Low arc and high arc are searched
+  //    as two separate brackets (0.5–44.9° and 45.1–85°) since a
+  //    target within range usually has one solution in each.
+  // ════════════════════════════════════════════════════════════
+
+  const GRAVITY        = 0.05;
+  const VEL_PER_CHARGE = 2;
+  const TICKS_PER_SEC  = 20;
+  const MAX_TICKS      = 4000;
+
+  function simulate(x0, y0, z0, yawDeg, pitchDeg, charges, drag) {
+    const v0   = charges * VEL_PER_CHARGE;
+    const yawR = yawDeg   * Math.PI / 180;
+    const pitR = pitchDeg * Math.PI / 180;
+
+    let vx = -v0 * Math.sin(yawR) * Math.cos(pitR);
+    let vy =  v0 * Math.sin(pitR);
+    let vz =  v0 * Math.cos(yawR) * Math.cos(pitR);
+    let x = x0, y = y0, z = z0;
+
+    const path = [{ x, y, z, t: 0 }];
+    for (let t = 1; t <= MAX_TICKS; t++) {
+      x += vx; y += vy; z += vz;
+      vx *= drag; vy *= drag; vz *= drag;
+      vy -= GRAVITY;
+      path.push({ x, y, z, t });
+      if (y < -64) break;
+    }
+    return path;
+  }
+
+  function computeYaw(x0, z0, xt, zt) {
+    return Math.atan2(-(xt - x0), (zt - z0)) * 180 / Math.PI;
+  }
+
+  // Height of the trajectory at a given horizontal distance from (x0,z0).
+  // Returns null if the path never reaches that distance.
+  function yAtHDist(path, x0, z0, hDist) {
+    for (let i = 1; i < path.length; i++) {
+      const hPrev = Math.hypot(path[i-1].x - x0, path[i-1].z - z0);
+      const hCurr = Math.hypot(path[i].x   - x0, path[i].z   - z0);
+      if (hCurr >= hDist) {
+        const frac = hCurr === hPrev ? 0 : (hDist - hPrev) / (hCurr - hPrev);
+        return { y: path[i-1].y + frac * (path[i].y - path[i-1].y), tick: path[i-1].t + frac };
+      }
+    }
+    return null;
+  }
+
+  // Scan a pitch bracket for every angle that lands the shell exactly
+  // on the target's horizontal distance AND height — robust to the
+  // fact that height-vs-pitch isn't guaranteed monotonic near the
+  // edges of the high-angle bracket. Returns pitches ascending.
+  function findFiringSolutions(x0, y0, z0, xt, yt, zt, yawDeg, charges, drag, loLim, hiLim) {
+    const targetH = Math.hypot(xt - x0, zt - z0);
+    const SAMPLES = 90;
+
+    function fAt(theta) {
+      const path = simulate(x0, y0, z0, yawDeg, theta, charges, drag);
+      const r = yAtHDist(path, x0, z0, targetH);
+      return r === null ? null : (r.y - yt);
+    }
+
+    const thetas = [];
+    for (let i = 0; i <= SAMPLES; i++) thetas.push(loLim + (hiLim - loLim) * i / SAMPLES);
+    const fvals = thetas.map(fAt);
+
+    const roots = [];
+    for (let i = 0; i < thetas.length - 1; i++) {
+      const fa = fvals[i], fb = fvals[i + 1];
+      if (fa === null || fb === null) continue;
+      if (fa === 0) { roots.push(thetas[i]); continue; }
+      if (fa * fb < 0) {
+        let lo = thetas[i], hi = thetas[i + 1], loF = fa;
+        for (let k = 0; k < 40; k++) {
+          const mid  = (lo + hi) / 2;
+          const midF = fAt(mid);
+          const mf   = midF === null ? -1e9 : midF;
+          if ((loF < 0) === (mf < 0)) { lo = mid; loF = mf; }
+          else { hi = mid; }
+        }
+        roots.push((lo + hi) / 2);
+      }
+    }
+    return roots;
+  }
+
+  function solveArc(x0, y0, z0, xt, yt, zt, yawDeg, charges, drag, loLim, hiLim, pick) {
+    const roots = findFiringSolutions(x0, y0, z0, xt, yt, zt, yawDeg, charges, drag, loLim, hiLim);
+    if (!roots.length) return null;
+    const pitch = pick === 'min' ? roots[0] : roots[roots.length - 1];
+    const path  = simulate(x0, y0, z0, yawDeg, pitch, charges, drag);
+    const r     = yAtHDist(path, x0, z0, Math.hypot(xt - x0, zt - z0));
+    return { pitch, path, tof: r ? r.tick / TICKS_PER_SEC : null };
+  }
+
+  // ════════════════════════════════════════════════════════════
+  // 2. STATE
+  // ════════════════════════════════════════════════════════════
+  let CFG = {
+    dynmapBaseUrl: 'https://mc.westeroscraft.com',
+    world: 'world', mapType: 'flat',
+    defaultMcX: 784, defaultMcZ: 359,
+    defaultZoom: -2, useProxy: false
+  };
+  let shells          = [];
+  let maxCharges       = 6;
+  let selectedCharges  = 3;
+  let placeMode        = null;        // 'cannon' | 'target' | null
+  let cannonMarker     = null;
+  let targetMarker     = null;
+  let trajLayerLow     = null;
+  let trajLayerHigh    = null;
+  let lastLow          = null;        // kept for the height-profile redraw
+  let lastHigh         = null;
+  let lastBy           = 64;
+  let lastTy           = 64;
+
+  // ── Load config + shell roster before building the map ───────
+  try {
+    const resp = await fetch('./assets/shells.json');
+    const json = await resp.json();
+    if (json.map) CFG = Object.assign({}, CFG, json.map);
+    shells = json.shells || [];
+    if (json.constants && json.constants.maxCharges) maxCharges = json.constants.maxCharges;
+  } catch (e) {
+    console.warn('Could not load assets/shells.json — using built-in defaults.', e);
+  }
+
+  // ════════════════════════════════════════════════════════════
+  // 3. MAP
+  // ════════════════════════════════════════════════════════════
+  function mcToLL(x, z) { return L.latLng(-z, x); }
+  function llToMc(ll)   { return { x: Math.round(ll.lng), z: Math.round(-ll.lat) }; }
+
+  const DynMapLayer = L.GridLayer.extend({
+    options: { tileSize: 128, updateWhenIdle: true, attribution: 'Map data: DynMap' },
+    createTile(coords, done) {
+      const img = document.createElement('img');
+      img.onload  = () => done(null, img);
+      img.onerror = () => { img.style.opacity = '0'; done(null, img); };
+      img.src = this._tileUrl(coords);
+      return img;
+    },
+    _tileUrl(coords) {
+      const z = -coords.z;
+      const prefix = z > 0 ? `z${z}/` : z < 0 ? `zn${Math.abs(z)}/` : '';
+      const tilePath = `/tiles/${CFG.world}/${CFG.mapType}/${prefix}${coords.x}_${coords.y}.png`;
+      if (CFG.useProxy) return `/api/maptile?path=${encodeURIComponent(tilePath)}`;
+      return CFG.dynmapBaseUrl.replace(/\/$/, '') + tilePath;
+    }
+  });
+
+  const map = L.map('map', {
+    crs: L.CRS.Simple,
+    center: mcToLL(CFG.defaultMcX, CFG.defaultMcZ),
+    zoom: CFG.defaultZoom,
+    minZoom: -5,
+    maxZoom: 2,
+    zoomSnap: 0.5,
+    zoomDelta: 0.5
+  });
+  new DynMapLayer().addTo(map);
+
+  const cursorEl = document.getElementById('cursor-coords');
+  map.on('mousemove', (e) => {
+    const mc = llToMc(e.latlng);
+    cursorEl.textContent = `X ${mc.x}  Z ${mc.z}`;
+  });
+
+  const cannonIcon = L.divIcon({ className: '', html: '<div class="cannon-icon"></div>', iconSize: [18,18], iconAnchor: [9,9] });
+  const targetIcon = L.divIcon({ className: '', html: '<div class="target-icon"></div>', iconSize: [18,18], iconAnchor: [9,9] });
+
+  // ════════════════════════════════════════════════════════════
+  // 4. SHELL + CHARGES UI
+  // ════════════════════════════════════════════════════════════
+  function renderShellsUI() {
+    const sel = document.getElementById('shell-select');
+    sel.innerHTML = shells.map((s, i) =>
+      `<option value="${i}">${s.name} — ${s.fullName} (${s.fuze})</option>`
+    ).join('');
+
+    const row = document.getElementById('charges-row');
+    row.innerHTML = '';
+    for (let n = 1; n <= maxCharges; n++) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'charge-btn' + (n === selectedCharges ? ' active' : '');
+      btn.textContent = n;
+      btn.dataset.n = n;
+      btn.addEventListener('click', () => {
+        selectedCharges = n;
+        row.querySelectorAll('.charge-btn').forEach(b => b.classList.toggle('active', +b.dataset.n === n));
+      });
+      row.appendChild(btn);
+    }
+  }
+  renderShellsUI();
+
+  // ════════════════════════════════════════════════════════════
+  // 5. MARKER PLACEMENT
+  // ════════════════════════════════════════════════════════════
+  const btnCannon = document.getElementById('btn-cannon');
+  const btnTarget = document.getElementById('btn-target');
+  const btnClear  = document.getElementById('btn-clear');
+
+  function setMode(m) {
+    placeMode = m;
+    btnCannon.classList.toggle('active', m === 'cannon');
+    btnTarget.classList.toggle('active', m === 'target');
+    map.getContainer().style.cursor = m ? 'crosshair' : '';
+  }
+  btnCannon.addEventListener('click', () => setMode(placeMode === 'cannon' ? null : 'cannon'));
+  btnTarget.addEventListener('click', () => setMode(placeMode === 'target' ? null : 'target'));
+  btnClear.addEventListener('click', clearAll);
+
+  map.on('click', (e) => {
+    if (!placeMode) return;
+    const mc = llToMc(e.latlng);
+    if (placeMode === 'cannon') { placeCannon(mc.x, mc.z); setMode('target'); }
+    else                        { placeTarget(mc.x, mc.z); setMode(null); }
+  });
+
+  function placeCannon(x, z) {
+    const fx = parseFloat(x), fz = parseFloat(z);
+    if (isNaN(fx) || isNaN(fz)) return;
+    document.getElementById('cx').value = fx;
+    document.getElementById('cz').value = fz;
+    ['cx','cz'].forEach(id => document.getElementById(id).classList.add('set'));
+    if (cannonMarker) cannonMarker.remove();
+    cannonMarker = L.marker(mcToLL(fx, fz), { icon: cannonIcon, zIndexOffset: 200 }).addTo(map)
+      .bindPopup(`<span style="font-family:'IBM Plex Mono',monospace;font-size:12px;">Cannon — X ${fx}  Z ${fz}</span>`);
+    updateCalcBtn();
+  }
+
+  function placeTarget(x, z) {
+    const fx = parseFloat(x), fz = parseFloat(z);
+    if (isNaN(fx) || isNaN(fz)) return;
+    document.getElementById('tx').value = fx;
+    document.getElementById('tz').value = fz;
+    ['tx','tz'].forEach(id => document.getElementById(id).classList.add('set'));
+    if (targetMarker) targetMarker.remove();
+    targetMarker = L.marker(mcToLL(fx, fz), { icon: targetIcon, zIndexOffset: 200 }).addTo(map)
+      .bindPopup(`<span style="font-family:'IBM Plex Mono',monospace;font-size:12px;">Target — X ${fx}  Z ${fz}</span>`);
+    updateCalcBtn();
+  }
+
+  document.getElementById('cx').addEventListener('change', () => placeCannon(document.getElementById('cx').value, document.getElementById('cz').value));
+  document.getElementById('cz').addEventListener('change', () => placeCannon(document.getElementById('cx').value, document.getElementById('cz').value));
+  document.getElementById('tx').addEventListener('change', () => placeTarget(document.getElementById('tx').value, document.getElementById('tz').value));
+  document.getElementById('tz').addEventListener('change', () => placeTarget(document.getElementById('tx').value, document.getElementById('tz').value));
+
+  function clearAll() {
+    if (cannonMarker)  cannonMarker.remove();  cannonMarker  = null;
+    if (targetMarker)  targetMarker.remove();  targetMarker  = null;
+    if (trajLayerLow)  trajLayerLow.remove();  trajLayerLow  = null;
+    if (trajLayerHigh) trajLayerHigh.remove(); trajLayerHigh = null;
+    ['cx','cz','tx','tz'].forEach(id => { const el = document.getElementById(id); el.value = ''; el.classList.remove('set'); });
+    document.getElementById('results-wrap').classList.remove('visible');
+    updateCalcBtn();
+  }
+
+  function updateCalcBtn() {
+    const ready = document.getElementById('cx').value && document.getElementById('cz').value &&
+                  document.getElementById('tx').value && document.getElementById('tz').value;
+    document.getElementById('calc-btn').disabled = !ready;
+  }
+
+  // ════════════════════════════════════════════════════════════
+  // 6. CALCULATE
+  // ════════════════════════════════════════════════════════════
+  document.getElementById('calc-btn').addEventListener('click', runCalc);
+
+  function runCalc() {
+    const cx = parseFloat(document.getElementById('cx').value);
+    const cy = parseFloat(document.getElementById('cy').value) || 64;
+    const cz = parseFloat(document.getElementById('cz').value);
+    const tx = parseFloat(document.getElementById('tx').value);
+    const ty = parseFloat(document.getElementById('ty').value) || 64;
+    const tz = parseFloat(document.getElementById('tz').value);
+    const barrelLen = parseFloat(document.getElementById('cannon-len').value) || 4;
+    const shellIdx  = parseInt(document.getElementById('shell-select').value, 10);
+    const shell     = shells[shellIdx] || { drag: 0.99, name: '?' };
+    const drag      = parseFloat(shell.drag) || 0.99;
+
+    if (isNaN(cx) || isNaN(cz) || isNaN(tx) || isNaN(tz)) return;
+
+    const yaw  = computeYaw(cx, cz, tx, tz);
+    const yawR = yaw * Math.PI / 180;
+    // Muzzle position offset along the barrel's horizontal heading
+    const bx = cx - barrelLen * Math.sin(yawR);
+    const bz = cz + barrelLen * Math.cos(yawR);
+    const by = cy;
+
+    const hDist = Math.hypot(tx - bx, tz - bz);
+    const heading = ((yaw % 360) + 360) % 360;
+    const cardinal = (heading < 45 || heading >= 315) ? 'S' : (heading < 135) ? 'W' : (heading < 225) ? 'N' : 'E';
+
+    const low  = solveArc(bx, by, bz, tx, ty, tz, yaw, selectedCharges, drag, 0.5,  44.9, 'min');
+    const high = solveArc(bx, by, bz, tx, ty, tz, yaw, selectedCharges, drag, 45.1, 85.0, 'max');
+
+    if (trajLayerLow)  trajLayerLow.remove();
+    if (trajLayerHigh) trajLayerHigh.remove();
+
+    function pathToLL(path) { return path.filter((_, i) => i % 5 === 0).map(p => mcToLL(p.x, p.z)); }
+
+    if (low)  trajLayerLow  = L.polyline(pathToLL(low.path),  { color: '#b3273a', weight: 2, opacity: 0.85, dashArray: '6 3' }).addTo(map);
+    if (high) trajLayerHigh = L.polyline(pathToLL(high.path), { color: '#c9a227', weight: 2, opacity: 0.85, dashArray: '6 3' }).addTo(map);
+
+    const v0 = selectedCharges * VEL_PER_CHARGE;
+
+    function statBlock(label, value, mod) {
+      return `<div class="result-stat${mod ? ' result-stat--' + mod : ''}">
+        <div class="result-stat__label">${label}</div>
+        <div class="result-stat__value">${value}</div>
+      </div>`;
+    }
+
+    function arcHtml(sol, arcName) {
+      if (!sol) return `<div class="result-error">Target is out of range for the ${arcName}. Try more powder charges, a different shell, or a closer target.</div>`;
+      const tofSec  = sol.tof != null ? sol.tof.toFixed(2) + 's' : '—';
+      const tofTick = sol.tof != null ? Math.round(sol.tof * TICKS_PER_SEC) + ' ticks' : '—';
+      const peakY   = Math.max(...sol.path.map(p => p.y));
+      return `<div class="result-grid">
+        ${statBlock('Pitch Angle', sol.pitch.toFixed(3) + '°', 'highlight')}
+        ${statBlock('Yaw / Heading', yaw.toFixed(1) + '° (' + cardinal + ')', '')}
+        ${statBlock('Time of Flight', tofSec, '')}
+        ${statBlock('Ticks', tofTick, '')}
+        ${statBlock('Muzzle Velocity', v0 + ' blk/tick', '')}
+        ${statBlock('H. Distance', hDist.toFixed(1) + ' blk', '')}
+        ${statBlock('&Delta; Altitude', (ty - by >= 0 ? '+' : '') + (ty - by).toFixed(1) + ' blk', '')}
+        ${statBlock('Peak Altitude', 'Y ' + peakY.toFixed(1), 'warn')}
+        ${statBlock('Shell', shell.name, '')}
+        ${statBlock('Fuze', shell.fuze || '—', '')}
+        ${statBlock('Drag / tick', drag, '')}
+        ${statBlock('Charges', selectedCharges, '')}
+      </div>`;
+    }
+
+    document.getElementById('tab-low').innerHTML  = arcHtml(low,  'low arc');
+    document.getElementById('tab-high').innerHTML = arcHtml(high, 'high arc');
+
+    lastLow = low; lastHigh = high; lastBy = by; lastTy = ty;
+    drawHeightProfile();
+
+    document.getElementById('results-wrap').classList.add('visible');
+
+    const bounds = [];
+    if (cannonMarker) bounds.push(cannonMarker.getLatLng());
+    if (targetMarker) bounds.push(targetMarker.getLatLng());
+    if (bounds.length === 2) map.fitBounds(bounds, { padding: [60, 60] });
+  }
+
+  // ════════════════════════════════════════════════════════════
+  // 7. HEIGHT PROFILE CHART
+  // ════════════════════════════════════════════════════════════
+  function drawHeightProfile() {
+    const canvas = document.getElementById('height-canvas');
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width  = canvas.offsetWidth  * dpr;
+    canvas.height = canvas.offsetHeight * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    const W = canvas.offsetWidth, H = canvas.offsetHeight;
+
+    ctx.fillStyle = '#1b1a1d';
+    ctx.fillRect(0, 0, W, H);
+
+    const paths = [];
+    if (lastLow)  paths.push({ path: lastLow.path,  color: '#b3273a' });
+    if (lastHigh) paths.push({ path: lastHigh.path, color: '#c9a227' });
+    if (!paths.length) return;
+
+    const allPts = paths.flatMap(p => p.path);
+    const maxT = Math.max(...allPts.map(p => p.t));
+    const minY = Math.min(...allPts.map(p => p.y), lastTy - 5);
+    const maxY = Math.max(...allPts.map(p => p.y), lastBy + 5);
+
+    const PAD = { t: 14, r: 10, b: 28, l: 46 };
+    const chartW = W - PAD.l - PAD.r;
+    const chartH = H - PAD.t - PAD.b;
+
+    function px(t, y) {
+      return { x: PAD.l + (t / maxT) * chartW, y: PAD.t + chartH - ((y - minY) / (maxY - minY)) * chartH };
+    }
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.lineWidth = 1;
+    ctx.font = '9px IBM Plex Mono, monospace';
+    ctx.textAlign = 'right';
+    for (let i = 0; i <= 4; i++) {
+      const y = minY + i * (maxY - minY) / 4;
+      const p = px(0, y);
+      ctx.beginPath(); ctx.moveTo(PAD.l, p.y); ctx.lineTo(W - PAD.r, p.y); ctx.stroke();
+      ctx.fillStyle = 'rgba(255,255,255,0.28)';
+      ctx.fillText('Y' + Math.round(y), PAD.l - 4, p.y + 3);
+    }
+
+    const tp = px(0, lastTy);
+    ctx.strokeStyle = 'rgba(69,179,188,0.5)';
+    ctx.setLineDash([4, 4]); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(PAD.l, tp.y); ctx.lineTo(W - PAD.r, tp.y); ctx.stroke();
+    ctx.setLineDash([]);
+
+    paths.forEach(({ path, color }) => {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      const step = Math.max(1, Math.floor(path.length / 400));
+      path.filter((_, i) => i % step === 0).forEach((p, i) => {
+        const pt = px(p.t, p.y);
+        if (i === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y);
+      });
+      ctx.stroke();
+    });
+
+    ctx.fillStyle = 'rgba(255,255,255,0.28)';
+    ctx.textAlign = 'center';
+    ctx.fillText('Time (ticks)', W / 2, H - 4);
+  }
+
+  // ════════════════════════════════════════════════════════════
+  // 8. RESULT TABS
+  // ════════════════════════════════════════════════════════════
+  document.querySelectorAll('.rtab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.rtab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.result-panel').forEach(p => p.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+      if (tab.dataset.tab === 'profile') drawHeightProfile();
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════
+  // 9. AUTH — last, because showApp() needs `map` to already exist
+  // ════════════════════════════════════════════════════════════
+  async function checkAuth() {
+    try {
+      const r = await fetch('/api/auth/me');
+      if (!r.ok) return null;
+      return await r.json();
+    } catch { return null; }
+  }
+
+  function showApp(user) {
+    gate.style.display = 'none';
+    app.style.display  = 'flex';
+    userBadge.textContent = user.username + ' · ' + user.role;
+    setTimeout(() => map.invalidateSize(), 50);
+  }
+
+  function showGate(msg) {
+    gate.style.display = 'block';
+    app.style.display  = 'none';
+    if (msg) gateMsgEl.textContent = msg;
+  }
+
+  loginForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    lgErr.style.display = 'none';
+    const r = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: lgUser.value, password: lgPass.value })
+    });
+    const data = await r.json();
+    if (!r.ok) { lgErr.textContent = data.error || 'Login failed.'; lgErr.style.display = 'block'; return; }
+    if (!['ballistics', 'admin'].includes(data.role)) {
+      lgErr.textContent = 'Your account does not have Crown clearance for this system.';
+      lgErr.style.display = 'block';
+      await fetch('/api/auth/logout', { method: 'POST' });
+      return;
+    }
+    showApp(data);
+  });
+
+  document.getElementById('logout-btn').addEventListener('click', async () => {
+    await fetch('/api/auth/logout', { method: 'POST' });
+    showGate('You have been signed out.');
+    lgUser.value = ''; lgPass.value = '';
+  });
+
+  const me = await checkAuth();
+  if (me && ['ballistics', 'admin'].includes(me.role)) showApp(me);
+  else showGate(me ? 'Your account does not have Crown clearance for this system.' : undefined);
+
+})();
+</script>
 </body>
 </html>

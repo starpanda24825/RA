@@ -10,14 +10,125 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant:wght@500;600;700&family=Cormorant+SC:wght@500;600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="../assets/styles.css" />
+<style>
+#admin-gate { display:none; }
+#admin-app  { display:none; }
+
+.adminwrap { max-width: 1080px; margin: 0 auto; padding: 48px var(--edge) 80px; }
+
+.admin-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 32px;
+  border-bottom: 1px solid var(--slate-line);
+}
+.admin-tab {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 10px 18px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--parchment-faint);
+  cursor: pointer;
+}
+.admin-tab.active { color: var(--gold-bright); border-bottom-color: var(--gold-bright); }
+.admin-panel { display: none; }
+.admin-panel.active { display: block; }
+
+.admin-card {
+  background: var(--ink-elevated);
+  border: 1px solid var(--slate-line);
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 20px;
+}
+.admin-card h2 {
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 600;
+  color: var(--parchment);
+  margin: 0 0 16px;
+}
+
+.a-table { width: 100%; border-collapse: collapse; }
+.a-table th {
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--slate-soft);
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--slate-line);
+}
+.a-table td {
+  padding: 10px 10px;
+  border-bottom: 1px solid var(--slate-line);
+  font-size: 13.5px;
+  color: var(--parchment-dim);
+}
+.a-table tr:last-child td { border-bottom: none; }
+
+.a-btn {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: none;
+  border: 1px solid var(--slate-line);
+  color: var(--parchment-dim);
+  border-radius: 100px;
+  padding: 5px 12px;
+  cursor: pointer;
+  margin-right: 6px;
+}
+.a-btn:hover { border-color: var(--gold-dim); color: var(--parchment); }
+.a-btn.primary { border-color: var(--gold-dim); color: var(--gold-bright); }
+.a-btn.danger  { border-color: rgba(176,64,64,0.4); color: #e3a3a3; }
+.a-btn.danger:hover { background: rgba(176,64,64,0.12); }
+
+.a-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.a-field { display: flex; flex-direction: column; gap: 5px; }
+.a-field label { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--slate-soft); }
+.a-input, .a-select, .a-textarea {
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  color: var(--parchment);
+  background: var(--ink-soft);
+  border: 1px solid var(--slate-line);
+  border-radius: 7px;
+  padding: 8px 12px;
+}
+.a-textarea { width: 100%; min-height: 220px; font-family: var(--font-body); line-height: 1.6; resize: vertical; }
+
+.a-pill { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.06em; text-transform: uppercase; padding: 3px 9px; border-radius: 100px; border: 1px solid currentColor; }
+.a-pill--admin  { color: var(--crimson-bright); }
+.a-pill--editor { color: var(--teal-bright); }
+.a-pill--ballistics { color: var(--gold-bright); }
+.a-pill--citizen { color: var(--slate-soft); }
+.a-pill--published { color: var(--teal-bright); }
+.a-pill--draft { color: var(--slate-soft); }
+
+.a-msg { font-family: var(--font-mono); font-size: 12px; margin: 10px 0 0; }
+.a-msg.error   { color: #e3a3a3; }
+.a-msg.success { color: var(--teal-bright); }
+
+.article-editor { display: none; }
+.article-editor.active { display: block; }
+</style>
 </head>
 <body>
+
+<!-- LOGIN GATE -->
+<div id="admin-gate">
 <header class="topbar">
   <img class="topbar__crest" src="../assets/logo.webp" alt="Crest of Regnum Aeternum" />
   <span class="topbar__name">Regnum Aeternum</span>
   <span class="topbar__tag">Crown Authority</span>
 </header>
-
 <main class="subpage subpage--restricted">
   <div class="subpage__panel">
     <div class="subpage__seal" aria-hidden="true">
@@ -25,12 +136,333 @@
     </div>
     <p class="subpage__eyebrow">Crown Authority</p>
     <h1 class="subpage__title">Administration</h1>
-    <p class="subpage__body">This area is reserved for the Crown's administrators and is not linked from the public portal. Authentication for this panel will be built alongside the office it manages — nothing here is wired up yet.</p>
-    <a href="../" class="subpage__back">
+    <p class="subpage__body" id="gate-msg">This area is reserved for the Crown's administrators and editors. Sign in to continue.</p>
+
+    <form id="login-form" style="margin:24px 0 0;display:flex;flex-direction:column;gap:12px;max-width:320px;margin-left:auto;margin-right:auto;">
+      <input id="lg-user" class="a-input" type="text"     placeholder="Username" autocomplete="username"  required/>
+      <input id="lg-pass" class="a-input" type="password" placeholder="Password" autocomplete="current-password" required/>
+      <p id="lg-err" class="a-msg error" style="display:none;"></p>
+      <button type="submit" class="a-btn primary" style="padding:11px 0;">Sign In</button>
+    </form>
+
+    <a href="../" class="subpage__back" style="margin-top:28px;display:inline-flex;">
       <span class="subpage__arrow-back" aria-hidden="true"></span>
       Return to the Portal
     </a>
   </div>
 </main>
+</div>
+
+<!-- ADMIN APP -->
+<div id="admin-app">
+<header class="topbar">
+  <a href="../" style="display:flex;align-items:center;gap:14px;">
+    <img class="topbar__crest" src="../assets/logo.webp" alt="Crest of Regnum Aeternum" />
+    <span class="topbar__name">Regnum Aeternum</span>
+  </a>
+  <span class="topbar__tag">Crown Authority</span>
+  <span id="user-badge" style="margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--parchment-faint);"></span>
+  <button id="logout-btn" class="a-btn" style="margin-left:10px;">Sign out</button>
+</header>
+
+<main class="adminwrap">
+  <div class="admin-tabs">
+    <button class="admin-tab active" data-tab="users" id="tab-btn-users">Accounts</button>
+    <button class="admin-tab" data-tab="news" id="tab-btn-news">Times of Regnum</button>
+  </div>
+
+  <!-- USERS PANEL -->
+  <div class="admin-panel active" id="panel-users">
+    <div class="admin-card">
+      <h2>Create Account</h2>
+      <form id="create-user-form" class="a-form">
+        <div class="a-field"><label>Username</label><input class="a-input" id="nu-username" required/></div>
+        <div class="a-field"><label>Password</label><input class="a-input" id="nu-password" type="password" required/></div>
+        <div class="a-field">
+          <label>Role</label>
+          <select class="a-select" id="nu-role">
+            <option value="citizen">Citizen</option>
+            <option value="ballistics">Ballistics Clearance</option>
+            <option value="editor">Editor (Times of Regnum)</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        <button type="submit" class="a-btn primary">Create</button>
+      </form>
+      <p id="create-user-msg" class="a-msg" style="display:none;"></p>
+    </div>
+
+    <div class="admin-card">
+      <h2>All Accounts</h2>
+      <table class="a-table">
+        <thead><tr><th>Username</th><th>Role</th><th>Created</th><th>Actions</th></tr></thead>
+        <tbody id="users-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- NEWS PANEL -->
+  <div class="admin-panel" id="panel-news">
+    <div class="admin-card" id="news-list-card">
+      <h2>Times of Regnum — Articles</h2>
+      <button class="a-btn primary" id="new-article-btn" style="margin-bottom:16px;">+ New Article</button>
+      <table class="a-table">
+        <thead><tr><th>Title</th><th>Author</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody id="articles-tbody"></tbody>
+      </table>
+    </div>
+
+    <div class="admin-card article-editor" id="article-editor">
+      <h2 id="editor-heading">New Article</h2>
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <div class="a-field"><label>Title</label><input class="a-input" id="ed-title" style="width:100%;"/></div>
+        <div class="a-field"><label>Subtitle</label><input class="a-input" id="ed-subtitle" style="width:100%;"/></div>
+        <div class="a-field">
+          <label>Content (plain text or simple HTML)</label>
+          <textarea class="a-textarea" id="ed-content"></textarea>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <button class="a-btn primary" id="ed-save-btn">Save Draft</button>
+          <button class="a-btn" id="ed-publish-btn">Save &amp; Publish</button>
+          <button class="a-btn" id="ed-cancel-btn">Cancel</button>
+        </div>
+        <p id="editor-msg" class="a-msg" style="display:none;"></p>
+      </div>
+    </div>
+  </div>
+</main>
+</div>
+
+<script>
+(async function () {
+  'use strict';
+
+  const gate = document.getElementById('admin-gate');
+  const app  = document.getElementById('admin-app');
+  const gateMsgEl = document.getElementById('gate-msg');
+  const userBadge = document.getElementById('user-badge');
+  let me = null;
+
+  // ── Auth ──────────────────────────────────────────────────────
+  async function checkAuth() {
+    try { const r = await fetch('/api/auth/me'); return r.ok ? r.json() : null; }
+    catch { return null; }
+  }
+
+  function showGate(msg) {
+    gate.style.display = 'block'; app.style.display = 'none';
+    if (msg) gateMsgEl.textContent = msg;
+  }
+  function showApp(user) {
+    me = user;
+    gate.style.display = 'none'; app.style.display = 'block';
+    userBadge.textContent = user.username + ' · ' + user.role;
+    document.getElementById('tab-btn-users').style.display = user.role === 'admin' ? '' : 'none';
+    loadUsers();
+    loadArticles();
+  }
+
+  document.getElementById('login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errEl = document.getElementById('lg-err');
+    errEl.style.display = 'none';
+    const r = await fetch('/api/auth/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: document.getElementById('lg-user').value, password: document.getElementById('lg-pass').value })
+    });
+    const data = await r.json();
+    if (!r.ok) { errEl.textContent = data.error || 'Login failed.'; errEl.style.display = 'block'; return; }
+    if (!['admin', 'editor'].includes(data.role)) {
+      errEl.textContent = 'This account does not have administrative access.';
+      errEl.style.display = 'block';
+      await fetch('/api/auth/logout', { method: 'POST' });
+      return;
+    }
+    showApp(data);
+  });
+
+  document.getElementById('logout-btn').addEventListener('click', async () => {
+    await fetch('/api/auth/logout', { method: 'POST' });
+    showGate('You have been signed out.');
+  });
+
+  // ── Tabs ──────────────────────────────────────────────────────
+  document.querySelectorAll('.admin-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.admin-tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.admin-panel').forEach(p => p.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+    });
+  });
+
+  // ── Users management (admin only) ──────────────────────────────
+  function roleLabel(r) { return r.charAt(0).toUpperCase() + r.slice(1); }
+
+  async function loadUsers() {
+    if (!me || me.role !== 'admin') return;
+    const r = await fetch('/api/admin/users');
+    if (!r.ok) return;
+    const users = await r.json();
+    const tbody = document.getElementById('users-tbody');
+    tbody.innerHTML = users.map(u => `
+      <tr>
+        <td>${escapeHtml(u.username)}</td>
+        <td><span class="a-pill a-pill--${u.role}">${roleLabel(u.role)}</span></td>
+        <td>${u.created_at}</td>
+        <td>
+          <select class="a-select role-select" data-id="${u.id}" style="font-size:11px;padding:4px 8px;">
+            ${['citizen','ballistics','editor','admin'].map(r => `<option value="${r}" ${r===u.role?'selected':''}>${roleLabel(r)}</option>`).join('')}
+          </select>
+          <button class="a-btn danger" data-del="${u.id}">Delete</button>
+        </td>
+      </tr>
+    `).join('');
+
+    tbody.querySelectorAll('.role-select').forEach(sel => {
+      sel.addEventListener('change', async () => {
+        await fetch('/api/admin/users/' + sel.dataset.id, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role: sel.value })
+        });
+        loadUsers();
+      });
+    });
+    tbody.querySelectorAll('[data-del]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Delete this account?')) return;
+        await fetch('/api/admin/users/' + btn.dataset.del, { method: 'DELETE' });
+        loadUsers();
+      });
+    });
+  }
+
+  document.getElementById('create-user-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const msg = document.getElementById('create-user-msg');
+    const r = await fetch('/api/admin/users', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: document.getElementById('nu-username').value,
+        password: document.getElementById('nu-password').value,
+        role: document.getElementById('nu-role').value
+      })
+    });
+    const data = await r.json();
+    msg.style.display = 'block';
+    if (!r.ok) { msg.className = 'a-msg error'; msg.textContent = data.error || 'Could not create account.'; return; }
+    msg.className = 'a-msg success'; msg.textContent = 'Account created.';
+    document.getElementById('create-user-form').reset();
+    loadUsers();
+  });
+
+  // ── Articles management ────────────────────────────────────────
+  let editingId = null;
+
+  function statusPill(s) { return `<span class="a-pill a-pill--${s}">${s === 'published' ? 'Published' : 'Draft'}</span>`; }
+
+  async function loadArticles() {
+    const r = await fetch('/api/news/articles/all');
+    if (!r.ok) return;
+    const articles = await r.json();
+    const tbody = document.getElementById('articles-tbody');
+    tbody.innerHTML = articles.map(a => `
+      <tr>
+        <td>${escapeHtml(a.title)}</td>
+        <td>${escapeHtml(a.author)}</td>
+        <td>${statusPill(a.status)}</td>
+        <td>
+          <button class="a-btn" data-edit="${a.id}">Edit</button>
+          ${a.status === 'published'
+            ? `<button class="a-btn" data-unpub="${a.id}">Unpublish</button>`
+            : `<button class="a-btn primary" data-pub="${a.id}">Publish</button>`}
+          ${me.role === 'admin' ? `<button class="a-btn danger" data-del="${a.id}">Delete</button>` : ''}
+        </td>
+      </tr>
+    `).join('');
+
+    tbody.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => openEditor(b.dataset.edit)));
+    tbody.querySelectorAll('[data-pub]').forEach(b => b.addEventListener('click', async () => {
+      await fetch('/api/news/articles/' + b.dataset.pub + '/publish', { method: 'PUT' });
+      loadArticles();
+    }));
+    tbody.querySelectorAll('[data-unpub]').forEach(b => b.addEventListener('click', async () => {
+      await fetch('/api/news/articles/' + b.dataset.unpub + '/unpublish', { method: 'PUT' });
+      loadArticles();
+    }));
+    tbody.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
+      if (!confirm('Delete this article permanently?')) return;
+      await fetch('/api/news/articles/' + b.dataset.del, { method: 'DELETE' });
+      loadArticles();
+    }));
+  }
+
+  async function openEditor(id) {
+    editingId = id || null;
+    document.getElementById('article-editor').classList.add('active');
+    document.getElementById('editor-msg').style.display = 'none';
+    if (id) {
+      const r = await fetch('/api/news/articles/' + id);
+      const a = await r.json();
+      document.getElementById('editor-heading').textContent = 'Edit Article';
+      document.getElementById('ed-title').value = a.title;
+      document.getElementById('ed-subtitle').value = a.subtitle || '';
+      document.getElementById('ed-content').value = a.content;
+    } else {
+      document.getElementById('editor-heading').textContent = 'New Article';
+      document.getElementById('ed-title').value = '';
+      document.getElementById('ed-subtitle').value = '';
+      document.getElementById('ed-content').value = '';
+    }
+    document.getElementById('article-editor').scrollIntoView({ behavior: 'smooth' });
+  }
+
+  document.getElementById('new-article-btn').addEventListener('click', () => openEditor(null));
+  document.getElementById('ed-cancel-btn').addEventListener('click', () => {
+    document.getElementById('article-editor').classList.remove('active');
+  });
+
+  async function saveArticle(publish) {
+    const msg = document.getElementById('editor-msg');
+    const body = JSON.stringify({
+      title: document.getElementById('ed-title').value,
+      subtitle: document.getElementById('ed-subtitle').value,
+      content: document.getElementById('ed-content').value
+    });
+    let id = editingId;
+    let r;
+    if (id) {
+      r = await fetch('/api/news/articles/' + id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body });
+    } else {
+      r = await fetch('/api/news/articles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+      const data = await r.json();
+      id = data.id;
+    }
+    if (!r.ok) {
+      msg.className = 'a-msg error'; msg.style.display = 'block'; msg.textContent = 'Could not save article.';
+      return;
+    }
+    if (publish) await fetch('/api/news/articles/' + id + '/publish', { method: 'PUT' });
+
+    msg.className = 'a-msg success'; msg.style.display = 'block';
+    msg.textContent = publish ? 'Saved and published.' : 'Draft saved.';
+    editingId = id;
+    loadArticles();
+  }
+
+  document.getElementById('ed-save-btn').addEventListener('click', () => saveArticle(false));
+  document.getElementById('ed-publish-btn').addEventListener('click', () => saveArticle(true));
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  // ── Boot ──────────────────────────────────────────────────────
+  const user = await checkAuth();
+  if (user && ['admin', 'editor'].includes(user.role)) showApp(user);
+  else showGate(user ? 'This account does not have administrative access.' : undefined);
+
+})();
+</script>
 </body>
 </html>

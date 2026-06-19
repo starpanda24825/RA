@@ -9,6 +9,54 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant:wght@500;600;700&family=Cormorant+SC:wght@500;600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="../assets/styles.css" />
+<style>
+.newswrap { max-width: 760px; margin: 0 auto; padding: 64px var(--edge) 90px; }
+.newshead { text-align: center; margin-bottom: 48px; }
+.newshead__eyebrow {
+  font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.2em;
+  text-transform: uppercase; color: var(--gold-bright); margin: 0 0 14px;
+}
+.newshead__title {
+  font-family: var(--font-display); font-size: clamp(32px, 5vw, 48px);
+  font-weight: 600; margin: 0 0 12px; color: var(--parchment);
+}
+.newshead__lede { color: var(--parchment-dim); font-size: 15px; margin: 0; }
+
+.article-card {
+  background: var(--ink-elevated);
+  border: 1px solid var(--slate-line);
+  border-radius: 14px;
+  padding: 28px 30px;
+  margin-bottom: 22px;
+}
+.article-card__date {
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--slate-soft); margin: 0 0 10px;
+}
+.article-card__title {
+  font-family: var(--font-display); font-size: 24px; font-weight: 600;
+  color: var(--parchment); margin: 0 0 8px;
+}
+.article-card__subtitle {
+  font-family: var(--font-caps); font-style: italic; font-size: 15px;
+  color: var(--gold-bright); margin: 0 0 18px;
+}
+.article-card__body {
+  color: var(--parchment-dim); font-size: 15px; line-height: 1.75;
+  white-space: pre-wrap;
+}
+.article-card__author {
+  margin-top: 18px; font-family: var(--font-mono); font-size: 11px;
+  color: var(--slate-soft); letter-spacing: 0.04em;
+}
+
+.newsempty {
+  text-align: center;
+  color: var(--parchment-dim);
+  font-size: 14.5px;
+  padding: 40px 0;
+}
+</style>
 </head>
 <body>
 <header class="topbar">
@@ -19,19 +67,60 @@
   <span class="topbar__tag">Times of Regnum</span>
 </header>
 
-<main class="subpage">
-  <div class="subpage__panel">
-    <div class="subpage__seal" aria-hidden="true">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h13a2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5z"/><path d="M4 5a2 2 0 00-2 2v9a2 2 0 002 2"/><path d="M8 9h6M8 12.5h6M8 16h3"/></svg>
-    </div>
-    <p class="subpage__eyebrow">Press Office</p>
-    <h1 class="subpage__title">Times of Regnum</h1>
-    <p class="subpage__body">The realm's newspaper. Dispatches and notices, published by the Crown, will appear here. The first edition is being set.</p>
-    <a href="../" class="subpage__back">
-      <span class="subpage__arrow-back" aria-hidden="true"></span>
-      Return to the Portal
-    </a>
+<main class="newswrap">
+  <div class="newshead">
+    <p class="newshead__eyebrow">Press Office</p>
+    <h1 class="newshead__title">Times of Regnum</h1>
+    <p class="newshead__lede">Dispatches and notices, published by order of the Crown.</p>
   </div>
+
+  <div id="article-list">
+    <p class="newsempty">Loading dispatches…</p>
+  </div>
+
+  <p style="text-align:center;margin-top:24px;">
+    <a href="../" style="color:var(--gold-bright); font-family:var(--font-mono); font-size:12px; letter-spacing:0.06em; text-transform:uppercase;">&larr; Return to the Portal</a>
+  </p>
 </main>
+
+<script>
+(async function () {
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+  function formatDate(iso) {
+    if (!iso) return '';
+    const d = new Date(iso.replace(' ', 'T') + 'Z');
+    if (isNaN(d.getTime())) return iso;
+    const months = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+    return d.getUTCDate() + ' ' + months[d.getUTCMonth()] + ' ' + d.getUTCFullYear();
+  }
+
+  const listEl = document.getElementById('article-list');
+  try {
+    const r = await fetch('/api/news/articles');
+    if (!r.ok) throw new Error('Could not load articles');
+    const articles = await r.json();
+
+    if (!articles.length) {
+      listEl.innerHTML = '<p class="newsempty">No dispatches have been published yet. The first edition is being set.</p>';
+      return;
+    }
+
+    listEl.innerHTML = articles.map(a => `
+      <article class="article-card">
+        <p class="article-card__date">${formatDate(a.published_at)}</p>
+        <h2 class="article-card__title">${escapeHtml(a.title)}</h2>
+        ${a.subtitle ? `<p class="article-card__subtitle">${escapeHtml(a.subtitle)}</p>` : ''}
+        <div class="article-card__body">${escapeHtml(a.content)}</div>
+        <p class="article-card__author">By order of ${escapeHtml(a.author)}</p>
+      </article>
+    `).join('');
+  } catch (e) {
+    // No backend reachable yet (e.g. viewing the static files directly) — fall back gracefully.
+    listEl.innerHTML = '<p class="newsempty">The realm\'s newspaper. Dispatches and notices, published by the Crown, will appear here. The first edition is being set.</p>';
+  }
+})();
+</script>
 </body>
 </html>
