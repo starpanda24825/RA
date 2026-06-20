@@ -4,3 +4,7 @@
 !.dev.vars.example
 .env*
 !.env.example
+
+# deps (the Worker itself has zero npm dependencies, but wrangler
+# and any local tooling will still create this)
+node_modules/
