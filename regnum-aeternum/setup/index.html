@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Initial Setup — Regnum Aeternum</title>
+<meta name="robots" content="noindex, nofollow" />
+<link rel="icon" href="../assets/logo.webp" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant:wght@500;600;700&family=Cormorant+SC:wght@500;600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/styles.css" />
+<style>
+  .setup-input {
+    font-family: var(--font-mono); font-size: 14px; color: var(--parchment);
+    background: var(--ink-soft); border: 1px solid var(--slate-line); border-radius: 8px;
+    padding: 11px 14px; width: 100%;
+  }
+  .setup-input:focus { outline: none; border-color: var(--gold-dim); }
+  .setup-form { display:flex; flex-direction:column; gap:12px; max-width:340px; margin:24px auto 0; text-align:left; }
+  .setup-label { font-family: var(--font-mono); font-size: 10px; letter-spacing:.1em; text-transform:uppercase; color: var(--slate-soft); margin-bottom:-4px; }
+  .setup-btn {
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: .1em; text-transform: uppercase;
+    background: var(--crimson); border: 1px solid var(--crimson-bright); color: var(--parchment);
+    border-radius: 8px; padding: 12px 0; cursor:pointer; margin-top:6px;
+  }
+  .setup-btn:hover { background: var(--crimson-bright); }
+  .setup-btn:disabled { opacity:.5; cursor:not-allowed; }
+  .setup-msg { font-family: var(--font-mono); font-size: 12px; margin: 4px 0 0; display:none; }
+  .setup-msg.error { color: #e3a3a3; }
+  .setup-hidden { display:none; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a href="../" style="display:flex;align-items:center;gap:14px;">
+    <img class="topbar__crest" src="../assets/logo.webp" alt="Crest of Regnum Aeternum" />
+    <span class="topbar__name">Regnum Aeternum</span>
+  </a>
+  <span class="topbar__tag">Initial Setup</span>
+</header>
+
+<main class="subpage">
+  <div class="subpage__panel">
+    <div class="subpage__seal" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l3 5 5.5.8-4 4 .9 5.4L12 14.8 6.6 17.2l.9-5.4-4-4L9 7z"/></svg>
+    </div>
+    <p class="subpage__eyebrow">Crown Authority</p>
+    <h1 class="subpage__title">Initial Setup</h1>
+
+    <div id="checking">
+      <p class="subpage__body">Checking setup status…</p>
+    </div>
+
+    <div id="unavailable" class="setup-hidden">
+      <p class="subpage__body">An administrator account already exists. This one-time setup page is now permanently disabled.</p>
+      <a href="../admin/" class="subpage__back" style="margin-top:10px;display:inline-flex;">
+        <span class="subpage__arrow-back" aria-hidden="true"></span>
+        Go to Admin Sign In
+      </a>
+    </div>
+
+    <div id="not-configured" class="setup-hidden">
+      <p class="subpage__body">No administrator exists yet, but the server has no <code>SETUP_TOKEN</code> secret configured. Run <code>wrangler secret put SETUP_TOKEN</code>, redeploy, then reload this page.</p>
+    </div>
+
+    <div id="setup-wrap" class="setup-hidden">
+      <p class="subpage__body">No administrator account exists yet. Enter the setup token you configured on the server (<code>wrangler secret put SETUP_TOKEN</code>), along with a username and password for the first admin account.</p>
+
+      <form id="setup-form" class="setup-form">
+        <label class="setup-label">Setup Token</label>
+        <input id="su-token" class="setup-input" type="password" autocomplete="off" required />
+        <label class="setup-label">Admin Username</label>
+        <input id="su-user" class="setup-input" type="text" autocomplete="off" required />
+        <label class="setup-label">Admin Password</label>
+        <input id="su-pass" class="setup-input" type="password" autocomplete="new-password" required />
+        <button type="submit" class="setup-btn">Create Admin Account</button>
+        <p id="setup-err" class="setup-msg error"></p>
+      </form>
+    </div>
+
+    <div id="setup-success" class="setup-hidden">
+      <p class="subpage__body" id="success-text"></p>
+      <a href="../admin/" class="subpage__back" style="margin-top:10px;display:inline-flex;">
+        <span class="subpage__arrow-back" aria-hidden="true"></span>
+        Go to Admin Sign In
+      </a>
+    </div>
+
+    <a href="../" class="subpage__back" style="margin-top:28px;display:inline-flex;">
+      <span class="subpage__arrow-back" aria-hidden="true"></span>
+      Return to the Portal
+    </a>
+  </div>
+</main>
+
+<script>
+(async function () {
+  var checking      = document.getElementById('checking');
+  var unavailable   = document.getElementById('unavailable');
+  var notConfigured = document.getElementById('not-configured');
+  var setupWrap     = document.getElementById('setup-wrap');
+  var successEl     = document.getElementById('setup-success');
+  var successText   = document.getElementById('success-text');
+  var form          = document.getElementById('setup-form');
+  var errEl         = document.getElementById('setup-err');
+  var submitBtn     = form.querySelector('button[type="submit"]');
+
+  try {
+    var statusRes = await fetch('/api/setup/status');
+    var status = await statusRes.json();
+    checking.classList.add('setup-hidden');
+
+    if (!status.available) {
+      unavailable.classList.remove('setup-hidden');
+      return;
+    }
+    if (!status.configured) {
+      notConfigured.classList.remove('setup-hidden');
+      return;
+    }
+    setupWrap.classList.remove('setup-hidden');
+  } catch (e) {
+    checking.innerHTML = '<p class="subpage__body">Could not reach the server. Try again shortly.</p>';
+    return;
+  }
+
+  form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    errEl.style.display = 'none';
+    submitBtn.disabled = true;
+
+    var token = document.getElementById('su-token').value;
+    var username = document.getElementById('su-user').value;
+    var password = document.getElementById('su-pass').value;
+
+    try {
+      var r = await fetch('/api/setup/bootstrap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Setup-Token': token },
+        body: JSON.stringify({ username: username, password: password })
+      });
+      var data = await r.json();
+      submitBtn.disabled = false;
+
+      if (!r.ok) {
+        errEl.textContent = data.error || 'Setup failed.';
+        errEl.style.display = 'block';
+        return;
+      }
+
+      setupWrap.classList.add('setup-hidden');
+      successText.textContent = 'Admin account "' + data.username + '" created. Setup is now permanently disabled.';
+      successEl.classList.remove('setup-hidden');
+    } catch (err) {
+      submitBtn.disabled = false;
+      errEl.textContent = 'Could not reach the server. Try again shortly.';
+      errEl.style.display = 'block';
+    }
+  });
+})();
+</script>
+</body>
+</html>
