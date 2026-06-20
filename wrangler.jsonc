@@ -17,13 +17,7 @@
 		{
 			"binding": "DB",
 			"database_name": "regnum-aeternum-db",
-			"database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID"
-		},
-		{
-			"binding": "regnum_aeternum_db1",
-			"database_name": "regnum-aeternum-db1",
-			"database_id": "ec5d0ff0-6898-403d-b806-a288114dda16",
-			"remote": true
+			"database_id": "26aa5fb2-a699-4b3c-abbc-32d35cf70c72"
 		}
 	]
 }
