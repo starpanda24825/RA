@@ -118,6 +118,9 @@
 
 .article-editor { display: none; }
 .article-editor.active { display: block; }
+
+.legal-editor { display: none; }
+.legal-editor.active { display: block; }
 </style>
 </head>
 <body>
@@ -169,6 +172,7 @@
   <div class="admin-tabs">
     <button class="admin-tab active" data-tab="users" id="tab-btn-users">Accounts</button>
     <button class="admin-tab" data-tab="news" id="tab-btn-news">Times of Regnum</button>
+    <button class="admin-tab" data-tab="legal" id="tab-btn-legal">Legal Information System</button>
   </div>
 
   <!-- USERS PANEL -->
@@ -230,6 +234,98 @@
       </div>
     </div>
   </div>
+
+  <!-- LEGAL PANEL -->
+  <div class="admin-panel" id="panel-legal">
+    <div class="admin-card" id="legal-acts-list-card">
+      <h2>Legal Acts</h2>
+      <button class="a-btn primary" id="new-act-btn" style="margin-bottom:16px;">+ New Act</button>
+      <table class="a-table">
+        <thead><tr><th>Title</th><th>Category</th><th>Status</th><th>Chapters</th><th>Actions</th></tr></thead>
+        <tbody id="acts-tbody"></tbody>
+      </table>
+    </div>
+
+    <div class="admin-card legal-editor" id="act-editor">
+      <h2 id="act-editor-heading">New Act</h2>
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <div class="a-form" style="gap:14px;">
+          <div class="a-field"><label>Slug (lowercase-hyphenated, permanent)</label><input class="a-input" id="act-slug" style="width:220px;"/></div>
+          <div class="a-field"><label>Category</label>
+            <select class="a-select" id="act-category">
+              <option value="act">Act</option>
+              <option value="code">Code</option>
+              <option value="constitution">Constitution</option>
+              <option value="regulation">Regulation</option>
+            </select>
+          </div>
+          <div class="a-field"><label>Status</label>
+            <select class="a-select" id="act-status">
+              <option value="in-force">In Force</option>
+              <option value="amended">Amended</option>
+              <option value="repealed">Repealed</option>
+            </select>
+          </div>
+          <div class="a-field"><label>Date Enacted</label><input class="a-input" id="act-date-enacted" type="date"/></div>
+          <div class="a-field"><label>Date In Force</label><input class="a-input" id="act-date-inforce" type="date"/></div>
+        </div>
+        <div class="a-field"><label>Title</label><input class="a-input" id="act-title" style="width:100%;"/></div>
+        <div class="a-field"><label>Short Title</label><input class="a-input" id="act-short-title" style="width:100%;"/></div>
+        <div class="a-field"><label>Aliases (comma-separated, used by search)</label><input class="a-input" id="act-aliases" style="width:100%;"/></div>
+        <div class="a-field">
+          <label>Chapters &amp; Articles (JSON)</label>
+          <p style="font-size:12px;color:var(--slate-soft);margin:0 0 6px;">
+            Array of chapters, each with an articles array. Each article needs a unique <code>id</code>, a <code>number</code>, a <code>title</code>, and a <code>history</code> array (each version has <code>version</code>, <code>date</code>, <code>changeNote</code>, <code>text</code> — the last entry is what's shown as current). <code>crossRefs</code> and <code>caseLawIds</code> can be empty arrays. Use <code>{{ref:act-slug:article-number}}</code> inside article text to link to another article.
+          </p>
+          <button type="button" class="a-btn" id="act-insert-skeleton" style="margin-bottom:8px;">Insert Skeleton</button>
+          <textarea class="a-textarea" id="act-chapters" style="font-family:var(--font-mono);font-size:12.5px;min-height:320px;"></textarea>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <button class="a-btn primary" id="act-save-btn">Save</button>
+          <button class="a-btn" id="act-cancel-btn">Cancel</button>
+        </div>
+        <p id="act-editor-msg" class="a-msg" style="display:none;"></p>
+      </div>
+    </div>
+
+    <div class="admin-card" id="legal-case-list-card">
+      <h2>Case Law</h2>
+      <button class="a-btn primary" id="new-case-btn" style="margin-bottom:16px;">+ New Case</button>
+      <table class="a-table">
+        <thead><tr><th>Title</th><th>Reference</th><th>Date</th><th>Actions</th></tr></thead>
+        <tbody id="cases-tbody"></tbody>
+      </table>
+    </div>
+
+    <div class="admin-card legal-editor" id="case-editor">
+      <h2 id="case-editor-heading">New Case</h2>
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <div class="a-form" style="gap:14px;">
+          <div class="a-field"><label>Slug (lowercase-hyphenated, permanent)</label><input class="a-input" id="case-slug" style="width:220px;"/></div>
+          <div class="a-field"><label>Reference Number</label><input class="a-input" id="case-ref" style="width:160px;"/></div>
+          <div class="a-field"><label>Date</label><input class="a-input" id="case-date" type="date"/></div>
+          <div class="a-field"><label>Type</label><input class="a-input" id="case-type" style="width:160px;" placeholder="Judgment"/></div>
+        </div>
+        <div class="a-field"><label>Title</label><input class="a-input" id="case-title" style="width:100%;"/></div>
+        <div class="a-form" style="gap:14px;">
+          <div class="a-field"><label>Court</label><input class="a-input" id="case-court" style="width:280px;"/></div>
+          <div class="a-field"><label>Chamber</label><input class="a-input" id="case-chamber" style="width:200px;"/></div>
+          <div class="a-field"><label>Subject</label><input class="a-input" id="case-subject" style="width:260px;"/></div>
+        </div>
+        <div class="a-field"><label>Summary</label><textarea class="a-textarea" id="case-summary" style="min-height:90px;"></textarea></div>
+        <div class="a-field"><label>Full Text</label><textarea class="a-textarea" id="case-fulltext" style="min-height:180px;"></textarea></div>
+        <div class="a-field">
+          <label>Related Articles (JSON array of {actSlug, number})</label>
+          <textarea class="a-textarea" id="case-related" style="font-family:var(--font-mono);font-size:12.5px;min-height:90px;">[]</textarea>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <button class="a-btn primary" id="case-save-btn">Save</button>
+          <button class="a-btn" id="case-cancel-btn">Cancel</button>
+        </div>
+        <p id="case-editor-msg" class="a-msg" style="display:none;"></p>
+      </div>
+    </div>
+  </div>
 </main>
 </div>
 
@@ -258,8 +354,11 @@
     gate.style.display = 'none'; app.style.display = 'block';
     userBadge.textContent = user.username + ' · ' + user.role;
     document.getElementById('tab-btn-users').style.display = user.role === 'admin' ? '' : 'none';
+    document.getElementById('tab-btn-legal').style.display = user.role === 'admin' ? '' : 'none';
     loadUsers();
     loadArticles();
+    loadActs();
+    loadCaseLaw();
   }
 
   document.getElementById('login-form').addEventListener('submit', async (e) => {
@@ -452,6 +551,239 @@
 
   document.getElementById('ed-save-btn').addEventListener('click', () => saveArticle(false));
   document.getElementById('ed-publish-btn').addEventListener('click', () => saveArticle(true));
+
+  // ── Legal Information System (admin only) ──────────────────────
+
+  const CHAPTER_SKELETON = JSON.stringify([
+    {
+      id: 'ch-1', title: 'Chapter I — General Provisions',
+      articles: [
+        {
+          id: 'art-1', number: 1, title: 'Article Title',
+          history: [{ version: 1, date: new Date().toISOString().slice(0, 10), changeNote: 'Original text.', text: 'Article text goes here.' }],
+          crossRefs: [], caseLawIds: []
+        }
+      ]
+    }
+  ], null, 2);
+
+  function actArticleCount(act) {
+    return (act.chapters || []).reduce((n, c) => n + (c.articles ? c.articles.length : 0), 0);
+  }
+
+  async function loadActs() {
+    if (!me || me.role !== 'admin') return;
+    const r = await fetch('/api/legal/acts');
+    if (!r.ok) return;
+    const acts = await r.json();
+    const tbody = document.getElementById('acts-tbody');
+    tbody.innerHTML = acts.map(a => `
+      <tr>
+        <td>${escapeHtml(a.title)}</td>
+        <td>${escapeHtml(a.category)}</td>
+        <td>${escapeHtml(a.status)}</td>
+        <td>${actArticleCount(a)}</td>
+        <td>
+          <button class="a-btn" data-edit-act="${escapeHtml(a.slug)}">Edit</button>
+          <button class="a-btn danger" data-del-act="${escapeHtml(a.slug)}">Delete</button>
+        </td>
+      </tr>
+    `).join('');
+
+    tbody.querySelectorAll('[data-edit-act]').forEach(b => b.addEventListener('click', () => openActEditor(b.dataset.editAct)));
+    tbody.querySelectorAll('[data-del-act]').forEach(b => b.addEventListener('click', async () => {
+      if (!confirm('Delete this act permanently? This cannot be undone.')) return;
+      await fetch('/api/legal/acts/' + encodeURIComponent(b.dataset.delAct), { method: 'DELETE' });
+      loadActs();
+    }));
+  }
+
+  let editingActSlug = null;
+
+  function openActEditor(slug) {
+    editingActSlug = slug || null;
+    document.getElementById('act-editor-msg').style.display = 'none';
+    document.getElementById('act-editor').classList.add('active');
+
+    if (slug) {
+      fetch('/api/legal/acts').then(r => r.json()).then(acts => {
+        const act = acts.find(a => a.slug === slug);
+        if (!act) return;
+        document.getElementById('act-editor-heading').textContent = 'Edit Act — ' + act.shortTitle;
+        document.getElementById('act-slug').value = act.slug;
+        document.getElementById('act-slug').disabled = true;
+        document.getElementById('act-category').value = act.category;
+        document.getElementById('act-status').value = act.status;
+        document.getElementById('act-date-enacted').value = act.dateEnacted || '';
+        document.getElementById('act-date-inforce').value = act.dateInForce || '';
+        document.getElementById('act-title').value = act.title;
+        document.getElementById('act-short-title').value = act.shortTitle;
+        document.getElementById('act-aliases').value = (act.aliases || []).join(', ');
+        document.getElementById('act-chapters').value = JSON.stringify(act.chapters || [], null, 2);
+      });
+    } else {
+      document.getElementById('act-editor-heading').textContent = 'New Act';
+      document.getElementById('act-slug').value = '';
+      document.getElementById('act-slug').disabled = false;
+      document.getElementById('act-category').value = 'act';
+      document.getElementById('act-status').value = 'in-force';
+      document.getElementById('act-date-enacted').value = '';
+      document.getElementById('act-date-inforce').value = '';
+      document.getElementById('act-title').value = '';
+      document.getElementById('act-short-title').value = '';
+      document.getElementById('act-aliases').value = '';
+      document.getElementById('act-chapters').value = '[]';
+    }
+    document.getElementById('act-editor').scrollIntoView({ behavior: 'smooth' });
+  }
+
+  document.getElementById('new-act-btn').addEventListener('click', () => openActEditor(null));
+  document.getElementById('act-cancel-btn').addEventListener('click', () => {
+    document.getElementById('act-editor').classList.remove('active');
+  });
+  document.getElementById('act-insert-skeleton').addEventListener('click', () => {
+    document.getElementById('act-chapters').value = CHAPTER_SKELETON;
+  });
+
+  document.getElementById('act-save-btn').addEventListener('click', async () => {
+    const msg = document.getElementById('act-editor-msg');
+    msg.style.display = 'none';
+
+    let chapters;
+    try { chapters = JSON.parse(document.getElementById('act-chapters').value); }
+    catch (e) { msg.className = 'a-msg error'; msg.style.display = 'block'; msg.textContent = 'Chapters is not valid JSON: ' + e.message; return; }
+
+    const body = {
+      slug: document.getElementById('act-slug').value.trim().toLowerCase(),
+      title: document.getElementById('act-title').value,
+      shortTitle: document.getElementById('act-short-title').value,
+      aliases: document.getElementById('act-aliases').value.split(',').map(s => s.trim()).filter(Boolean),
+      category: document.getElementById('act-category').value,
+      status: document.getElementById('act-status').value,
+      dateEnacted: document.getElementById('act-date-enacted').value,
+      dateInForce: document.getElementById('act-date-inforce').value,
+      chapters: chapters,
+    };
+
+    const isNew = !editingActSlug;
+    const url = isNew ? '/api/legal/acts' : '/api/legal/acts/' + encodeURIComponent(editingActSlug);
+    const r = await fetch(url, { method: isNew ? 'POST' : 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await r.json();
+
+    msg.style.display = 'block';
+    if (!r.ok) { msg.className = 'a-msg error'; msg.textContent = data.error || 'Could not save act.'; return; }
+    msg.className = 'a-msg success'; msg.textContent = 'Saved.';
+    editingActSlug = body.slug;
+    loadActs();
+  });
+
+  async function loadCaseLaw() {
+    if (!me || me.role !== 'admin') return;
+    const r = await fetch('/api/legal/case-law');
+    if (!r.ok) return;
+    const cases = await r.json();
+    const tbody = document.getElementById('cases-tbody');
+    tbody.innerHTML = cases.map(c => `
+      <tr>
+        <td>${escapeHtml(c.title)}</td>
+        <td>${escapeHtml(c.refNumber)}</td>
+        <td>${escapeHtml(c.date || '')}</td>
+        <td>
+          <button class="a-btn" data-edit-case="${escapeHtml(c.slug)}">Edit</button>
+          <button class="a-btn danger" data-del-case="${escapeHtml(c.slug)}">Delete</button>
+        </td>
+      </tr>
+    `).join('');
+
+    tbody.querySelectorAll('[data-edit-case]').forEach(b => b.addEventListener('click', () => openCaseEditor(b.dataset.editCase)));
+    tbody.querySelectorAll('[data-del-case]').forEach(b => b.addEventListener('click', async () => {
+      if (!confirm('Delete this case permanently? This cannot be undone.')) return;
+      await fetch('/api/legal/case-law/' + encodeURIComponent(b.dataset.delCase), { method: 'DELETE' });
+      loadCaseLaw();
+    }));
+  }
+
+  let editingCaseSlug = null;
+
+  function openCaseEditor(slug) {
+    editingCaseSlug = slug || null;
+    document.getElementById('case-editor-msg').style.display = 'none';
+    document.getElementById('case-editor').classList.add('active');
+
+    if (slug) {
+      fetch('/api/legal/case-law').then(r => r.json()).then(cases => {
+        const c = cases.find(x => x.slug === slug);
+        if (!c) return;
+        document.getElementById('case-editor-heading').textContent = 'Edit Case — ' + c.refNumber;
+        document.getElementById('case-slug').value = c.slug;
+        document.getElementById('case-slug').disabled = true;
+        document.getElementById('case-ref').value = c.refNumber;
+        document.getElementById('case-date').value = c.date || '';
+        document.getElementById('case-type').value = c.type || '';
+        document.getElementById('case-title').value = c.title;
+        document.getElementById('case-court').value = c.court || '';
+        document.getElementById('case-chamber').value = c.chamber || '';
+        document.getElementById('case-subject').value = c.subject || '';
+        document.getElementById('case-summary').value = c.summary || '';
+        document.getElementById('case-fulltext').value = c.fullText || '';
+        document.getElementById('case-related').value = JSON.stringify(c.relatedArticles || [], null, 2);
+      });
+    } else {
+      document.getElementById('case-editor-heading').textContent = 'New Case';
+      document.getElementById('case-slug').value = '';
+      document.getElementById('case-slug').disabled = false;
+      document.getElementById('case-ref').value = '';
+      document.getElementById('case-date').value = '';
+      document.getElementById('case-type').value = 'Judgment';
+      document.getElementById('case-title').value = '';
+      document.getElementById('case-court').value = 'Supreme Court of Regnum Aeternum';
+      document.getElementById('case-chamber').value = '';
+      document.getElementById('case-subject').value = '';
+      document.getElementById('case-summary').value = '';
+      document.getElementById('case-fulltext').value = '';
+      document.getElementById('case-related').value = '[]';
+    }
+    document.getElementById('case-editor').scrollIntoView({ behavior: 'smooth' });
+  }
+
+  document.getElementById('new-case-btn').addEventListener('click', () => openCaseEditor(null));
+  document.getElementById('case-cancel-btn').addEventListener('click', () => {
+    document.getElementById('case-editor').classList.remove('active');
+  });
+
+  document.getElementById('case-save-btn').addEventListener('click', async () => {
+    const msg = document.getElementById('case-editor-msg');
+    msg.style.display = 'none';
+
+    let relatedArticles;
+    try { relatedArticles = JSON.parse(document.getElementById('case-related').value); }
+    catch (e) { msg.className = 'a-msg error'; msg.style.display = 'block'; msg.textContent = 'Related Articles is not valid JSON: ' + e.message; return; }
+
+    const body = {
+      slug: document.getElementById('case-slug').value.trim().toLowerCase(),
+      title: document.getElementById('case-title').value,
+      refNumber: document.getElementById('case-ref').value,
+      date: document.getElementById('case-date').value,
+      type: document.getElementById('case-type').value,
+      court: document.getElementById('case-court').value,
+      chamber: document.getElementById('case-chamber').value,
+      subject: document.getElementById('case-subject').value,
+      summary: document.getElementById('case-summary').value,
+      fullText: document.getElementById('case-fulltext').value,
+      relatedArticles: relatedArticles,
+    };
+
+    const isNew = !editingCaseSlug;
+    const url = isNew ? '/api/legal/case-law' : '/api/legal/case-law/' + encodeURIComponent(editingCaseSlug);
+    const r = await fetch(url, { method: isNew ? 'POST' : 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await r.json();
+
+    msg.style.display = 'block';
+    if (!r.ok) { msg.className = 'a-msg error'; msg.textContent = data.error || 'Could not save case.'; return; }
+    msg.className = 'a-msg success'; msg.textContent = 'Saved.';
+    editingCaseSlug = body.slug;
+    loadCaseLaw();
+  });
 
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));

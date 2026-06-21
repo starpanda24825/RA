@@ -16,6 +16,25 @@ var LegalApp = (function () {
 
   var DATA = (window.LEGAL_DATA || { acts: [], caseLaw: [] });
 
+  // ---------- data loading ----------
+  // DATA starts as whatever legal-data.js provided (loaded synchronously,
+  // works offline/from disk — that's an intentional fallback, not a bug).
+  // On a real deployment we then try to replace it with the live,
+  // admin-editable dataset from D1 via the Worker API. If that fetch
+  // fails or times out (offline, opened from disk, API down), the
+  // static fallback already in DATA is left exactly as-is.
+  function loadData() {
+    var timeout = new Promise(function (resolve) { setTimeout(function () { resolve(null); }, 4000); });
+    var fetched = fetch("/api/legal/data").then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
+
+    return Promise.race([fetched, timeout]).then(function (live) {
+      if (live && Array.isArray(live.acts) && Array.isArray(live.caseLaw)) {
+        DATA = live;
+        INDEX = null; // invalidate the memoized search index so it rebuilds against the new DATA
+      }
+    });
+  }
+
   // ---------- util ----------
 
   function escapeHtml(s) {
@@ -646,7 +665,7 @@ var LegalApp = (function () {
   return {
     search: search, parseArticleQuery: parseArticleQuery, resolveArticleQuery: resolveArticleQuery,
     diffWords: diffWords, formatDate: formatDate, getAct: getAct, getArticle: getArticle, getCase: getCase,
-    init: initAll
+    init: function () { return loadData().then(initAll); }
   };
 })();
 
