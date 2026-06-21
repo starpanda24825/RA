@@ -8,10 +8,9 @@ import * as store from '../lib/store.js';
 import { getCurrentUser } from './auth.js';
 
 function json(data, init = {}) {
-  return new Response(JSON.stringify(data), {
-    ...init,
-    headers: { 'Content-Type': 'application/json', ...(init.headers || {}) },
-  });
+  const headers = new Headers(init.headers || {});
+  headers.set('Content-Type', 'application/json');
+  return new Response(JSON.stringify(data), { ...init, headers });
 }
 
 async function requireStaff(request, env) {

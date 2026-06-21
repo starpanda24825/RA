@@ -12,10 +12,9 @@ import { hash } from '../lib/passwords.js';
 const VALID_ROLES = ['citizen', 'ballistics', 'editor', 'admin'];
 
 function json(data, init = {}) {
-  return new Response(JSON.stringify(data), {
-    ...init,
-    headers: { 'Content-Type': 'application/json', ...(init.headers || {}) },
-  });
+  const headers = new Headers(init.headers || {});
+  headers.set('Content-Type', 'application/json');
+  return new Response(JSON.stringify(data), { ...init, headers });
 }
 
 async function requireAdmin(request, env) {
