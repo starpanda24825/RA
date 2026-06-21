@@ -13,7 +13,8 @@
    Then sign in at /admin/ with that username/password.
    ============================================================ */
 
-const ITERATIONS = 120000;
+const ITERATIONS = 100000; // must match worker/lib/passwords.js exactly — Workers'
+                            // PBKDF2 implementation hard-caps at 100,000 iterations
 const HASH_ALG = 'SHA-256';
 const KEY_LENGTH_BITS = 256;
 

@@ -4,13 +4,21 @@
    (PBKDF2-SHA256). Deliberately NOT bcrypt/bcryptjs: bcryptjs is
    a pure-JS loop with no native acceleration, and at a safe cost
    factor (>=10) it can burn through Workers' per-request CPU time
-   budget. crypto.subtle.deriveBits runs as optimized native code,
-   so even a high iteration count costs only a few ms of CPU.
+   budget. crypto.subtle.deriveBits runs as optimized native code.
+
+   IMPORTANT: Workers' PBKDF2 implementation hard-caps iterations
+   at 100,000 — calling deriveBits with anything higher throws
+   "NotSupportedError: Pbkdf2 failed: iteration counts above 100000
+   are not supported" at runtime (not at deploy time, so this only
+   surfaces the first time hash()/compare() actually runs). 100,000
+   is below current OWASP guidance for PBKDF2-SHA256 (~600k), but
+   it's the ceiling this runtime allows; it's still meaningfully
+   better than no iteration stretching at all.
 
    Stored format: "pbkdf2:<iterations>:<base64 salt>:<base64 hash>"
    ============================================================ */
 
-const ITERATIONS = 120000;
+const ITERATIONS = 100000;
 const HASH_ALG = 'SHA-256';
 const KEY_LENGTH_BITS = 256;
 
