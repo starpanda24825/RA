@@ -412,6 +412,24 @@
 .historypanel__version-num { font-family: var(--font-mono); font-size: 12.5px; font-weight: 600; color: var(--gold-bright); }
 .historypanel__version-date { font-family: var(--font-mono); font-size: 11px; color: var(--slate-soft); }
 .historypanel__note { font-size: 13px; color: var(--parchment-dim); margin: 4px 0 0; }
+.historypanel__comparebar {
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.historypanel__comparelabel {
+  font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--slate-soft);
+}
+.historypanel__select {
+  font-family: var(--font-mono); font-size: 12.5px; color: var(--parchment);
+  background: var(--ink-elevated); border: 1px solid var(--slate-line);
+  border-radius: 7px; padding: 6px 10px;
+}
+.historypanel__select:focus { outline: none; border-color: var(--gold-dim); }
+.historypanel__comparearrow { color: var(--slate-soft); font-size: 13px; }
 .historypanel__diffhead {
   margin-top: 16px;
   font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.1em;
@@ -424,6 +442,15 @@
 }
 .diffview ins { background: var(--diff-add-bg); color: var(--diff-add-text); text-decoration: none; border-radius: 3px; padding: 0 2px; }
 .diffview del { background: var(--diff-remove-bg); color: var(--diff-remove-text); text-decoration: line-through; border-radius: 3px; padding: 0 2px; }
+
+/* brief highlight on whatever element a hash-navigation (sidebar nav,
+   in-text cross-reference, or a fresh page load arriving with a hash
+   already in the URL) just scrolled to, so arrival is unambiguous */
+@keyframes target-flash {
+  0%   { background: rgba(201,162,39,0.16); }
+  100% { background: transparent; }
+}
+.is-target-flash { animation: target-flash 1.6s ease-out; border-radius: 8px; }
 
 /* ---------- case view ---------- */
 

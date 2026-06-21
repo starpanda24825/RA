@@ -346,7 +346,18 @@ var LegalApp = (function () {
     text = text.replace(/\{\{ref:([a-z0-9-]+):(\d+)\}\}/g, function (_, slug, num) {
       var act = getAct(slug);
       var label = act ? act.shortTitle + ", Art. " + num : "Art. " + num;
-      var href = slug === fromActSlug ? ("#art-" + num) : ("view.html?act=" + slug + "#art-" + num);
+      // Resolve the *actual* DOM id of the target article rather than
+      // assuming it's always "art-<number>" — that was true for every
+      // article in the original seed data, but the Legal admin editor
+      // now lets anyone set an article's id to anything. Looking it up
+      // via getArticle() keeps the link correct even for custom ids,
+      // and degrades to the old assumption only if the target can't be
+      // found at all (e.g. a typo'd reference, or the article was since
+      // deleted) — in which case the link still goes somewhere sensible
+      // rather than silently pointing at nothing.
+      var found = getArticle(slug, num);
+      var anchorId = found ? found.article.id : ("art-" + num);
+      var href = slug === fromActSlug ? ("#" + anchorId) : ("view.html?act=" + slug + "#" + anchorId);
       return '<a class="xref" href="' + href + '">' + escapeHtml(label) + "</a>";
     });
     return text;
@@ -472,6 +483,13 @@ var LegalApp = (function () {
     if (filterInput) filterInput.addEventListener("input", debounce(function () { render(filterInput.value); }, 120));
   }
 
+  function buildVersionOptions(history, selectedVersion) {
+    return history.map(function (v) {
+      var sel = v.version === selectedVersion ? " selected" : "";
+      return '<option value="' + v.version + '"' + sel + ">v" + v.version + " — " + formatDate(v.date) + "</option>";
+    }).join("");
+  }
+
   function historyPanelHtml(article) {
     if (article.history.length < 2) return "";
     var rows = article.history.slice().reverse().map(function (v, idx) {
@@ -485,14 +503,50 @@ var LegalApp = (function () {
       "</div>";
     }).join("");
 
-    var latest = article.history[article.history.length - 1];
-    var prev = article.history[article.history.length - 2];
+    // Default comparison is still "previous version -> current version" (the
+    // common 2-version case looks identical to the old fixed behaviour), but
+    // an article with 3+ revisions can now compare ANY two via the selects
+    // below, not just the latest pair. The article's full history travels
+    // with the panel as a data attribute so the change handler (wired up
+    // after the page is rendered, in initActView) can look it up without
+    // needing a separate registry.
+    var defaultTo = article.history[article.history.length - 1].version;
+    var defaultFrom = article.history[article.history.length - 2].version;
+    var historyJson = escapeHtml(JSON.stringify(article.history));
 
-    return '<div class="historypanel" id="history-' + article.id + '">' +
+    return '<div class="historypanel" id="history-' + article.id + '" data-history="' + historyJson + '">' +
         '<div class="historypanel__versions">' + rows + "</div>" +
-        '<div class="historypanel__diffhead">Comparing v' + prev.version + ' \u2192 v' + latest.version + "</div>" +
-        '<div class="diffview">' + renderDiff(prev.text, latest.text) + "</div>" +
+        '<div class="historypanel__comparebar">' +
+          '<span class="historypanel__comparelabel">Compare</span>' +
+          '<select class="historypanel__select" data-role="from">' + buildVersionOptions(article.history, defaultFrom) + "</select>" +
+          '<span class="historypanel__comparearrow" aria-hidden="true">\u2192</span>' +
+          '<select class="historypanel__select" data-role="to">' + buildVersionOptions(article.history, defaultTo) + "</select>" +
+        "</div>" +
+        '<div class="historypanel__diffhead" data-role="diffhead"></div>' +
+        '<div class="diffview" data-role="diffview"></div>' +
       "</div>";
+  }
+
+  function refreshHistoryCompare(panel) {
+    var history;
+    try { history = JSON.parse(panel.getAttribute("data-history") || "[]"); } catch (e) { return; }
+    var fromSel = panel.querySelector('[data-role="from"]');
+    var toSel = panel.querySelector('[data-role="to"]');
+    var diffHeadEl = panel.querySelector('[data-role="diffhead"]');
+    var diffViewEl = panel.querySelector('[data-role="diffview"]');
+    if (!fromSel || !toSel || !diffHeadEl || !diffViewEl) return;
+
+    var fromV = parseInt(fromSel.value, 10);
+    var toV = parseInt(toSel.value, 10);
+    var fromEntry = null, toEntry = null;
+    history.forEach(function (h) {
+      if (h.version === fromV) fromEntry = h;
+      if (h.version === toV) toEntry = h;
+    });
+    if (!fromEntry || !toEntry) return;
+
+    diffHeadEl.textContent = "Comparing v" + fromV + " (" + formatDate(fromEntry.date) + ") \u2192 v" + toV + " (" + formatDate(toEntry.date) + ")";
+    diffViewEl.innerHTML = renderDiff(fromEntry.text, toEntry.text);
   }
 
   function articleHtml(act, article) {
@@ -567,6 +621,15 @@ var LegalApp = (function () {
       });
     });
 
+    // version-compare selects: render the default pair immediately, and
+    // recompute whenever either dropdown changes.
+    qsa(".historypanel", root).forEach(function (panel) {
+      refreshHistoryCompare(panel);
+      qsa('[data-role="from"], [data-role="to"]', panel).forEach(function (sel) {
+        sel.addEventListener("change", function () { refreshHistoryCompare(panel); });
+      });
+    });
+
     var navLinks = qsa(".actview__nav-link", root);
     function setActive() {
       var hash = window.location.hash.replace("#", "");
@@ -574,12 +637,32 @@ var LegalApp = (function () {
         l.classList.toggle("is-active", l.getAttribute("href") === "#" + hash);
       });
     }
-    window.addEventListener("hashchange", setActive);
+
+    // Centers the target in view (the topbar is sticky and would otherwise
+    // cover it if the browser's native anchor-jump were left to run alone)
+    // and gives it a brief highlight so it's unambiguous where you landed —
+    // used for every hash navigation: initial page load with a hash already
+    // in the URL (arriving from a cross-act reference), AND same-page clicks
+    // on the sidebar nav or in-text cross-references within this act.
+    function scrollToHash(hash) {
+      if (!hash) return;
+      var target;
+      try { target = document.querySelector(hash); } catch (e) { return; }
+      if (!target) return;
+      var prefersReduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      target.scrollIntoView({ block: "center", behavior: prefersReduced ? "auto" : "smooth" });
+      target.classList.add("is-target-flash");
+      setTimeout(function () { target.classList.remove("is-target-flash"); }, 1600);
+    }
+
+    window.addEventListener("hashchange", function () {
+      setActive();
+      scrollToHash(window.location.hash);
+    });
     setActive();
 
     if (window.location.hash) {
-      var target = document.querySelector(window.location.hash);
-      if (target) setTimeout(function () { target.scrollIntoView({ block: "center" }); }, 30);
+      setTimeout(function () { scrollToHash(window.location.hash); }, 30);
     }
   }
 
