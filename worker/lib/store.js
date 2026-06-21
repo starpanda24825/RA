@@ -143,3 +143,85 @@ export async function updateArticle(env, id, fields) {
 export async function deleteArticleById(env, id) {
   await env.DB.prepare('DELETE FROM articles WHERE id = ?').bind(Number(id)).run();
 }
+
+// ---------- legal: acts ----------
+
+export async function listLegalActs(env) {
+  const { results } = await env.DB.prepare('SELECT * FROM legal_acts ORDER BY slug ASC').all();
+  return results;
+}
+
+export async function findLegalActBySlug(env, slug) {
+  return env.DB.prepare('SELECT * FROM legal_acts WHERE slug = ?').bind(slug).first();
+}
+
+export async function insertLegalAct(env, { slug, title, shortTitle, category, status, dataJson }) {
+  const now = new Date().toISOString();
+  try {
+    await env.DB.prepare(
+      `INSERT INTO legal_acts (slug, title, short_title, category, status, data, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(slug, title, shortTitle, category, status, dataJson, now, now).run();
+  } catch (err) {
+    if (String(err && err.message || '').toUpperCase().includes('UNIQUE')) {
+      const e = new Error('An act with that slug already exists.');
+      e.code = 'DUPLICATE';
+      throw e;
+    }
+    throw err;
+  }
+  return findLegalActBySlug(env, slug);
+}
+
+export async function updateLegalAct(env, slug, { title, shortTitle, category, status, dataJson }) {
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `UPDATE legal_acts SET title = ?, short_title = ?, category = ?, status = ?, data = ?, updated_at = ? WHERE slug = ?`
+  ).bind(title, shortTitle, category, status, dataJson, now, slug).run();
+  return findLegalActBySlug(env, slug);
+}
+
+export async function deleteLegalActBySlug(env, slug) {
+  await env.DB.prepare('DELETE FROM legal_acts WHERE slug = ?').bind(slug).run();
+}
+
+// ---------- legal: case law ----------
+
+export async function listLegalCaseLaw(env) {
+  const { results } = await env.DB.prepare('SELECT * FROM legal_case_law ORDER BY slug ASC').all();
+  return results;
+}
+
+export async function findLegalCaseBySlug(env, slug) {
+  return env.DB.prepare('SELECT * FROM legal_case_law WHERE slug = ?').bind(slug).first();
+}
+
+export async function insertLegalCase(env, { slug, title, refNumber, dataJson }) {
+  const now = new Date().toISOString();
+  try {
+    await env.DB.prepare(
+      `INSERT INTO legal_case_law (slug, title, ref_number, data, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).bind(slug, title, refNumber, dataJson, now, now).run();
+  } catch (err) {
+    if (String(err && err.message || '').toUpperCase().includes('UNIQUE')) {
+      const e = new Error('A case with that slug already exists.');
+      e.code = 'DUPLICATE';
+      throw e;
+    }
+    throw err;
+  }
+  return findLegalCaseBySlug(env, slug);
+}
+
+export async function updateLegalCase(env, slug, { title, refNumber, dataJson }) {
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `UPDATE legal_case_law SET title = ?, ref_number = ?, data = ?, updated_at = ? WHERE slug = ?`
+  ).bind(title, refNumber, dataJson, now, slug).run();
+  return findLegalCaseBySlug(env, slug);
+}
+
+export async function deleteLegalCaseBySlug(env, slug) {
+  await env.DB.prepare('DELETE FROM legal_case_law WHERE slug = ?').bind(slug).run();
+}

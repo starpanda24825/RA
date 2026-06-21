@@ -11,6 +11,7 @@
 import { handleRegister, handleLogin, handleLogout, handleMe } from './routes/auth.js';
 import { listUsersRoute, createUserRoute, updateUserRoute, deleteUserRoute } from './routes/admin.js';
 import * as news from './routes/news.js';
+import * as legal from './routes/legal.js';
 
 function json(data, init = {}) {
   const headers = new Headers(init.headers || {});
@@ -55,6 +56,23 @@ export default {
 
         m = pathname.match(/^\/api\/news\/articles\/(\d+)\/unpublish$/);
         if (m && method === 'PUT') return await news.unpublish(request, env, m[1]);
+
+        // ---- Legal Information System ----
+        if (pathname === '/api/legal/data' && method === 'GET') return await legal.getPublicData(request, env);
+
+        if (pathname === '/api/legal/acts' && method === 'GET') return await legal.listActsAdmin(request, env);
+        if (pathname === '/api/legal/acts' && method === 'POST') return await legal.createAct(request, env);
+
+        m = pathname.match(/^\/api\/legal\/acts\/([a-z0-9-]+)$/);
+        if (m && method === 'PUT') return await legal.updateAct(request, env, m[1]);
+        if (m && method === 'DELETE') return await legal.deleteAct(request, env, m[1]);
+
+        if (pathname === '/api/legal/case-law' && method === 'GET') return await legal.listCaseLawAdmin(request, env);
+        if (pathname === '/api/legal/case-law' && method === 'POST') return await legal.createCase(request, env);
+
+        m = pathname.match(/^\/api\/legal\/case-law\/([a-z0-9-]+)$/);
+        if (m && method === 'PUT') return await legal.updateCase(request, env, m[1]);
+        if (m && method === 'DELETE') return await legal.deleteCase(request, env, m[1]);
 
         return json({ error: 'Not found.' }, { status: 404 });
       } catch (err) {
