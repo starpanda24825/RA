@@ -11,7 +11,6 @@
 import { handleRegister, handleLogin, handleLogout, handleMe } from './routes/auth.js';
 import { listUsersRoute, createUserRoute, updateUserRoute, deleteUserRoute } from './routes/admin.js';
 import * as news from './routes/news.js';
-import { setupStatus, setupBootstrap } from './routes/setup.js';
 
 function json(data, init = {}) {
   return new Response(JSON.stringify(data), {
@@ -33,10 +32,6 @@ export default {
         if (pathname === '/api/auth/login' && method === 'POST') return await handleLogin(request, env);
         if (pathname === '/api/auth/logout' && method === 'POST') return await handleLogout(request, env);
         if (pathname === '/api/auth/me' && method === 'GET') return await handleMe(request, env);
-
-        // ---- one-time admin bootstrap ----
-        if (pathname === '/api/setup/status' && method === 'GET') return await setupStatus(request, env);
-        if (pathname === '/api/setup/bootstrap' && method === 'POST') return await setupBootstrap(request, env);
 
         // ---- admin: account management ----
         if (pathname === '/api/admin/users' && method === 'GET') return await listUsersRoute(request, env);
