@@ -19,8 +19,9 @@
   },
   "map": {
     "dynmapBaseUrl":  "https://mc.westeroscraft.com",
-    "world":          "world",
-    "mapType":        "flat",
+    "autoDetect":     true,
+    "world":          "",
+    "prefix":         "",
     "defaultMcX":     784,
     "defaultMcZ":     359,
     "defaultZoom":    -2,

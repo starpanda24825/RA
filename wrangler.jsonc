@@ -13,6 +13,9 @@
 	"compatibility_flags": [
 		"nodejs_compat"
 	],
+	"vars": {
+		"DYNMAP_BASE_URL": "https://mc.westeroscraft.com"
+	},
 	"d1_databases": [
 		{
 			"binding": "DB",

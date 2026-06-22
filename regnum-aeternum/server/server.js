@@ -58,6 +58,25 @@ app.get('/api/maptile', (req, res) => {
   request.on('error', () => res.status(502).send('Tile unavailable'));
 });
 
+// ── DynMap configuration proxy (same purpose as the tile proxy
+//    above, but for the one-off /up/configuration fetch the
+//    Ballistic Calculator's auto-detect feature makes on load).
+//    Always targets this server's own configured DYNMAP_BASE_URL —
+//    never a client-supplied URL — so it can't be abused as an
+//    open proxy. Keep DYNMAP_BASE_URL in sync with
+//    ballistics/assets/shells.json's "dynmapBaseUrl" so the two
+//    agree on which DynMap is being described.
+app.get('/api/dynmap-config', (req, res) => {
+  const url = DYNMAP_BASE + '/up/configuration';
+  const lib = url.startsWith('https') ? https : http;
+  const request = lib.get(url, (upstreamRes) => {
+    res.set('Content-Type', 'application/json');
+    res.set('Cache-Control', 'public, max-age=60');
+    upstreamRes.pipe(res);
+  });
+  request.on('error', () => res.status(502).json({ error: 'DynMap configuration unavailable.' }));
+});
+
 // ── Block direct access to the backend's own folder before static
 //    serving kicks in. Without this, express.static would happily
 //    hand out server.js, db.js, routes/*.js, and — far worse —

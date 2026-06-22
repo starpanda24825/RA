@@ -12,6 +12,7 @@ import { handleRegister, handleLogin, handleLogout, handleMe } from './routes/au
 import { listUsersRoute, createUserRoute, updateUserRoute, deleteUserRoute } from './routes/admin.js';
 import * as news from './routes/news.js';
 import * as legal from './routes/legal.js';
+import * as dynmap from './routes/dynmap.js';
 
 function json(data, init = {}) {
   const headers = new Headers(init.headers || {});
@@ -73,6 +74,10 @@ export default {
         m = pathname.match(/^\/api\/legal\/case-law\/([a-z0-9-]+)$/);
         if (m && method === 'PUT') return await legal.updateCase(request, env, m[1]);
         if (m && method === 'DELETE') return await legal.deleteCase(request, env, m[1]);
+
+        // ---- Ballistic Calculator: DynMap proxy ----
+        if (pathname === '/api/dynmap-config' && method === 'GET') return await dynmap.getConfig(request, env);
+        if (pathname === '/api/maptile' && method === 'GET') return await dynmap.getTile(request, env);
 
         return json({ error: 'Not found.' }, { status: 404 });
       } catch (err) {

@@ -101,6 +101,117 @@
   white-space: nowrap;
 }
 
+/* ---------- resize handle between map and control panel ---------- */
+
+.panel-resize-handle {
+  flex: 0 0 auto;
+  height: 14px;
+  background: var(--ink-soft);
+  border-top: 1px solid var(--slate-line);
+  border-bottom: 1px solid var(--slate-line);
+  cursor: row-resize;
+  touch-action: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  z-index: 60;
+}
+.panel-resize-handle::before {
+  content: "";
+  width: 44px;
+  height: 4px;
+  border-radius: 100px;
+  background: var(--slate-line);
+  transition: background 0.15s ease;
+}
+.panel-resize-handle:hover::before,
+.panel-resize-handle.is-dragging::before {
+  background: var(--gold-dim);
+}
+.panel-resize-handle:focus-visible {
+  outline: 2px solid var(--gold-bright);
+  outline-offset: -2px;
+}
+body.is-resizing-panel { cursor: row-resize; }
+
+/* ---------- DynMap source status + settings popover ---------- */
+
+.map-bar__divider {
+  width: 1px;
+  height: 18px;
+  background: var(--slate-line);
+  margin: 0 2px;
+}
+
+.source-pill {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 500;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+  color: var(--parchment-faint);
+  background: rgba(18,17,19,0.8);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--slate-line);
+  border-radius: 100px;
+  padding: 6px 14px;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: min(56vw, 360px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: border-color 0.2s ease;
+}
+.source-pill:hover { border-color: var(--gold-dim); }
+.source-pill.ok   { color: var(--teal-bright); border-color: rgba(46,142,150,0.4); }
+.source-pill.warn { color: var(--gold-bright); border-color: var(--gold-dim); }
+.source-pill.err  { color: #e3a3a3; border-color: rgba(176,64,64,0.4); }
+
+.mapsource-popover {
+  display: none;
+  flex-direction: column;
+  gap: 12px;
+  position: absolute;
+  top: 54px;
+  right: 12px;
+  z-index: 600;
+  width: min(360px, calc(100vw - 24px));
+  max-height: calc(100% - 70px);
+  overflow-y: auto;
+  background: var(--ink-elevated);
+  border: 1px solid var(--slate-line);
+  border-radius: 12px;
+  padding: 18px 18px 16px;
+  box-shadow: 0 18px 40px rgba(0,0,0,0.5);
+}
+.mapsource-popover.is-open { display: flex; }
+.mapsource-popover__head {
+  display: flex; align-items: center; justify-content: space-between;
+  font-family: var(--font-display); font-size: 16px; font-weight: 600; color: var(--parchment);
+}
+.mapsource-popover__close {
+  background: none; border: none; color: var(--parchment-faint);
+  cursor: pointer; font-size: 14px; line-height: 1; padding: 2px;
+}
+.mapsource-popover__close:hover { color: var(--parchment); }
+.mapsource-popover__hint {
+  font-size: 12px; color: var(--parchment-dim); margin: 0; line-height: 1.55;
+}
+.mapsource-popover__err {
+  font-family: var(--font-mono); font-size: 11px; color: #e3a3a3; margin: 0;
+  background: rgba(176,64,64,0.12); border: 1px solid rgba(176,64,64,0.3);
+  border-radius: 7px; padding: 8px 10px;
+}
+.mapsource-popover__ok {
+  font-family: var(--font-mono); font-size: 11px; color: var(--teal-bright); margin: 0;
+}
+.mapsource-popover__actions { display: flex; gap: 8px; }
+.mapsource-popover__actions .calc-btn { margin-top: 0; flex: 1; }
+.mapsource-popover__actions .map-btn { flex-shrink: 0; }
+
 .panel-inner {
   max-width: 1200px;
   margin: 0 auto;
@@ -320,9 +431,47 @@
       <button class="map-btn" id="btn-cannon" title="Click on map to set cannon position">Cannon</button>
       <button class="map-btn" id="btn-target" title="Click on map to set target position">Target</button>
       <button class="map-btn danger" id="btn-clear">Clear</button>
+      <span class="map-bar__divider" aria-hidden="true"></span>
+      <button class="map-btn" id="btn-mapsource" title="Configure the DynMap source">Map Source</button>
     </div>
     <div class="coord-pill" id="cursor-coords">X — Z —</div>
+    <button class="source-pill" id="source-status" type="button">Detecting map source…</button>
+
+    <div class="mapsource-popover" id="mapsource-popover">
+      <div class="mapsource-popover__head">
+        <span>Map Source</span>
+        <button class="mapsource-popover__close" id="mapsource-close" aria-label="Close">✕</button>
+      </div>
+      <p class="mapsource-popover__hint">
+        Paste your DynMap's public base URL below — the world and map are
+        detected automatically from its public configuration. If detection
+        fails (the DynMap may be blocking cross-site requests), enter the
+        exact world name and map prefix yourself.
+      </p>
+      <div class="field-group">
+        <label>DynMap Base URL</label>
+        <input class="bc-input" id="ms-baseurl" type="text" placeholder="https://your-server.example.com"/>
+      </div>
+      <div class="field-group" id="ms-world-group">
+        <label>World</label>
+        <select class="bc-select" id="ms-world"></select>
+        <input class="bc-input" id="ms-world-manual" type="text" placeholder="exact world name" style="display:none;"/>
+      </div>
+      <div class="field-group" id="ms-map-group">
+        <label>Map</label>
+        <select class="bc-select" id="ms-map"></select>
+        <input class="bc-input" id="ms-map-manual" type="text" placeholder="exact map prefix" style="display:none;"/>
+      </div>
+      <p class="mapsource-popover__err" id="ms-err" style="display:none;"></p>
+      <p class="mapsource-popover__ok" id="ms-ok" style="display:none;"></p>
+      <div class="mapsource-popover__actions">
+        <button class="map-btn" id="ms-reset" type="button">Reset to Auto</button>
+        <button class="calc-btn" id="ms-apply" type="button">Detect &amp; Apply</button>
+      </div>
+    </div>
   </div>
+
+  <div class="panel-resize-handle" id="panel-resize-handle" role="separator" aria-orientation="horizontal" aria-label="Resize the control panel — drag, or use the arrow keys" tabindex="0"></div>
 
   <div id="panel">
     <div class="panel-inner">
@@ -518,7 +667,8 @@
   // ════════════════════════════════════════════════════════════
   let CFG = {
     dynmapBaseUrl: 'https://mc.westeroscraft.com',
-    world: 'world', mapType: 'flat',
+    autoDetect: true,
+    world: '', prefix: '',
     defaultMcX: 784, defaultMcZ: 359,
     defaultZoom: -2, useProxy: false
   };
@@ -547,11 +697,174 @@
   }
 
   // ════════════════════════════════════════════════════════════
+  // 2b. DYNMAP AUTO-DISCOVERY
+  //
+  //    DynMap's web UI bootstraps itself from a public JSON
+  //    endpoint, {base}/up/configuration, which lists every world
+  //    and every map defined on it (each map's tile-path "prefix",
+  //    image format, and how many extra zoom-out levels exist).
+  //    Fetching that ourselves means an admin only has to paste the
+  //    DynMap's base URL — nothing about its internal world/map
+  //    names needs to be guessed by hand.
+  //
+  //    If the browser's own cross-origin fetch of that endpoint is
+  //    blocked, we fall back to /api/dynmap-config, a same-origin
+  //    route our own backend proxies server-side (see
+  //    server/server.js or worker/routes/dynmap.js) — server-to-
+  //    server requests aren't subject to browser CORS at all.
+  //
+  //    If both attempts fail (DynMap unreachable, or our backend's
+  //    DYNMAP_BASE_URL hasn't been pointed at the same host yet),
+  //    we fall back to whatever "world"/"prefix" were set in
+  //    shells.json (or were typed into the Map Source popover) and
+  //    sane defaults for everything else — degraded, but the page
+  //    still works rather than failing outright.
+  // ════════════════════════════════════════════════════════════
+
+  const MS_OVERRIDE_KEY = 'ra-ballistics-map-override';
+
+  async function fetchJSONSafe(url) {
+    try {
+      const r = await fetch(url, { mode: 'cors', credentials: 'omit' });
+      if (!r.ok) return null;
+      return await r.json();
+    } catch (e) { return null; }
+  }
+
+  function normalizeImageFormat(fmt) {
+    if (!fmt) return 'png';
+    const s = String(fmt).toLowerCase();
+    if (s === 'default') return 'png';
+    return s.split('-')[0] || 'png'; // 'jpg-q85' -> 'jpg', 'webp-l' -> 'webp'
+  }
+
+  // Turn the raw /up/configuration payload into the shape this page
+  // uses. Several key spellings are checked defensively (DynMap's
+  // JSON has used slightly different casings across versions).
+  function parseDynmapConfig(data) {
+    if (!data || !Array.isArray(data.worlds)) return null;
+    const worlds = data.worlds.map((w) => {
+      if (!w || !w.name) return null;
+      const maps = (Array.isArray(w.maps) ? w.maps : []).map((m) => {
+        if (!m) return null;
+        const prefix = m.prefix || m.name;
+        if (!prefix) return null;
+        const fmtRaw = m['image-format'] || m.imageformat || m.imageFormat || m.format || m.tileformat;
+        const zoomInRaw = m.mapzoomin != null ? m.mapzoomin : m.mapZoomIn;
+        return {
+          name: m.name || prefix,
+          title: m.title || m.name || prefix,
+          prefix: prefix,
+          imageFormat: normalizeImageFormat(fmtRaw),
+          mapZoomIn: Number(zoomInRaw) || 0
+        };
+      }).filter(Boolean);
+      if (!maps.length) return null;
+
+      let center = null;
+      if (w.center && typeof w.center === 'object') {
+        center = { x: Number(w.center.x) || 0, z: Number(w.center.z) || 0 };
+      }
+      const zoomOutRaw = w.extrazoomout != null ? w.extrazoomout : w.extraZoomOut;
+      return {
+        name: w.name, title: w.title || w.name,
+        center: center, extraZoomOut: Number(zoomOutRaw) || 0,
+        maps: maps
+      };
+    }).filter(Boolean);
+
+    return worlds.length ? { worlds: worlds } : null;
+  }
+
+  async function discoverDynmapConfig(baseUrl) {
+    const base = String(baseUrl || '').trim().replace(/\/$/, '');
+    if (!base) return null;
+    let raw = await fetchJSONSafe(base + '/up/configuration');
+    if (!raw) raw = await fetchJSONSafe('/api/dynmap-config');
+    return parseDynmapConfig(raw);
+  }
+
+  // Resolve the active world + map from a discovered config, honouring
+  // (in priority order) a saved manual override, then the world/prefix
+  // hints from shells.json, then simply the first world/map available.
+  function pickMapInfo(discovered, opts) {
+    opts = opts || {};
+    function findWorld(name) {
+      if (!name) return null;
+      const n = String(name).toLowerCase();
+      return discovered.worlds.find((w) => w.name.toLowerCase() === n || w.title.toLowerCase() === n) || null;
+    }
+    function findMap(world, name) {
+      if (!world || !name) return null;
+      const n = String(name).toLowerCase();
+      return world.maps.find((m) => m.prefix.toLowerCase() === n || m.name.toLowerCase() === n || m.title.toLowerCase() === n) || null;
+    }
+
+    const world = findWorld(opts.overrideWorld) || findWorld(opts.hintWorld) || discovered.worlds[0];
+    const map_  = findMap(world, opts.overrideMap) || findMap(world, opts.hintMap) || world.maps[0];
+
+    return {
+      world: world.name, prefix: map_.prefix,
+      imageFormat: map_.imageFormat || 'png',
+      extraZoomOut: world.extraZoomOut || 0,
+      mapZoomIn: map_.mapZoomIn || 0,
+      center: world.center,
+      worlds: discovered.worlds,
+      source: opts.isOverride ? 'override' : 'auto'
+    };
+  }
+
+  function manualMapInfo(source) {
+    return {
+      world: CFG.world || 'world', prefix: CFG.prefix || CFG.mapType || 'flat',
+      imageFormat: 'png', extraZoomOut: 5, mapZoomIn: 2,
+      center: null, worlds: [], source: source || 'manual'
+    };
+  }
+
+  let savedOverride = null;
+  try { savedOverride = JSON.parse(localStorage.getItem(MS_OVERRIDE_KEY) || 'null'); } catch (e) {}
+
+  let activeBaseUrl = (savedOverride && savedOverride.baseUrl) || CFG.dynmapBaseUrl;
+  let lastDiscovered = null;
+
+  if (CFG.autoDetect !== false) {
+    try { lastDiscovered = await discoverDynmapConfig(activeBaseUrl); }
+    catch (e) { console.warn('DynMap auto-detect failed.', e); }
+  }
+
+  let MAPINFO;
+  if (lastDiscovered) {
+    MAPINFO = pickMapInfo(lastDiscovered, {
+      hintWorld: CFG.world, hintMap: CFG.prefix || CFG.mapType,
+      overrideWorld: savedOverride && savedOverride.world,
+      overrideMap: savedOverride && savedOverride.prefix,
+      isOverride: !!savedOverride
+    });
+  } else if (savedOverride && (savedOverride.world || savedOverride.prefix)) {
+    MAPINFO = manualMapInfo('override');
+    MAPINFO.world = savedOverride.world || MAPINFO.world;
+    MAPINFO.prefix = savedOverride.prefix || MAPINFO.prefix;
+  } else {
+    MAPINFO = manualMapInfo('manual');
+  }
+  CFG.dynmapBaseUrl = activeBaseUrl;
+
+  // ════════════════════════════════════════════════════════════
   // 3. MAP
   // ════════════════════════════════════════════════════════════
   function mcToLL(x, z) { return L.latLng(-z, x); }
   function llToMc(ll)   { return { x: Math.round(ll.lng), z: Math.round(-ll.lat) }; }
 
+  // Real DynMap tile paths look like:
+  //   /tiles/{world}/{prefix}/{x>>5}_{y>>5}/{zoomPrefix}{x}_{y}.{ext}
+  // — tiles are grouped into subfolders of 32x32 (the "{x>>5}_{y>>5}"
+  // segment) to avoid huge flat directories, and the native/most-
+  // detailed zoom level has no "z" prefix at all; each step zoomed
+  // further out adds one more "z" before an underscore (z_, zz_, ...).
+  // maxNativeZoom/minNativeZoom below pin DynMap's native level to
+  // Leaflet zoom 0, so coords.z here is always <= 0 and -coords.z is
+  // exactly the DynMap zoom-out level.
   const DynMapLayer = L.GridLayer.extend({
     options: { tileSize: 128, updateWhenIdle: true, attribution: 'Map data: DynMap' },
     createTile(coords, done) {
@@ -562,24 +875,33 @@
       return img;
     },
     _tileUrl(coords) {
-      const z = -coords.z;
-      const prefix = z > 0 ? `z${z}/` : z < 0 ? `zn${Math.abs(z)}/` : '';
-      const tilePath = `/tiles/${CFG.world}/${CFG.mapType}/${prefix}${coords.x}_${coords.y}.png`;
+      const zoomOut = Math.max(0, -coords.z);
+      const zoomPrefix = zoomOut > 0 ? 'z'.repeat(zoomOut) + '_' : '';
+      const folder = (coords.x >> 5) + '_' + (coords.y >> 5);
+      const ext = MAPINFO.imageFormat || 'png';
+      const tilePath = `/tiles/${encodeURIComponent(MAPINFO.world)}/${encodeURIComponent(MAPINFO.prefix)}/${folder}/${zoomPrefix}${coords.x}_${coords.y}.${ext}`;
       if (CFG.useProxy) return `/api/maptile?path=${encodeURIComponent(tilePath)}`;
       return CFG.dynmapBaseUrl.replace(/\/$/, '') + tilePath;
     }
   });
 
+  const initialX = (MAPINFO.center ? MAPINFO.center.x : CFG.defaultMcX);
+  const initialZ = (MAPINFO.center ? MAPINFO.center.z : CFG.defaultMcZ);
+
   const map = L.map('map', {
     crs: L.CRS.Simple,
-    center: mcToLL(CFG.defaultMcX, CFG.defaultMcZ),
+    center: mcToLL(initialX, initialZ),
     zoom: CFG.defaultZoom,
-    minZoom: -5,
-    maxZoom: 2,
+    minZoom: -MAPINFO.extraZoomOut,
+    maxZoom: Math.max(0, MAPINFO.mapZoomIn),
     zoomSnap: 0.5,
     zoomDelta: 0.5
   });
-  new DynMapLayer().addTo(map);
+  const dynmapLayer = new DynMapLayer({
+    maxNativeZoom: 0,
+    minNativeZoom: -MAPINFO.extraZoomOut
+  });
+  dynmapLayer.addTo(map);
 
   const cursorEl = document.getElementById('cursor-coords');
   map.on('mousemove', (e) => {
@@ -589,6 +911,199 @@
 
   const cannonIcon = L.divIcon({ className: '', html: '<div class="cannon-icon"></div>', iconSize: [18,18], iconAnchor: [9,9] });
   const targetIcon = L.divIcon({ className: '', html: '<div class="target-icon"></div>', iconSize: [18,18], iconAnchor: [9,9] });
+
+  // ════════════════════════════════════════════════════════════
+  // 3a. PANEL RESIZE
+  //    The control panel keeps its full set of fields — dragging
+  //    this handle (or tapping it and using the arrow keys) just
+  //    changes how much of it is visible before its own scrollbar
+  //    takes over, so more of the map shows above it. Height is
+  //    remembered across visits; double-click resets to default.
+  // ════════════════════════════════════════════════════════════
+  (function initPanelResize() {
+    const handle  = document.getElementById('panel-resize-handle');
+    const panelEl = document.getElementById('panel');
+    const STORAGE_KEY = 'ra-ballistics-panel-height';
+    const DEFAULT_H = 360;
+    const MIN_H = 88;
+    const TOP_RESERVE = 220; // leave room for the topbar + a sliver of map
+
+    function maxH() { return Math.max(MIN_H, window.innerHeight - TOP_RESERVE); }
+    function clampH(h) { return Math.max(MIN_H, Math.min(maxH(), h)); }
+
+    function setHeight(h, persist) {
+      const clamped = clampH(h);
+      panelEl.style.height = clamped + 'px';
+      if (persist) { try { localStorage.setItem(STORAGE_KEY, String(clamped)); } catch (e) {} }
+      requestAnimationFrame(() => map.invalidateSize());
+    }
+
+    try {
+      const saved = parseInt(localStorage.getItem(STORAGE_KEY), 10);
+      if (!isNaN(saved) && saved > 0) setHeight(saved, false);
+    } catch (e) {}
+
+    let dragging = false, startY = 0, startH = 0;
+
+    handle.addEventListener('pointerdown', (e) => {
+      dragging = true;
+      startY = e.clientY;
+      startH = panelEl.getBoundingClientRect().height;
+      try { handle.setPointerCapture(e.pointerId); } catch (err) {}
+      handle.classList.add('is-dragging');
+      document.body.classList.add('is-resizing-panel');
+    });
+    handle.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      setHeight(startH - (e.clientY - startY), false);
+    });
+    function endDrag() {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove('is-dragging');
+      document.body.classList.remove('is-resizing-panel');
+      setHeight(panelEl.getBoundingClientRect().height, true);
+    }
+    handle.addEventListener('pointerup', endDrag);
+    handle.addEventListener('pointercancel', endDrag);
+    handle.addEventListener('dblclick', () => setHeight(DEFAULT_H, true));
+    handle.addEventListener('keydown', (e) => {
+      const cur = panelEl.getBoundingClientRect().height;
+      if (e.key === 'ArrowUp')   { setHeight(cur + 24, true); e.preventDefault(); }
+      if (e.key === 'ArrowDown') { setHeight(cur - 24, true); e.preventDefault(); }
+      if (e.key === 'Home')      { setHeight(DEFAULT_H, true); e.preventDefault(); }
+    });
+    window.addEventListener('resize', () => setHeight(panelEl.getBoundingClientRect().height, false));
+  })();
+
+  // ════════════════════════════════════════════════════════════
+  // 3b. MAP SOURCE POPOVER
+  //    Shows whether the DynMap world/map were detected
+  //    automatically, and lets a ballistics-clearance user point
+  //    the calculator at a different DynMap or fix a bad detection
+  //    without anyone needing to redeploy the site.
+  // ════════════════════════════════════════════════════════════
+  const sourcePill   = document.getElementById('source-status');
+  const msPopover    = document.getElementById('mapsource-popover');
+  const msBtn        = document.getElementById('btn-mapsource');
+  const msClose      = document.getElementById('mapsource-close');
+  const msBaseUrl    = document.getElementById('ms-baseurl');
+  const msWorldSel   = document.getElementById('ms-world');
+  const msWorldManual= document.getElementById('ms-world-manual');
+  const msMapSel     = document.getElementById('ms-map');
+  const msMapManual  = document.getElementById('ms-map-manual');
+  const msErr        = document.getElementById('ms-err');
+  const msOk         = document.getElementById('ms-ok');
+  const msApply      = document.getElementById('ms-apply');
+  const msReset      = document.getElementById('ms-reset');
+
+  function updateSourcePill() {
+    sourcePill.classList.remove('ok', 'warn', 'err');
+    if (MAPINFO.source === 'auto') {
+      sourcePill.classList.add('ok');
+      sourcePill.textContent = 'Detected: ' + MAPINFO.world + ' / ' + MAPINFO.prefix;
+    } else if (MAPINFO.source === 'override') {
+      sourcePill.classList.add('ok');
+      sourcePill.textContent = 'Custom: ' + MAPINFO.world + ' / ' + MAPINFO.prefix;
+    } else {
+      sourcePill.classList.add('err');
+      sourcePill.textContent = 'Map not detected — click to configure';
+    }
+  }
+  updateSourcePill();
+
+  function populateWorldMapPickers(discovered) {
+    const ok = !!(discovered && discovered.worlds.length);
+    msWorldSel.style.display    = ok ? '' : 'none';
+    msWorldManual.style.display = ok ? 'none' : '';
+    msMapSel.style.display      = ok ? '' : 'none';
+    msMapManual.style.display   = ok ? 'none' : '';
+
+    if (!ok) {
+      msWorldManual.value = MAPINFO.world || '';
+      msMapManual.value   = MAPINFO.prefix || '';
+      return;
+    }
+
+    msWorldSel.innerHTML = discovered.worlds.map((w) =>
+      `<option value="${w.name}"${w.name === MAPINFO.world ? ' selected' : ''}>${w.title}</option>`
+    ).join('');
+    fillMapsForWorld(discovered, msWorldSel.value);
+  }
+  function fillMapsForWorld(discovered, worldName) {
+    const world = discovered.worlds.find((w) => w.name === worldName) || discovered.worlds[0];
+    msMapSel.innerHTML = world.maps.map((m) =>
+      `<option value="${m.prefix}"${m.prefix === MAPINFO.prefix ? ' selected' : ''}>${m.title} (${m.prefix})</option>`
+    ).join('');
+  }
+  msWorldSel.addEventListener('change', () => { if (lastDiscovered) fillMapsForWorld(lastDiscovered, msWorldSel.value); });
+
+  function openPopover() {
+    msErr.style.display = 'none';
+    msOk.style.display = 'none';
+    msBaseUrl.value = CFG.dynmapBaseUrl;
+    populateWorldMapPickers(lastDiscovered);
+    msPopover.classList.add('is-open');
+  }
+  msBtn.addEventListener('click', () => msPopover.classList.contains('is-open') ? msPopover.classList.remove('is-open') : openPopover());
+  sourcePill.addEventListener('click', () => msPopover.classList.contains('is-open') ? msPopover.classList.remove('is-open') : openPopover());
+  msClose.addEventListener('click', () => msPopover.classList.remove('is-open'));
+
+  msApply.addEventListener('click', async () => {
+    msErr.style.display = 'none';
+    msOk.style.display = 'none';
+    const newBase = msBaseUrl.value.trim().replace(/\/$/, '');
+    if (!newBase) { msErr.textContent = 'Enter a DynMap base URL.'; msErr.style.display = 'block'; return; }
+
+    msApply.disabled = true;
+    const originalLabel = msApply.textContent;
+    msApply.textContent = 'Detecting…';
+
+    const discovered = await discoverDynmapConfig(newBase);
+    msApply.disabled = false;
+    msApply.textContent = originalLabel;
+    CFG.dynmapBaseUrl = newBase;
+    lastDiscovered = discovered;
+
+    let world, prefix, mapInfo;
+    if (discovered) {
+      populateWorldMapPickers(discovered);
+      world = msWorldSel.value || discovered.worlds[0].name;
+      const worldObj = discovered.worlds.find((w) => w.name === world) || discovered.worlds[0];
+      prefix = msMapSel.value || worldObj.maps[0].prefix;
+      mapInfo = pickMapInfo(discovered, { overrideWorld: world, overrideMap: prefix, isOverride: true });
+      msOk.textContent = 'Detected ' + worldObj.maps.length + ' map(s) on "' + worldObj.title + '".';
+      msOk.style.display = 'block';
+    } else {
+      populateWorldMapPickers(null);
+      world = msWorldManual.value.trim();
+      prefix = msMapManual.value.trim();
+      if (!world || !prefix) {
+        msErr.textContent = "Couldn't reach that DynMap (it may be offline, or blocking cross-site requests). Enter the exact world name and map prefix to continue anyway.";
+        msErr.style.display = 'block';
+        return;
+      }
+      mapInfo = { world, prefix, imageFormat: 'png', extraZoomOut: 5, mapZoomIn: 2, center: null, worlds: [], source: 'override' };
+    }
+
+    MAPINFO = mapInfo;
+    try {
+      localStorage.setItem(MS_OVERRIDE_KEY, JSON.stringify({ baseUrl: CFG.dynmapBaseUrl, world: MAPINFO.world, prefix: MAPINFO.prefix }));
+    } catch (e) {}
+
+    map.setMinZoom(-MAPINFO.extraZoomOut);
+    map.setMaxZoom(Math.max(0, MAPINFO.mapZoomIn));
+    dynmapLayer.options.minNativeZoom = -MAPINFO.extraZoomOut;
+    dynmapLayer.options.maxNativeZoom = 0;
+    dynmapLayer.redraw();
+    if (MAPINFO.center) map.setView(mcToLL(MAPINFO.center.x, MAPINFO.center.z), CFG.defaultZoom);
+    updateSourcePill();
+  });
+
+  msReset.addEventListener('click', () => {
+    try { localStorage.removeItem(MS_OVERRIDE_KEY); } catch (e) {}
+    location.reload();
+  });
 
   // ════════════════════════════════════════════════════════════
   // 4. SHELL + CHARGES UI
