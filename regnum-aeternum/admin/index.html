@@ -10,6 +10,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant:wght@500;600;700&family=Cormorant+SC:wght@500;600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="../assets/styles.css" />
+<link rel="stylesheet" href="assets/legal-builder.css" />
 <style>
 #admin-gate { display:none; }
 #admin-app  { display:none; }
@@ -273,12 +274,19 @@
         <div class="a-field"><label>Short Title</label><input class="a-input" id="act-short-title" style="width:100%;"/></div>
         <div class="a-field"><label>Aliases (comma-separated, used by search)</label><input class="a-input" id="act-aliases" style="width:100%;"/></div>
         <div class="a-field">
-          <label>Chapters &amp; Articles (JSON)</label>
-          <p style="font-size:12px;color:var(--slate-soft);margin:0 0 6px;">
-            Array of chapters, each with an articles array. Each article needs a unique <code>id</code>, a <code>number</code>, a <code>title</code>, and a <code>history</code> array (each version has <code>version</code>, <code>date</code>, <code>changeNote</code>, <code>text</code> — the last entry is what's shown as current). <code>crossRefs</code> and <code>caseLawIds</code> can be empty arrays. Use <code>{{ref:act-slug:article-number}}</code> inside article text to link to another article.
+          <label>Preamble &amp; Articles</label>
+          <p style="font-size:12px;color:var(--slate-soft);margin:0 0 10px;">
+            Build the act visually: add chapters, articles, paragraphs, numbered or
+            bulleted point lists (with sub-points), sub-headings, and insert
+            cross-references or case-law citations directly into the text. Everything
+            below is saved into the act's record automatically — no hand-written JSON
+            required.
           </p>
-          <button type="button" class="a-btn" id="act-insert-skeleton" style="margin-bottom:8px;">Insert Skeleton</button>
-          <textarea class="a-textarea" id="act-chapters" style="font-family:var(--font-mono);font-size:12.5px;min-height:320px;"></textarea>
+          <div id="act-builder-root" class="lb-root"></div>
+          <details class="lb-jsonpreview">
+            <summary>Preview JSON (read-only)</summary>
+            <pre id="act-json-preview"></pre>
+          </details>
         </div>
         <div style="display:flex;gap:10px;">
           <button class="a-btn primary" id="act-save-btn">Save</button>
@@ -329,6 +337,7 @@
 </main>
 </div>
 
+<script src="assets/legal-builder.js"></script>
 <script>
 (async function () {
   'use strict';
@@ -554,18 +563,7 @@
 
   // ── Legal Information System (admin only) ──────────────────────
 
-  const CHAPTER_SKELETON = JSON.stringify([
-    {
-      id: 'ch-1', title: 'Chapter I — General Provisions',
-      articles: [
-        {
-          id: 'art-1', number: 1, title: 'Article Title',
-          history: [{ version: 1, date: new Date().toISOString().slice(0, 10), changeNote: 'Original text.', text: 'Article text goes here.' }],
-          crossRefs: [], caseLawIds: []
-        }
-      ]
-    }
-  ], null, 2);
+  let actBuilder = null;
 
   function actArticleCount(act) {
     return (act.chapters || []).reduce((n, c) => n + (c.articles ? c.articles.length : 0), 0);
@@ -605,6 +603,17 @@
     document.getElementById('act-editor-msg').style.display = 'none';
     document.getElementById('act-editor').classList.add('active');
 
+    if (!actBuilder) {
+      actBuilder = LegalBuilder.mount(document.getElementById('act-builder-root'), { chapters: [], preamble: [] }, {
+        onChange: (data) => {
+          const pre = document.getElementById('act-json-preview');
+          if (pre) pre.textContent = JSON.stringify(data, null, 2);
+        },
+        getOwnActSlug: () => document.getElementById('act-slug').value.trim().toLowerCase(),
+        getOwnActShortTitle: () => document.getElementById('act-short-title').value || 'This Act'
+      });
+    }
+
     if (slug) {
       fetch('/api/legal/acts').then(r => r.json()).then(acts => {
         const act = acts.find(a => a.slug === slug);
@@ -619,7 +628,7 @@
         document.getElementById('act-title').value = act.title;
         document.getElementById('act-short-title').value = act.shortTitle;
         document.getElementById('act-aliases').value = (act.aliases || []).join(', ');
-        document.getElementById('act-chapters').value = JSON.stringify(act.chapters || [], null, 2);
+        actBuilder.setData({ chapters: act.chapters || [], preamble: act.preamble || [] });
       });
     } else {
       document.getElementById('act-editor-heading').textContent = 'New Act';
@@ -632,7 +641,7 @@
       document.getElementById('act-title').value = '';
       document.getElementById('act-short-title').value = '';
       document.getElementById('act-aliases').value = '';
-      document.getElementById('act-chapters').value = '[]';
+      actBuilder.setData({ chapters: [], preamble: [] });
     }
     document.getElementById('act-editor').scrollIntoView({ behavior: 'smooth' });
   }
@@ -641,17 +650,12 @@
   document.getElementById('act-cancel-btn').addEventListener('click', () => {
     document.getElementById('act-editor').classList.remove('active');
   });
-  document.getElementById('act-insert-skeleton').addEventListener('click', () => {
-    document.getElementById('act-chapters').value = CHAPTER_SKELETON;
-  });
 
   document.getElementById('act-save-btn').addEventListener('click', async () => {
     const msg = document.getElementById('act-editor-msg');
     msg.style.display = 'none';
 
-    let chapters;
-    try { chapters = JSON.parse(document.getElementById('act-chapters').value); }
-    catch (e) { msg.className = 'a-msg error'; msg.style.display = 'block'; msg.textContent = 'Chapters is not valid JSON: ' + e.message; return; }
+    const builderData = actBuilder.getData();
 
     const body = {
       slug: document.getElementById('act-slug').value.trim().toLowerCase(),
@@ -662,7 +666,8 @@
       status: document.getElementById('act-status').value,
       dateEnacted: document.getElementById('act-date-enacted').value,
       dateInForce: document.getElementById('act-date-inforce').value,
-      chapters: chapters,
+      chapters: builderData.chapters,
+      preamble: builderData.preamble,
     };
 
     const isNew = !editingActSlug;
