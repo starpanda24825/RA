@@ -106,7 +106,66 @@ var LegalApp = (function () {
   }
 
   function currentText(article) {
-    return article.history[article.history.length - 1].text;
+    return historyEntryFlatText(article.history[article.history.length - 1]);
+  }
+
+  // ---------- structured content model (paragraphs / lists / headings) ----------
+  // An article version (and an Act's `preamble`) is an array of ContentNodes:
+  //   { type: "paragraph", text, numbered }
+  //   { type: "list", style: "ordered"|"unordered", items: [{ text, children }] }
+  //   { type: "heading", text, level }
+  // Older data may instead have a flat `text` string on the history entry —
+  // historyEntryContent() normalizes both shapes to a ContentNode array so
+  // every renderer below only ever has to deal with one shape.
+
+  function historyEntryContent(h) {
+    if (!h) return [];
+    if (Array.isArray(h.content)) return h.content;
+    if (h.text) return [{ type: "paragraph", text: h.text }];
+    return [];
+  }
+
+  // Linearizes a ContentNode array to plain text — used for search
+  // indexing, suggestion previews, and as the input to the word-level
+  // diff (which only knows how to compare plain strings). Inline
+  // {{ref:...}}/{{case:...}} tokens are resolved to their human-readable
+  // label rather than left as raw token syntax.
+  function flattenContent(nodes) {
+    if (!Array.isArray(nodes) || !nodes.length) return "";
+    var lines = [];
+    function walk(list, depth) {
+      (list || []).forEach(function (node) {
+        if (!node) return;
+        if (node.type === "heading" || node.type === "paragraph") {
+          lines.push(flattenInlineToText(node.text || ""));
+        } else if (node.type === "list") {
+          (node.items || []).forEach(function (item, i) {
+            var marker = node.style === "ordered" ? (i + 1) + "." : "\u2022";
+            var indent = depth > 0 ? new Array(depth + 1).join("  ") : "";
+            lines.push(indent + marker + " " + flattenInlineToText(item.text || ""));
+            if (Array.isArray(item.children) && item.children.length) walk(item.children, depth + 1);
+          });
+        }
+      });
+    }
+    walk(nodes, 0);
+    return lines.join("\n");
+  }
+
+  function flattenInlineToText(text) {
+    return String(text || "")
+      .replace(/\{\{ref:([a-z0-9-]+):(\d+)\}\}/g, function (_, slug, num) {
+        var found = getArticle(slug, num);
+        return found ? (found.act.shortTitle + ", Art. " + num) : ("Art. " + num);
+      })
+      .replace(/\{\{case:([a-z0-9-]+)\}\}/g, function (_, slug) {
+        var c = getCase(slug);
+        return c ? c.refNumber : slug;
+      });
+  }
+
+  function historyEntryFlatText(h) {
+    return flattenContent(historyEntryContent(h));
   }
 
   function actArticleCount(act) {
@@ -179,7 +238,7 @@ var LegalApp = (function () {
       entries.push({
         type: "act", actSlug: act.slug,
         title: act.title, sub: categoryLabel(act.category),
-        tokens: tokenize(act.title + " " + act.shortTitle + " " + (act.aliases || []).join(" ")),
+        tokens: tokenize(act.title + " " + act.shortTitle + " " + (act.aliases || []).join(" ") + " " + flattenContent(act.preamble)),
         href: "acts/view.html?act=" + act.slug
       });
       act.chapters.forEach(function (chapter) {
@@ -341,9 +400,9 @@ var LegalApp = (function () {
 
   // ---------- cross-reference rendering ----------
 
-  function renderArticleText(article, fromActSlug) {
-    var text = escapeHtml(currentText(article));
-    text = text.replace(/\{\{ref:([a-z0-9-]+):(\d+)\}\}/g, function (_, slug, num) {
+  function renderInlineText(text, fromActSlug) {
+    var html = escapeHtml(String(text || ""));
+    html = html.replace(/\{\{ref:([a-z0-9-]+):(\d+)\}\}/g, function (_, slug, num) {
       var act = getAct(slug);
       var label = act ? act.shortTitle + ", Art. " + num : "Art. " + num;
       // Resolve the *actual* DOM id of the target article rather than
@@ -360,7 +419,38 @@ var LegalApp = (function () {
       var href = slug === fromActSlug ? ("#" + anchorId) : ("view.html?act=" + slug + "#" + anchorId);
       return '<a class="xref" href="' + href + '">' + escapeHtml(label) + "</a>";
     });
-    return text;
+    html = html.replace(/\{\{case:([a-z0-9-]+)\}\}/g, function (_, slug) {
+      var c = getCase(slug);
+      var label = c ? c.refNumber : slug;
+      return '<a class="xref" href="../case-law/view.html?case=' + slug + '">' + escapeHtml(label) + "</a>";
+    });
+    return html;
+  }
+
+  // Renders an array of ContentNodes (paragraph / list / heading) to HTML.
+  // Lists recurse into renderContentNodes for any nested `children` so a
+  // sub-point list nests structurally (a real <ol>/<ul> inside its parent
+  // <li>), not just visually.
+  function renderContentNodes(nodes, fromActSlug) {
+    if (!Array.isArray(nodes) || !nodes.length) return "";
+    function renderList(node) {
+      var tag = node.style === "ordered" ? "ol" : "ul";
+      var itemsHtml = (node.items || []).map(function (item) {
+        var childHtml = Array.isArray(item.children) && item.children.length ? renderContentNodes(item.children, fromActSlug) : "";
+        return "<li>" + renderInlineText(item.text || "", fromActSlug) + childHtml + "</li>";
+      }).join("");
+      return "<" + tag + ' class="article__list">' + itemsHtml + "</" + tag + ">";
+    }
+    return nodes.map(function (node) {
+      if (!node) return "";
+      if (node.type === "list") return renderList(node);
+      if (node.type === "heading") {
+        var lvl = Math.min(4, Math.max(3, node.level || 3));
+        return "<h" + lvl + ' class="article__subhead">' + renderInlineText(node.text || "", fromActSlug) + "</h" + lvl + ">";
+      }
+      var cls = node.numbered ? " article__para--numbered" : "";
+      return '<p class="article__para' + cls + '">' + renderInlineText(node.text || "", fromActSlug) + "</p>";
+    }).join("");
   }
 
   // ============================================================
@@ -546,11 +636,12 @@ var LegalApp = (function () {
     if (!fromEntry || !toEntry) return;
 
     diffHeadEl.textContent = "Comparing v" + fromV + " (" + formatDate(fromEntry.date) + ") \u2192 v" + toV + " (" + formatDate(toEntry.date) + ")";
-    diffViewEl.innerHTML = renderDiff(fromEntry.text, toEntry.text);
+    diffViewEl.innerHTML = renderDiff(historyEntryFlatText(fromEntry), historyEntryFlatText(toEntry));
   }
 
   function articleHtml(act, article) {
     var hasHistory = article.history.length > 1;
+    var current = article.history[article.history.length - 1];
     var caseChips = (article.caseLawIds || []).map(function (slug) {
       var c = getCase(slug);
       if (!c) return "";
@@ -563,7 +654,7 @@ var LegalApp = (function () {
         '<h3 class="article__title">Art. ' + article.number + ". " + escapeHtml(article.title) + "</h3>" +
         (hasHistory ? '<button class="article__history-toggle" data-target="history-' + article.id + '">History</button>' : "") +
       "</div>" +
-      '<p class="article__body">' + renderArticleText(article, act.slug) + "</p>" +
+      '<div class="article__body">' + renderContentNodes(historyEntryContent(current), act.slug) + "</div>" +
       (caseChips ? '<div class="article__cases"><span class="article__cases-label">Related case law</span>' + caseChips + "</div>" : "") +
       (hasHistory ? historyPanelHtml(article) : "") +
     "</article>";
@@ -599,6 +690,13 @@ var LegalApp = (function () {
       "</div>";
     }).join("");
 
+    var preambleHtml = (act.preamble && act.preamble.length)
+      ? '<div class="actview__preamble">' +
+          '<p class="actview__preamble-label">Preamble</p>' +
+          renderContentNodes(act.preamble, act.slug) +
+        "</div>"
+      : "";
+
     root.innerHTML =
       '<aside class="actview__sidebar"><nav class="actview__nav">' + navHtml + "</nav></aside>" +
       '<div class="actview__content">' +
@@ -610,6 +708,7 @@ var LegalApp = (function () {
             '<span class="actview__meta-date">In force since ' + formatDate(act.dateInForce) + "</span>" +
           "</div>" +
         "</div>" +
+        preambleHtml +
         articlesHtml +
       "</div>";
 

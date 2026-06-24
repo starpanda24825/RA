@@ -39,6 +39,11 @@ function actToPublicShape(row) {
     slug: row.slug, title: row.title, shortTitle: row.short_title,
     category: row.category, status: row.status,
     aliases: extra.aliases || [], dateEnacted: extra.dateEnacted, dateInForce: extra.dateInForce,
+    // `preamble` is optional and only present on acts authored/edited with
+    // the structured content model (see legal-data.js's header comment for
+    // the ContentNode shapes). Older rows simply have no `preamble` key,
+    // hence the fallback rather than this being a required column.
+    preamble: extra.preamble || [],
     chapters: extra.chapters || [],
   };
 }
@@ -78,6 +83,7 @@ function validateActBody(body, { isCreate }) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(body.dateEnacted || '')) return 'Date Enacted must be in YYYY-MM-DD format.';
   if (!/^\d{4}-\d{2}-\d{2}$/.test(body.dateInForce || '')) return 'Date In Force must be in YYYY-MM-DD format.';
   if (!Array.isArray(body.chapters)) return 'Chapters must be a JSON array (see the placeholder for the expected shape).';
+  if (body.preamble !== undefined && !Array.isArray(body.preamble)) return 'Preamble must be a JSON array of content blocks (or omitted entirely).';
   return null;
 }
 
@@ -115,7 +121,9 @@ export async function createAct(request, env) {
   const slug = String(body.slug).trim().toLowerCase();
   const dataJson = JSON.stringify({
     aliases: Array.isArray(body.aliases) ? body.aliases : [],
-    dateEnacted: body.dateEnacted, dateInForce: body.dateInForce, chapters: body.chapters,
+    dateEnacted: body.dateEnacted, dateInForce: body.dateInForce,
+    preamble: Array.isArray(body.preamble) ? body.preamble : [],
+    chapters: body.chapters,
   });
 
   try {
@@ -147,7 +155,9 @@ export async function updateAct(request, env, slug) {
 
   const dataJson = JSON.stringify({
     aliases: Array.isArray(body.aliases) ? body.aliases : [],
-    dateEnacted: body.dateEnacted, dateInForce: body.dateInForce, chapters: body.chapters,
+    dateEnacted: body.dateEnacted, dateInForce: body.dateInForce,
+    preamble: Array.isArray(body.preamble) ? body.preamble : [],
+    chapters: body.chapters,
   });
 
   await store.updateLegalAct(env, slug, {

@@ -8,9 +8,20 @@
    LEGAL_DATA.acts: [{
      slug, title, shortTitle, aliases[], category, status,
      dateEnacted, dateInForce,
+     preamble: [ContentNode, ...],   // OPTIONAL — recitals/"Whereas" clauses
+                                      // shown before Chapter I. Omit or leave
+                                      // [] for acts that don't need one.
      chapters: [{ id, title, articles: [{
        id, number, title,
-       history: [{ version, date, changeNote, text }],   // last entry = current
+       history: [{ version, date, changeNote, content: [ContentNode, ...] }],
+                                      // last entry = current. `content` is the
+                                      // structured body (preferred). Older
+                                      // entries may instead have a flat `text`
+                                      // string — both legal-app.js and the
+                                      // admin builder fall back to treating
+                                      // `text` as a single paragraph when
+                                      // `content` is absent, so nothing needs
+                                      // to be migrated by hand.
        crossRefs: [{ actSlug, number, label }],
        caseLawIds: [slug,...]
      }]}]
@@ -20,9 +31,28 @@
      summary, fullText, relatedArticles: [{ actSlug, number }]
    }]
 
-   Cross-references inside article text use the token
-   {{ref:act-slug:article-number}} — the renderer turns these into
-   clickable links. Status values: "in-force" | "repealed" | "amended".
+   ContentNode — the unit used for both an Act's `preamble` and an
+   article version's `content`. Each node is one of:
+     { type: "paragraph", text: "...", numbered: false }
+       A normal block of prose. `numbered` is a display hint (§-style
+       numbering) and doesn't affect storage or cross-referencing.
+     { type: "list", style: "ordered" | "unordered", items: [
+         { text: "...", children: [ContentNode, ...] }   // children optional
+       ] }
+       A point list. Items may nest a further list (or any content) under
+       `children` for sub-points — there's no fixed depth limit.
+     { type: "heading", text: "...", level: 2|3|4 }
+       An in-body sub-heading (e.g. "Definitions") below the article's own
+       title. Rare, but useful for longer articles.
+
+   Inline tokens (usable inside any node's `text`):
+     {{ref:act-slug:article-number}}  — cross-reference to another article,
+                                         rendered as a link with the target
+                                         act/article's real title.
+     {{case:case-slug}}               — citation of a case-law entry,
+                                         rendered as a link with its
+                                         reference number.
+   Status values: "in-force" | "repealed" | "amended".
    ============================================================ */
 
 (function () {
@@ -38,6 +68,11 @@
       status: "in-force",
       dateEnacted: "2025-01-12",
       dateInForce: "2025-01-12",
+      preamble: [
+        { type: "paragraph", text: "WHEREAS the people and lawful authorities of Regnum Aeternum have resolved to constitute an enduring civic order, grounded in law rather than the will of any one office;" },
+        { type: "paragraph", text: "WHEREAS the Crown and its lawful organs hold authority only insofar as it is granted by this Constitution and the Acts made under it;" },
+        { type: "paragraph", text: "NOW THEREFORE this Constitution is ordained as the founding charter of the realm, binding the Crown, its officers, and all citizens alike." }
+      ],
       chapters: [
         {
           id: "title-1",
@@ -132,7 +167,13 @@
             {
               id: "art-2", number: 2, title: "Composition and Chambers",
               history: [{ version: 1, date: "2025-06-24", changeNote: "Original text.",
-                text: "The Supreme Court shall sit in such Chambers as the Crown may establish, including a Civil Chamber and a Criminal Chamber, each competent to hear matters within its assigned jurisdiction." }],
+                content: [
+                  { type: "paragraph", text: "The Supreme Court shall sit in such Chambers as the Crown may establish, organised as follows:" },
+                  { type: "list", style: "ordered", items: [
+                    { text: "the Civil Chamber, competent to hear civil disputes between citizens and disputes between citizens and the offices of state;" },
+                    { text: "the Criminal Chamber, competent to hear such criminal matters as are referred to it under the Penal Code." }
+                  ] }
+                ] }],
               crossRefs: [], caseLawIds: []
             },
             {
@@ -195,9 +236,26 @@
               id: "art-3", number: 3, title: "Penalties",
               history: [
                 { version: 1, date: "2026-05-15", changeNote: "Original text.",
-                  text: "Penalties under this Code include censure, fine, restriction of access to the offices of state, and banishment, as the gravity of the offence requires." },
+                  content: [
+                    { type: "paragraph", text: "Penalties under this Code include the following, applied according to the gravity of the offence:" },
+                    { type: "list", style: "unordered", items: [
+                      { text: "censure;" },
+                      { text: "fine;" },
+                      { text: "restriction of access to the offices of state;" },
+                      { text: "banishment." }
+                    ] }
+                  ] },
                 { version: 2, date: "2026-06-10", changeNote: "Added confiscation of unlawfully held property as a penalty, following the ruling in SC-2026-001.",
-                  text: "Penalties under this Code include censure, fine, confiscation of unlawfully held property, restriction of access to the offices of state, and banishment, as the gravity of the offence requires." }
+                  content: [
+                    { type: "paragraph", text: "Penalties under this Code include the following, applied according to the gravity of the offence:" },
+                    { type: "list", style: "unordered", items: [
+                      { text: "censure;" },
+                      { text: "fine;" },
+                      { text: "confiscation of unlawfully held property;" },
+                      { text: "restriction of access to the offices of state;" },
+                      { text: "banishment." }
+                    ] }
+                  ] }
               ],
               crossRefs: [], caseLawIds: ["sc-2026-001"]
             }
