@@ -225,3 +225,73 @@ export async function updateLegalCase(env, slug, { title, refNumber, dataJson })
 export async function deleteLegalCaseBySlug(env, slug) {
   await env.DB.prepare('DELETE FROM legal_case_law WHERE slug = ?').bind(slug).run();
 }
+
+// ---------- land registry: plots ----------
+
+export async function listLandPlots(env) {
+  const { results } = await env.DB
+    .prepare('SELECT * FROM land_plots ORDER BY division_code ASC, book_number ASC, control_digit ASC')
+    .all();
+  return results;
+}
+
+export async function findLandPlotByNumber(env, registerNumber) {
+  return env.DB.prepare('SELECT * FROM land_plots WHERE register_number = ?').bind(registerNumber).first();
+}
+
+// Highest existing book number on file for a division, as a plain
+// integer (0 if the division has no plots yet) — used by the admin
+// panel's "Next Book Number" button so book numbers are assigned
+// sequentially per division without two admins racing for the same
+// one (the create call still re-checks uniqueness at the DB level).
+export async function maxBookNumberForDivision(env, divisionCode) {
+  const row = await env.DB.prepare(
+    "SELECT MAX(CAST(book_number AS INTEGER)) AS maxNum FROM land_plots WHERE division_code = ?"
+  ).bind(divisionCode).first();
+  return (row && row.maxNum) || 0;
+}
+
+export async function insertLandPlot(env, fields) {
+  const now = new Date().toISOString();
+  try {
+    await env.DB.prepare(
+      `INSERT INTO land_plots
+         (register_number, division_code, book_number, control_digit, world, owner, resident, is_rented, y_lower, y_upper, status, data, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      fields.registerNumber, fields.divisionCode, fields.bookNumber, fields.controlDigit,
+      fields.world || '', fields.owner || '', fields.resident || '', fields.isRented ? 1 : 0,
+      fields.yLower, fields.yUpper, fields.status || 'registered', fields.dataJson, now, now
+    ).run();
+  } catch (err) {
+    if (String(err && err.message || '').toUpperCase().includes('UNIQUE')) {
+      const e = new Error('A plot with that register number already exists.');
+      e.code = 'DUPLICATE';
+      throw e;
+    }
+    throw err;
+  }
+  return findLandPlotByNumber(env, fields.registerNumber);
+}
+
+// division_code/book_number/control_digit are deliberately NOT
+// updatable here — they compose the register_number primary key
+// (same convention as legal_acts.slug). An admin who needs to
+// change them deletes the record and creates it again under the
+// correct number.
+export async function updateLandPlot(env, registerNumber, fields) {
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `UPDATE land_plots
+        SET world = ?, owner = ?, resident = ?, is_rented = ?, y_lower = ?, y_upper = ?, status = ?, data = ?, updated_at = ?
+      WHERE register_number = ?`
+  ).bind(
+    fields.world || '', fields.owner || '', fields.resident || '', fields.isRented ? 1 : 0,
+    fields.yLower, fields.yUpper, fields.status || 'registered', fields.dataJson, now, registerNumber
+  ).run();
+  return findLandPlotByNumber(env, registerNumber);
+}
+
+export async function deleteLandPlotByNumber(env, registerNumber) {
+  await env.DB.prepare('DELETE FROM land_plots WHERE register_number = ?').bind(registerNumber).run();
+}

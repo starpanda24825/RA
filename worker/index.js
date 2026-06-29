@@ -12,6 +12,7 @@ import { handleRegister, handleLogin, handleLogout, handleMe } from './routes/au
 import { listUsersRoute, createUserRoute, updateUserRoute, deleteUserRoute } from './routes/admin.js';
 import * as news from './routes/news.js';
 import * as legal from './routes/legal.js';
+import * as landregistry from './routes/landregistry.js';
 import * as dynmap from './routes/dynmap.js';
 
 function json(data, init = {}) {
@@ -74,6 +75,17 @@ export default {
         m = pathname.match(/^\/api\/legal\/case-law\/([a-z0-9-]+)$/);
         if (m && method === 'PUT') return await legal.updateCase(request, env, m[1]);
         if (m && method === 'DELETE') return await legal.deleteCase(request, env, m[1]);
+
+        // ---- Land Registry System ----
+        if (pathname === '/api/landregistry/data' && method === 'GET') return await landregistry.getPublicData(request, env);
+        if (pathname === '/api/landregistry/plots' && method === 'GET') return await landregistry.listPlotsAdmin(request, env);
+        if (pathname === '/api/landregistry/plots' && method === 'POST') return await landregistry.createPlot(request, env);
+        if (pathname === '/api/landregistry/next-book-number' && method === 'GET') return await landregistry.nextBookNumber(request, env);
+
+        m = pathname.match(/^\/api\/landregistry\/plots\/([^/]+)$/);
+        if (m && method === 'GET') return await landregistry.getOnePublic(request, env, decodeURIComponent(m[1]));
+        if (m && method === 'PUT') return await landregistry.updatePlot(request, env, decodeURIComponent(m[1]));
+        if (m && method === 'DELETE') return await landregistry.deletePlot(request, env, decodeURIComponent(m[1]));
 
         // ---- Ballistic Calculator: DynMap proxy ----
         if (pathname === '/api/dynmap-config' && method === 'GET') return await dynmap.getConfig(request, env);
