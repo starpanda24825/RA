@@ -1,0 +1,10 @@
+{
+  "dynmapBaseUrl": "https://mc.westeroscraft.com",
+  "autoDetect": true,
+  "world": "",
+  "prefix": "",
+  "defaultMcX": 0,
+  "defaultMcZ": 0,
+  "defaultZoom": -3,
+  "useProxy": false
+}

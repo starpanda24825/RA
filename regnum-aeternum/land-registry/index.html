@@ -4,11 +4,13 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Land Registry System — Regnum Aeternum</title>
+<meta name="description" content="Search and browse the claims, deeds, and boundaries of every registered holding in Regnum Aeternum." />
 <link rel="icon" href="../assets/logo.webp" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant:wght@500;600;700&family=Cormorant+SC:wght@500;600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="../assets/styles.css" />
+<link rel="stylesheet" href="assets/land-registry.css" />
 </head>
 <body>
 <header class="topbar">
@@ -19,22 +21,76 @@
   <span class="topbar__tag">Land Registry System</span>
 </header>
 
-<main class="subpage">
-  <div class="subpage__panel">
-    <div class="subpage__seal" aria-hidden="true">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l6-3 6 3 6-3v13l-6 3-6-3-6 3V7z"/><path d="M9 4v13M15 7v13"/></svg>
-    </div>
-    <p class="subpage__eyebrow">Cadastre</p>
-    <h1 class="subpage__title">Land Registry System</h1>
-    <p class="subpage__body">Claims, deeds, and the boundaries of every holding in the realm will be recorded here. This office is being prepared and will open to citizens shortly.</p>
-    <a href="../" class="subpage__back">
-      <span class="subpage__arrow-back" aria-hidden="true"></span>
-      Return to the Portal
-    </a>
+<main class="landwrap">
+
+  <div class="landhub__intro">
+    <p class="landhub__eyebrow">Cadastre</p>
+    <h1 class="landhub__title">Land Registry System</h1>
+    <p class="landhub__lede">Claims, deeds, and the boundaries of every registered holding in the realm. Search a register number directly, browse by division, or open the cadastral map to see every plot in place.</p>
   </div>
+
+  <div class="landsearch">
+    <h2 class="landsearch__title">Search the Register</h2>
+    <div class="landsearch__grid">
+      <div class="land-field">
+        <label>Registry Division</label>
+        <select id="divisionCode" class="land-select">
+          <option value="RA1M">RA1M — Ardoritha</option>
+          <option value="RA2V">RA2V — Vinland</option>
+          <option value="RA3D">RA3D — Meridia</option>
+          <option value="RA4L">RA4L — Littoria</option>
+          <option value="RA5A">RA5A — Algiers</option>
+        </select>
+      </div>
+      <div class="land-field">
+        <label>Register Number</label>
+        <input class="land-input" type="number" id="bookNumber" min="1" max="99999999" placeholder="e.g. 1" />
+      </div>
+      <div class="land-field">
+        <label>Control Digit</label>
+        <input class="land-input" type="number" id="controlDigit" min="0" max="9" placeholder="0-9" />
+      </div>
+    </div>
+    <button id="searchBookBtn" class="land-btn" style="margin-top:14px;">Search Register</button>
+    <div class="landsearch__generated">
+      <span class="landsearch__generated-label">Register Identifier</span>
+      <span id="generatedNumber" class="landsearch__generated-number">RA1M/00000000/0</span>
+    </div>
+  </div>
+
+  <div class="landsection__head">
+    <h2 class="landsection__title">Registry Divisions</h2>
+    <a class="land-btn land-btn--ghost land-btn--sm" href="map/">Open the Cadastral Map &rarr;</a>
+  </div>
+  <div class="landdivisions" id="land-divisions"></div>
+
+  <div class="landsection__head">
+    <h2 class="landsection__title">Recently Registered</h2>
+  </div>
+  <div id="land-recent-list">
+    <p class="landempty">Loading the register&hellip;</p>
+  </div>
+
 </main>
 
+<footer class="footer">
+  <div class="footer__inner">
+    <div class="footer__brand">
+      <img class="footer__crest" src="../assets/logo.webp" alt="" />
+      <div>
+        <div class="footer__name">Regnum Aeternum</div>
+        <div class="footer__motto">Regnum quod non cadit</div>
+      </div>
+    </div>
+    <div class="footer__meta">
+      Maintained by the Office of Civil Administration<br/>
+      © 2026 Regnum Aeternum
+    </div>
+  </div>
+</footer>
+
+<script src="assets/land-registry-data.js"></script>
+<script src="assets/land-registry-app.js"></script>
 <script src="../assets/auth-widget.js" defer></script>
 </body>
-
 </html>

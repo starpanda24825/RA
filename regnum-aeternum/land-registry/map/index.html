@@ -1,0 +1,893 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Cadastral Map — Land Registry — Regnum Aeternum</title>
+<link rel="icon" href="../../assets/logo.webp"/>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant:wght@500;600;700&family=Cormorant+SC:wght@500;600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/styles.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+.landmap-layout { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+#map-wrap { position: relative; flex: 1 1 0; min-height: 0; }
+#map2d, #map3d { width: 100%; height: 100%; background: var(--ink); }
+#map3d { display: none; }
+#map3d canvas { display: block; }
+
+#panel {
+  flex: 0 0 auto; height: 320px; overflow-y: auto;
+  background: var(--ink-soft); border-top: 1px solid var(--slate-line);
+}
+
+.map-bar {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 500;
+  display: flex; gap: 8px; flex-wrap: wrap; justify-content: center;
+  background: rgba(18,17,19,0.88); backdrop-filter: blur(8px);
+  border: 1px solid var(--slate-line); border-radius: 100px; padding: 6px 12px; align-items: center;
+  max-width: calc(100vw - 24px);
+}
+.map-bar__label {
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--parchment-faint); padding-right: 4px;
+}
+.map-bar__divider { width: 1px; height: 18px; background: var(--slate-line); margin: 0 2px; }
+.map-select {
+  font-family: var(--font-mono); font-size: 11px; color: var(--parchment);
+  background: var(--ink-elevated); border: 1px solid var(--slate-line); border-radius: 100px;
+  padding: 5px 10px;
+}
+.map-btn {
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.07em; text-transform: uppercase;
+  background: transparent; border: 1px solid var(--slate-line); color: var(--parchment-dim);
+  border-radius: 100px; padding: 5px 14px; cursor: pointer; white-space: nowrap;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+.map-btn:hover { border-color: var(--gold-dim); color: var(--parchment); }
+.map-btn.active { background: var(--crimson-deep); border-color: var(--crimson-bright); color: var(--parchment); }
+
+.coord-pill {
+  position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); z-index: 500;
+  font-family: var(--font-mono); font-size: 11px; color: var(--parchment-faint);
+  background: rgba(18,17,19,0.72); backdrop-filter: blur(6px); border: 1px solid var(--slate-line);
+  border-radius: 100px; padding: 5px 16px; pointer-events: none; white-space: nowrap;
+}
+
+.source-pill {
+  position: absolute; top: 12px; right: 12px; z-index: 500;
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--parchment-faint);
+  background: rgba(18,17,19,0.8); backdrop-filter: blur(6px); border: 1px solid var(--slate-line);
+  border-radius: 100px; padding: 6px 14px; cursor: pointer; white-space: nowrap;
+  max-width: min(50vw, 320px); overflow: hidden; text-overflow: ellipsis;
+}
+.source-pill.ok   { color: var(--teal-bright); border-color: rgba(46,142,150,0.4); }
+.source-pill.err  { color: #e3a3a3; border-color: rgba(176,64,64,0.4); }
+
+.mapsource-popover {
+  display: none; flex-direction: column; gap: 12px;
+  position: absolute; top: 54px; right: 12px; z-index: 600;
+  width: min(340px, calc(100vw - 24px)); max-height: calc(100% - 70px); overflow-y: auto;
+  background: var(--ink-elevated); border: 1px solid var(--slate-line); border-radius: 12px; padding: 16px 16px 14px;
+  box-shadow: 0 18px 40px rgba(0,0,0,0.5);
+}
+.mapsource-popover.is-open { display: flex; }
+.mapsource-popover__head { display: flex; align-items: center; justify-content: space-between; font-family: var(--font-display); font-size: 15px; font-weight: 600; color: var(--parchment); }
+.mapsource-popover__close { background: none; border: none; color: var(--parchment-faint); cursor: pointer; font-size: 13px; }
+.mapsource-popover__err { font-family: var(--font-mono); font-size: 11px; color: #e3a3a3; margin: 0; }
+.mapsource-popover__ok  { font-family: var(--font-mono); font-size: 11px; color: var(--teal-bright); margin: 0; }
+.ms-field { display: flex; flex-direction: column; gap: 4px; }
+.ms-field label { font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--slate-soft); }
+.ms-input { font-family: var(--font-body); font-size: 13px; color: var(--parchment); background: var(--ink-soft); border: 1px solid var(--slate-line); border-radius: 7px; padding: 7px 10px; }
+
+.panel-resize-handle {
+  flex: 0 0 auto; height: 14px; background: var(--ink-soft);
+  border-top: 1px solid var(--slate-line); border-bottom: 1px solid var(--slate-line);
+  cursor: row-resize; touch-action: none; display: flex; align-items: center; justify-content: center; position: relative; z-index: 60;
+}
+.panel-resize-handle::before { content: ""; width: 44px; height: 4px; border-radius: 100px; background: var(--slate-line); }
+.panel-resize-handle:hover::before { background: var(--gold-dim); }
+body.is-resizing-panel { cursor: row-resize; }
+
+.panel-inner { max-width: 1200px; margin: 0 auto; padding: 16px 22px 28px; }
+
+.landmap-banner {
+  display: none; background: rgba(201,162,39,0.1); border: 1px solid var(--gold-dim); border-radius: 10px;
+  padding: 10px 16px; font-size: 13px; color: var(--gold-bright); margin-bottom: 14px;
+}
+.landmap-banner.show { display: block; }
+
+.landmap-grid { display: grid; grid-template-columns: 1fr 1.3fr; gap: 22px; }
+@media (max-width: 760px) { .landmap-grid { grid-template-columns: 1fr; } }
+
+.landmap-list { display: flex; flex-direction: column; gap: 8px; max-height: 260px; overflow-y: auto; }
+.landmap-listitem {
+  text-align: left; background: var(--ink-elevated); border: 1px solid var(--slate-line); border-radius: 9px;
+  padding: 10px 14px; cursor: pointer; transition: border-color 0.15s ease;
+}
+.landmap-listitem:hover { border-color: var(--gold-dim); }
+.landmap-listitem.active { border-color: var(--gold); background: rgba(201,162,39,0.07); }
+.landmap-listitem__num { font-family: var(--font-mono); font-size: 12.5px; color: var(--gold-bright); display:block; margin-bottom:2px; }
+.landmap-listitem__sub { font-size: 12px; color: var(--parchment-dim); }
+
+.landmap-detail { background: var(--ink-elevated); border: 1px solid var(--slate-line); border-radius: 10px; padding: 16px 18px; }
+.landmap-detail__empty { color: var(--slate-soft); font-size: 13.5px; }
+.landmap-detail h3 { font-family: var(--font-display); font-size: 17px; color: var(--gold-bright); margin: 0 0 10px; }
+.landmap-detail__grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(120px,1fr)); gap: 8px; margin-bottom: 12px; }
+.landmap-detail__chip { background: var(--ink-soft); border: 1px solid var(--slate-line); border-radius: 7px; padding: 6px 10px; }
+.landmap-detail__chip span { display: block; }
+.landmap-detail__chip .lbl { font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--slate-soft); }
+.landmap-detail__chip .val { font-size: 13px; color: var(--parchment); font-weight: 600; }
+.landmap-detail__link { font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--gold-bright); border-bottom: 1px dotted var(--gold-dim); }
+
+.picker-corners { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.picker-corner-row { display: flex; align-items: center; gap: 8px; }
+.picker-corner-row__label { font-family: var(--font-mono); font-size: 11px; color: var(--slate-soft); width: 70px; flex-shrink: 0; }
+.picker-input {
+  font-family: var(--font-mono); font-size: 13px; color: var(--parchment); background: var(--ink-elevated);
+  border: 1px solid var(--slate-line); border-radius: 7px; padding: 7px 10px; width: 100%;
+}
+.picker-input.set { border-color: var(--teal-bright); }
+.picker-yrow { display: flex; gap: 10px; margin-bottom: 14px; }
+.picker-yrow .land-field { flex: 1; }
+.picker-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+.pickermarker {
+  width: 22px; height: 22px; border-radius: 50%; background: var(--crimson-bright); border: 2px solid var(--parchment);
+  color: var(--parchment); font-family: var(--font-mono); font-size: 11px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <a href="../" style="display:flex;align-items:center;gap:14px;">
+    <img class="topbar__crest" src="../../assets/logo.webp" alt="Crest of Regnum Aeternum"/>
+    <span class="topbar__name">Regnum Aeternum</span>
+  </a>
+  <span class="topbar__tag">Cadastral Map</span>
+</header>
+
+<div class="landmap-layout">
+
+  <div id="map-wrap">
+    <div id="map2d"></div>
+    <div id="map3d"></div>
+
+    <div class="map-bar">
+      <span class="map-bar__label">World</span>
+      <select class="map-select" id="filter-world"><option value="">All</option></select>
+      <span class="map-bar__label">Division</span>
+      <select class="map-select" id="filter-division"><option value="">All</option></select>
+      <span class="map-bar__label">Status</span>
+      <select class="map-select" id="filter-status">
+        <option value="">All</option>
+        <option value="registered">Registered</option>
+        <option value="vacant">Vacant</option>
+        <option value="disputed">Disputed</option>
+        <option value="archived">Archived</option>
+      </select>
+      <span class="map-bar__divider" aria-hidden="true"></span>
+      <button class="map-btn active" id="btn-mode-2d">2D</button>
+      <button class="map-btn" id="btn-mode-3d">3D</button>
+      <span class="map-bar__divider" aria-hidden="true"></span>
+      <button class="map-btn" id="btn-mapsource">Map Source</button>
+    </div>
+
+    <div class="coord-pill" id="cursor-coords">X — Z —</div>
+    <button class="source-pill" id="source-status" type="button">Detecting map source&hellip;</button>
+
+    <div class="mapsource-popover" id="mapsource-popover">
+      <div class="mapsource-popover__head"><span>Map Source</span><button class="mapsource-popover__close" id="mapsource-close">✕</button></div>
+      <p style="font-size:12px;color:var(--parchment-dim);margin:0;">Paste a DynMap base URL — the world and map are detected automatically from its public configuration.</p>
+      <div class="ms-field"><label>DynMap Base URL</label><input class="ms-input" id="ms-baseurl" type="text" placeholder="https://your-server.example.com"/></div>
+      <p class="mapsource-popover__err" id="ms-err" style="display:none;"></p>
+      <p class="mapsource-popover__ok" id="ms-ok" style="display:none;"></p>
+      <div style="display:flex;gap:8px;">
+        <button class="map-btn" id="ms-reset" type="button">Reset</button>
+        <button class="map-btn active" id="ms-apply" type="button">Detect &amp; Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel-resize-handle" id="panel-resize-handle" role="separator" aria-orientation="horizontal" tabindex="0"></div>
+
+  <div id="panel">
+    <div class="panel-inner">
+
+      <div class="landmap-banner" id="landmap-banner"></div>
+
+      <!-- NORMAL MODE -->
+      <div id="panel-normal" class="landmap-grid">
+        <div>
+          <p style="font-family:var(--font-mono);font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--slate-soft);margin:0 0 8px;">Plots (<span id="plot-count">0</span>)</p>
+          <div class="landmap-list" id="plot-list"></div>
+        </div>
+        <div class="landmap-detail" id="plot-detail">
+          <p class="landmap-detail__empty">Select a plot on the map or from the list to see its record here.</p>
+        </div>
+      </div>
+
+      <!-- PICKER MODE (admin corner-picking, opened from the admin panel) -->
+      <div id="panel-picker" style="display:none;">
+        <p style="font-size:13px;color:var(--parchment-dim);margin:0 0 14px;">
+          Click 4 points on the 2D map, in order, to trace the plot's corners — or type coordinates directly below.
+        </p>
+        <div class="picker-corners" id="picker-corner-rows"></div>
+        <div class="picker-yrow">
+          <div class="land-field"><label>Y Lower</label><input class="land-input" id="picker-ylower" type="number" value="64"/></div>
+          <div class="land-field"><label>Y Upper</label><input class="land-input" id="picker-yupper" type="number" value="80"/></div>
+        </div>
+        <div class="picker-actions">
+          <button class="land-btn land-btn--ghost land-btn--sm" id="picker-undo" type="button">Undo Last Point</button>
+          <button class="land-btn land-btn--ghost land-btn--sm" id="picker-clear" type="button">Clear</button>
+          <button class="land-btn" id="picker-use" type="button" style="width:auto;padding:10px 22px;" disabled>Use These Corners</button>
+        </div>
+        <p id="picker-msg" style="font-family:var(--font-mono);font-size:12px;color:var(--teal-bright);margin:14px 0 0;display:none;"></p>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script type="module">
+import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+
+(async function () {
+  'use strict';
+
+  /* ════════════════════════════════════════════════════════════
+     This page shows registered land plots two ways:
+       - 2D: the real DynMap tiles (same auto-discovery as the
+         Ballistic Calculator) with each plot drawn as its actual
+         quadrilateral footprint. If two or more plots share the
+         EXACT same footprint at different heights (one built over
+         another), only the topmost is drawn here — see
+         pickTopmostPerFootprint() below. Partial overlaps between
+         differently-shaped plots aren't merged; this only collapses
+         plots that occupy the identical 4 corners.
+       - 3D: every plot, all at once, each simplified to the
+         axis-aligned bounding box of its corners extruded from
+         Y Lower to Y Upper — i.e. drawn as a cube/cuboid, by design
+         (plots can be arbitrary quadrilaterals, but the 3D view only
+         ever draws boxes, so stacked plots are unambiguous).
+     A third "picker" mode (?pick=1) repurposes the 2D map for an
+     admin to trace a new plot's corners by clicking, then posts the
+     result back to the admin panel tab that opened this window.
+     ════════════════════════════════════════════════════════════ */
+
+  function qs(name) {
+    var m = new RegExp('[?&]' + name + '=([^&]*)').exec(window.location.search || '');
+    return m ? decodeURIComponent(m[1].replace(/\+/g, ' ')) : null;
+  }
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]; });
+  }
+
+  var PICK_MODE = qs('pick') === '1';
+  var FOCUS_NUM = qs('focus');
+  var FILTER_DIVISION_INITIAL = qs('division') || '';
+
+  // ── DOM refs ───────────────────────────────────────────────────
+  var map2dEl = document.getElementById('map2d');
+  var map3dEl = document.getElementById('map3d');
+  var btnMode2d = document.getElementById('btn-mode-2d');
+  var btnMode3d = document.getElementById('btn-mode-3d');
+  var filterWorldEl = document.getElementById('filter-world');
+  var filterDivisionEl = document.getElementById('filter-division');
+  var filterStatusEl = document.getElementById('filter-status');
+  var bannerEl = document.getElementById('landmap-banner');
+  var panelNormal = document.getElementById('panel-normal');
+  var panelPicker = document.getElementById('panel-picker');
+  var plotListEl = document.getElementById('plot-list');
+  var plotCountEl = document.getElementById('plot-count');
+  var plotDetailEl = document.getElementById('plot-detail');
+
+  function showBanner(msg) { bannerEl.textContent = msg; bannerEl.classList.add('show'); }
+  function hideBanner() { bannerEl.classList.remove('show'); }
+
+  // ════════════════════════════════════════════════════════════
+  // 1. LOAD CONFIG + DATA
+  // ════════════════════════════════════════════════════════════
+  var CFG = { dynmapBaseUrl: 'https://mc.westeroscraft.com', autoDetect: true, world: '', prefix: '', defaultMcX: 0, defaultMcZ: 0, defaultZoom: -3, useProxy: false };
+  try {
+    var cfgResp = await fetch('../assets/mapconfig.json');
+    if (cfgResp.ok) CFG = Object.assign({}, CFG, await cfgResp.json());
+  } catch (e) { console.warn('Could not load mapconfig.json — using defaults.', e); }
+
+  var DIVISIONS = [];
+  var allPlots = [];
+  try {
+    var timeout = new Promise(function (resolve) { setTimeout(function () { resolve(null); }, 4000); });
+    var fetched = fetch('/api/landregistry/data').then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
+    var live = await Promise.race([fetched, timeout]);
+    if (live && Array.isArray(live.plots)) { DIVISIONS = live.divisions || []; allPlots = live.plots; }
+    else if (window.LAND_REGISTRY_DATA) { DIVISIONS = window.LAND_REGISTRY_DATA.divisions; allPlots = window.LAND_REGISTRY_DATA.plots; }
+  } catch (e) {
+    if (window.LAND_REGISTRY_DATA) { DIVISIONS = window.LAND_REGISTRY_DATA.divisions; allPlots = window.LAND_REGISTRY_DATA.plots; }
+  }
+
+  filterDivisionEl.innerHTML = '<option value="">All</option>' + DIVISIONS.map(function (d) {
+    return '<option value="' + d.code + '">' + d.code + ' \u2014 ' + escapeHtml(d.name) + '</option>';
+  }).join('');
+  if (FILTER_DIVISION_INITIAL) filterDivisionEl.value = FILTER_DIVISION_INITIAL;
+
+  function plotWorlds() {
+    var set = {};
+    allPlots.forEach(function (p) { if (p.world) set[p.world] = true; });
+    return Object.keys(set);
+  }
+
+  // ════════════════════════════════════════════════════════════
+  // 2. DYNMAP AUTO-DISCOVERY (same approach as the Ballistic
+  //    Calculator's ballistics/index.html — see its section 2b for
+  //    the full rationale. Re-implemented here rather than imported
+  //    since this is a plain script, not a module shared between
+  //    pages.)
+  // ════════════════════════════════════════════════════════════
+  async function fetchJSONSafe(url) {
+    try { var r = await fetch(url, { mode: 'cors', credentials: 'omit' }); return r.ok ? await r.json() : null; }
+    catch (e) { return null; }
+  }
+  function normalizeImageFormat(fmt) {
+    if (!fmt) return 'png';
+    var s = String(fmt).toLowerCase();
+    return s === 'default' ? 'png' : (s.split('-')[0] || 'png');
+  }
+  function parseDynmapConfig(data) {
+    if (!data || !Array.isArray(data.worlds)) return null;
+    var worlds = data.worlds.map(function (w) {
+      if (!w || !w.name) return null;
+      var maps = (Array.isArray(w.maps) ? w.maps : []).map(function (m) {
+        if (!m) return null;
+        var prefix = m.prefix || m.name;
+        if (!prefix) return null;
+        var fmtRaw = m['image-format'] || m.imageformat || m.imageFormat || m.format || m.tileformat;
+        var zoomInRaw = m.mapzoomin != null ? m.mapzoomin : m.mapZoomIn;
+        return { name: m.name || prefix, title: m.title || m.name || prefix, prefix: prefix, imageFormat: normalizeImageFormat(fmtRaw), mapZoomIn: Number(zoomInRaw) || 0 };
+      }).filter(Boolean);
+      if (!maps.length) return null;
+      var center = (w.center && typeof w.center === 'object') ? { x: Number(w.center.x) || 0, z: Number(w.center.z) || 0 } : null;
+      var zoomOutRaw = w.extrazoomout != null ? w.extrazoomout : w.extraZoomOut;
+      return { name: w.name, title: w.title || w.name, center: center, extraZoomOut: Number(zoomOutRaw) || 0, maps: maps };
+    }).filter(Boolean);
+    return worlds.length ? { worlds: worlds } : null;
+  }
+  async function discoverDynmapConfig(baseUrl) {
+    var base = String(baseUrl || '').trim().replace(/\/$/, '');
+    if (!base) return null;
+    var raw = await fetchJSONSafe(base + '/up/configuration');
+    if (!raw) raw = await fetchJSONSafe('/api/dynmap-config');
+    return parseDynmapConfig(raw);
+  }
+  function pickMapInfo(discovered, opts) {
+    opts = opts || {};
+    function findWorld(name) {
+      if (!name) return null;
+      var n = String(name).toLowerCase();
+      return discovered.worlds.filter(function (w) { return w.name.toLowerCase() === n || w.title.toLowerCase() === n; })[0] || null;
+    }
+    function findMap(world, name) {
+      if (!world || !name) return null;
+      var n = String(name).toLowerCase();
+      return world.maps.filter(function (m) { return m.prefix.toLowerCase() === n || m.name.toLowerCase() === n; })[0] || null;
+    }
+    var world = findWorld(opts.overrideWorld) || findWorld(opts.hintWorld) || discovered.worlds[0];
+    var map_ = findMap(world, opts.overrideMap) || findMap(world, opts.hintMap) || world.maps[0];
+    return { world: world.name, prefix: map_.prefix, imageFormat: map_.imageFormat || 'png', extraZoomOut: world.extraZoomOut || 0, mapZoomIn: map_.mapZoomIn || 0, center: world.center, worlds: discovered.worlds, source: opts.isOverride ? 'override' : 'auto' };
+  }
+  function manualMapInfo() {
+    return { world: CFG.world || 'world', prefix: CFG.prefix || 'flat', imageFormat: 'png', extraZoomOut: 5, mapZoomIn: 2, center: null, worlds: [], source: 'manual' };
+  }
+
+  var MS_OVERRIDE_KEY = 'ra-landmap-source-override';
+  var savedOverride = null;
+  try { savedOverride = JSON.parse(localStorage.getItem(MS_OVERRIDE_KEY) || 'null'); } catch (e) {}
+  var activeBaseUrl = (savedOverride && savedOverride.baseUrl) || CFG.dynmapBaseUrl;
+  var lastDiscovered = null;
+  if (CFG.autoDetect !== false) {
+    try { lastDiscovered = await discoverDynmapConfig(activeBaseUrl); } catch (e) { console.warn('DynMap auto-detect failed.', e); }
+  }
+  var MAPINFO = lastDiscovered
+    ? pickMapInfo(lastDiscovered, { hintWorld: CFG.world, overrideWorld: savedOverride && savedOverride.world, overrideMap: savedOverride && savedOverride.prefix, isOverride: !!savedOverride })
+    : manualMapInfo();
+  CFG.dynmapBaseUrl = activeBaseUrl;
+
+  // World filter dropdown: union of DynMap-discovered worlds and any
+  // distinct plot.world values, so a plot in a world the DynMap
+  // hasn't surfaced (yet, or at all) is still selectable.
+  (function populateWorldFilter() {
+    var names = {};
+    (MAPINFO.worlds || []).forEach(function (w) { names[w.name] = true; });
+    plotWorlds().forEach(function (w) { names[w] = true; });
+    var opts = Object.keys(names);
+    filterWorldEl.innerHTML = '<option value="">All</option>' + opts.map(function (w) {
+      return '<option value="' + escapeHtml(w) + '">' + escapeHtml(w) + '</option>';
+    }).join('');
+    var pref = qs('world') || MAPINFO.world;
+    if (pref && opts.indexOf(pref) !== -1) filterWorldEl.value = pref;
+  })();
+
+  // ════════════════════════════════════════════════════════════
+  // 3. LEAFLET 2D MAP
+  // ════════════════════════════════════════════════════════════
+  function mcToLL(x, z) { return L.latLng(-z, x); }
+  function llToMc(ll) { return { x: Math.round(ll.lng), z: Math.round(-ll.lat) }; }
+
+  var DynMapLayer = L.GridLayer.extend({
+    options: { tileSize: 128, updateWhenIdle: true, attribution: 'Map data: DynMap' },
+    createTile: function (coords, done) {
+      var img = document.createElement('img');
+      img.onload = function () { done(null, img); };
+      img.onerror = function () { img.style.opacity = '0'; done(null, img); };
+      img.src = this._tileUrl(coords);
+      return img;
+    },
+    _tileUrl: function (coords) {
+      var zoomOut = Math.max(0, -coords.z);
+      var zoomPrefix = zoomOut > 0 ? new Array(zoomOut + 1).join('z') + '_' : '';
+      var folder = (coords.x >> 5) + '_' + (coords.y >> 5);
+      var ext = MAPINFO.imageFormat || 'png';
+      var tilePath = '/tiles/' + encodeURIComponent(MAPINFO.world) + '/' + encodeURIComponent(MAPINFO.prefix) + '/' + folder + '/' + zoomPrefix + coords.x + '_' + coords.y + '.' + ext;
+      if (CFG.useProxy) return '/api/maptile?path=' + encodeURIComponent(tilePath);
+      return CFG.dynmapBaseUrl.replace(/\/$/, '') + tilePath;
+    }
+  });
+
+  var initialX = MAPINFO.center ? MAPINFO.center.x : CFG.defaultMcX;
+  var initialZ = MAPINFO.center ? MAPINFO.center.z : CFG.defaultMcZ;
+
+  var map2d = L.map('map2d', {
+    crs: L.CRS.Simple, center: mcToLL(initialX, initialZ), zoom: CFG.defaultZoom,
+    minZoom: -MAPINFO.extraZoomOut, maxZoom: Math.max(0, MAPINFO.mapZoomIn), zoomSnap: 0.5, zoomDelta: 0.5
+  });
+  var dynmapLayer = new DynMapLayer({ maxNativeZoom: 0, minNativeZoom: -MAPINFO.extraZoomOut });
+  dynmapLayer.addTo(map2d);
+
+  var cursorEl = document.getElementById('cursor-coords');
+  map2d.on('mousemove', function (e) { var mc = llToMc(e.latlng); cursorEl.textContent = 'X ' + mc.x + '  Z ' + mc.z; });
+
+  var plotLayerGroup = L.layerGroup().addTo(map2d);
+  var pickerLayerGroup = L.layerGroup().addTo(map2d);
+
+  // ════════════════════════════════════════════════════════════
+  // 4. THREE.JS 3D CUBE VIEW
+  // ════════════════════════════════════════════════════════════
+  var scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x121113);
+  var camera = new THREE.PerspectiveCamera(55, 1, 0.1, 50000);
+  var renderer = new THREE.WebGLRenderer({ antialias: true });
+  map3dEl.appendChild(renderer.domElement);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.65));
+  var sun = new THREE.DirectionalLight(0xffffff, 0.8);
+  sun.position.set(1, 1.4, 0.8);
+  scene.add(sun);
+
+  var controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+
+  var cubeGroup = new THREE.Group();
+  scene.add(cubeGroup);
+  var gridHelper = null;
+
+  function resize3D() {
+    var w = map3dEl.clientWidth || 1, h = map3dEl.clientHeight || 1;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+  }
+  window.addEventListener('resize', resize3D);
+
+  function statusColor(status) {
+    if (status === 'vacant') return 0x6b7075;
+    if (status === 'disputed') return 0xb3273a;
+    if (status === 'archived') return 0x4b4f54;
+    return 0x45b3bc; // registered
+  }
+
+  function plotBBox(plot) {
+    var xs = plot.corners.map(function (c) { return c.x; });
+    var zs = plot.corners.map(function (c) { return c.z; });
+    return { minX: Math.min.apply(null, xs), maxX: Math.max.apply(null, xs), minZ: Math.min.apply(null, zs), maxZ: Math.max.apply(null, zs) };
+  }
+
+  function rebuild3D(plots) {
+    cubeGroup.clear();
+    if (gridHelper) { scene.remove(gridHelper); gridHelper = null; }
+    if (!plots.length) return;
+
+    var minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity, minY = Infinity, maxY = -Infinity;
+    plots.forEach(function (p) {
+      var b = plotBBox(p);
+      minX = Math.min(minX, b.minX); maxX = Math.max(maxX, b.maxX);
+      minZ = Math.min(minZ, b.minZ); maxZ = Math.max(maxZ, b.maxZ);
+      minY = Math.min(minY, p.yLower); maxY = Math.max(maxY, p.yUpper);
+
+      var w = Math.max(1, b.maxX - b.minX), d = Math.max(1, b.maxZ - b.minZ), h = Math.max(1, p.yUpper - p.yLower);
+      var geo = new THREE.BoxGeometry(w, h, d);
+      var mat = new THREE.MeshStandardMaterial({ color: statusColor(p.status), transparent: true, opacity: 0.55, side: THREE.DoubleSide });
+      var mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set((b.minX + b.maxX) / 2, (p.yLower + p.yUpper) / 2, (b.minZ + b.maxZ) / 2);
+      mesh.userData.plot = p;
+      var edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color: 0xe3bf4c }));
+      edges.position.copy(mesh.position);
+      cubeGroup.add(mesh);
+      cubeGroup.add(edges);
+    });
+
+    var spanX = Math.max(40, maxX - minX), spanZ = Math.max(40, maxZ - minZ);
+    var gridSize = Math.ceil(Math.max(spanX, spanZ) * 1.6 / 16) * 16;
+    gridHelper = new THREE.GridHelper(gridSize, Math.max(4, Math.round(gridSize / 16)), 0x4b4f54, 0x2a2930);
+    gridHelper.position.set((minX + maxX) / 2, minY - 2, (minZ + maxZ) / 2);
+    scene.add(gridHelper);
+
+    var cx = (minX + maxX) / 2, cy = (minY + maxY) / 2, cz = (minZ + maxZ) / 2;
+    var dist = Math.max(60, Math.max(spanX, spanZ) * 1.1);
+    camera.position.set(cx + dist * 0.6, cy + dist * 0.7, cz + dist * 0.6);
+    controls.target.set(cx, cy, cz);
+    controls.update();
+  }
+
+  var raycaster = new THREE.Raycaster();
+  var pointerNDC = new THREE.Vector2();
+  renderer.domElement.addEventListener('click', function (ev) {
+    var rect = renderer.domElement.getBoundingClientRect();
+    pointerNDC.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+    pointerNDC.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(pointerNDC, camera);
+    var hits = raycaster.intersectObjects(cubeGroup.children.filter(function (o) { return o.isMesh; }));
+    if (hits.length) selectPlot(hits[0].object.userData.plot);
+  });
+
+  (function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+  })();
+
+  // ════════════════════════════════════════════════════════════
+  // 5. FOOTPRINT GROUPING (2D: topmost-only when stacked)
+  // ════════════════════════════════════════════════════════════
+  function footprintSignature(corners) {
+    return corners.map(function (c) { return Math.round(c.x) + ',' + Math.round(c.z); }).sort().join('|');
+  }
+  function pickTopmostPerFootprint(plots) {
+    var groups = {};
+    plots.forEach(function (p) {
+      var sig = footprintSignature(p.corners);
+      if (!groups[sig] || p.yUpper > groups[sig].yUpper) groups[sig] = p;
+    });
+    var out = [];
+    Object.keys(groups).forEach(function (k) { out.push(groups[k]); });
+    return out;
+  }
+
+  // ════════════════════════════════════════════════════════════
+  // 6. FILTERING + SELECTION + RENDERING
+  // ════════════════════════════════════════════════════════════
+  var selected = null;
+  var mode = '2d';
+
+  function applyFilters() {
+    var world = filterWorldEl.value, division = filterDivisionEl.value, status = filterStatusEl.value;
+    return allPlots.filter(function (p) {
+      if (world && p.world !== world) return false;
+      if (division && p.divisionCode !== division) return false;
+      if (status && p.status !== status) return false;
+      return true;
+    });
+  }
+
+  function statusTagClass(s) { return 'tag--' + (s || 'registered'); }
+
+  function renderList(filtered) {
+    plotCountEl.textContent = filtered.length;
+    plotListEl.innerHTML = filtered.length ? filtered.map(function (p) {
+      return '<button type="button" class="landmap-listitem' + (selected && selected.registerNumber === p.registerNumber ? ' active' : '') + '" data-rn="' + escapeHtml(p.registerNumber) + '">' +
+        '<span class="landmap-listitem__num">' + escapeHtml(p.registerNumber) + '</span>' +
+        '<span class="landmap-listitem__sub">' + escapeHtml(p.owner || 'Unclaimed') + ' \u00b7 Y ' + p.yLower + '\u2013' + p.yUpper + '</span>' +
+      '</button>';
+    }).join('') : '<p class="landmap-detail__empty">No plots match these filters.</p>';
+
+    Array.prototype.slice.call(plotListEl.querySelectorAll('[data-rn]')).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var p = allPlots.filter(function (x) { return x.registerNumber === btn.dataset.rn; })[0];
+        if (p) selectPlot(p);
+      });
+    });
+  }
+
+  function renderDetail(p) {
+    if (!p) { plotDetailEl.innerHTML = '<p class="landmap-detail__empty">Select a plot on the map or from the list to see its record here.</p>'; return; }
+    plotDetailEl.innerHTML =
+      '<h3>' + escapeHtml(p.registerNumber) + '</h3>' +
+      '<div class="landmap-detail__grid">' +
+        '<div class="landmap-detail__chip"><span class="lbl">Owner</span><span class="val">' + escapeHtml(p.owner || 'Unclaimed') + '</span></div>' +
+        '<div class="landmap-detail__chip"><span class="lbl">Resident</span><span class="val">' + escapeHtml(p.resident || '\u2014') + '</span></div>' +
+        '<div class="landmap-detail__chip"><span class="lbl">Status</span><span class="val">' + escapeHtml(p.status) + '</span></div>' +
+        '<div class="landmap-detail__chip"><span class="lbl">Y Range</span><span class="val">' + p.yLower + '\u2013' + p.yUpper + '</span></div>' +
+        (p.isRented ? '<div class="landmap-detail__chip"><span class="lbl">Rented to</span><span class="val">' + escapeHtml(p.renter || 'Unnamed') + '</span></div>' : '') +
+      '</div>' +
+      '<a class="landmap-detail__link" href="../record/view.html?kw=' + encodeURIComponent(p.registerNumber) + '">View Full Record &rarr;</a>';
+  }
+
+  function highlightSelection() {
+    plotLayerGroup.eachLayer(function (layer) {
+      if (layer.options && layer.options._plot) {
+        var isSel = selected && layer.options._plot.registerNumber === selected.registerNumber;
+        layer.setStyle({ weight: isSel ? 3 : 1.5, color: isSel ? '#e3bf4c' : layer.options._baseColor });
+      }
+    });
+    cubeGroup.children.forEach(function (obj) {
+      if (obj.isMesh) {
+        var isSel = selected && obj.userData.plot.registerNumber === selected.registerNumber;
+        obj.material.opacity = isSel ? 0.85 : 0.55;
+      }
+    });
+  }
+
+  function selectPlot(p) {
+    selected = p;
+    renderDetail(p);
+    renderList(applyFilters());
+    highlightSelection();
+  }
+
+  function colorHexFor(status) {
+    if (status === 'vacant') return '#6b7075';
+    if (status === 'disputed') return '#b3273a';
+    if (status === 'archived') return '#4b4f54';
+    return '#45b3bc';
+  }
+
+  function redraw() {
+    var filtered = applyFilters();
+    plotLayerGroup.clearLayers();
+    pickTopmostPerFootprint(filtered).forEach(function (p) {
+      var color = colorHexFor(p.status);
+      var poly = L.polygon(p.corners.map(function (c) { return mcToLL(c.x, c.z); }), {
+        color: color, weight: 1.5, fillColor: color, fillOpacity: 0.22, _plot: p, _baseColor: color
+      }).addTo(plotLayerGroup);
+      poly.bindTooltip(p.registerNumber, { sticky: true });
+      poly.on('click', function () { selectPlot(p); });
+    });
+    rebuild3D(filtered);
+    renderList(filtered);
+    highlightSelection();
+  }
+
+  [filterWorldEl, filterDivisionEl, filterStatusEl].forEach(function (el) { el.addEventListener('change', redraw); });
+
+  // ════════════════════════════════════════════════════════════
+  // 7. MODE TOGGLE
+  // ════════════════════════════════════════════════════════════
+  function setMode(m) {
+    mode = m;
+    btnMode2d.classList.toggle('active', m === '2d');
+    btnMode3d.classList.toggle('active', m === '3d');
+    map2dEl.style.display = m === '2d' ? '' : 'none';
+    map3dEl.style.display = m === '3d' ? '' : 'none';
+    if (m === '2d') setTimeout(function () { map2d.invalidateSize(); }, 30);
+    else resize3D();
+  }
+  btnMode2d.addEventListener('click', function () { if (!PICK_MODE) setMode('2d'); });
+  btnMode3d.addEventListener('click', function () { if (!PICK_MODE) setMode('3d'); });
+
+  // ════════════════════════════════════════════════════════════
+  // 8. MAP SOURCE POPOVER (same UI as the Ballistic Calculator)
+  // ════════════════════════════════════════════════════════════
+  var sourcePill = document.getElementById('source-status');
+  var msPopover = document.getElementById('mapsource-popover');
+  function updateSourcePill() {
+    sourcePill.classList.remove('ok', 'err');
+    if (MAPINFO.source === 'auto' || MAPINFO.source === 'override') {
+      sourcePill.classList.add('ok');
+      sourcePill.textContent = 'Map: ' + MAPINFO.world + ' / ' + MAPINFO.prefix;
+    } else {
+      sourcePill.classList.add('err');
+      sourcePill.textContent = 'Map not detected — click to configure';
+    }
+  }
+  updateSourcePill();
+  function togglePopover() { msPopover.classList.toggle('is-open'); if (msPopover.classList.contains('is-open')) document.getElementById('ms-baseurl').value = CFG.dynmapBaseUrl; }
+  document.getElementById('btn-mapsource').addEventListener('click', togglePopover);
+  sourcePill.addEventListener('click', togglePopover);
+  document.getElementById('mapsource-close').addEventListener('click', function () { msPopover.classList.remove('is-open'); });
+  document.getElementById('ms-apply').addEventListener('click', async function () {
+    var errEl = document.getElementById('ms-err'), okEl = document.getElementById('ms-ok');
+    errEl.style.display = 'none'; okEl.style.display = 'none';
+    var newBase = document.getElementById('ms-baseurl').value.trim().replace(/\/$/, '');
+    if (!newBase) { errEl.textContent = 'Enter a DynMap base URL.'; errEl.style.display = 'block'; return; }
+    var discovered = await discoverDynmapConfig(newBase);
+    CFG.dynmapBaseUrl = newBase;
+    lastDiscovered = discovered;
+    if (!discovered) { errEl.textContent = "Couldn't reach that DynMap."; errEl.style.display = 'block'; return; }
+    MAPINFO = pickMapInfo(discovered, { isOverride: true });
+    try { localStorage.setItem(MS_OVERRIDE_KEY, JSON.stringify({ baseUrl: CFG.dynmapBaseUrl, world: MAPINFO.world, prefix: MAPINFO.prefix })); } catch (e) {}
+    map2d.setMinZoom(-MAPINFO.extraZoomOut); map2d.setMaxZoom(Math.max(0, MAPINFO.mapZoomIn));
+    dynmapLayer.options.minNativeZoom = -MAPINFO.extraZoomOut;
+    dynmapLayer.redraw();
+    if (MAPINFO.center) map2d.setView(mcToLL(MAPINFO.center.x, MAPINFO.center.z), CFG.defaultZoom);
+    okEl.textContent = 'Detected ' + discovered.worlds.length + ' world(s).'; okEl.style.display = 'block';
+    updateSourcePill();
+  });
+  document.getElementById('ms-reset').addEventListener('click', function () { try { localStorage.removeItem(MS_OVERRIDE_KEY); } catch (e) {} location.reload(); });
+
+  // ════════════════════════════════════════════════════════════
+  // 9. PANEL RESIZE (same approach as the Ballistic Calculator)
+  // ════════════════════════════════════════════════════════════
+  (function initPanelResize() {
+    var handle = document.getElementById('panel-resize-handle');
+    var panelEl = document.getElementById('panel');
+    var MIN_H = 88, DEFAULT_H = 320;
+    function maxH() { return Math.max(MIN_H, window.innerHeight - 220); }
+    function clampH(h) { return Math.max(MIN_H, Math.min(maxH(), h)); }
+    function setHeight(h) {
+      panelEl.style.height = clampH(h) + 'px';
+      requestAnimationFrame(function () { if (mode === '2d') map2d.invalidateSize(); else resize3D(); });
+    }
+    var dragging = false, startY = 0, startH = 0;
+    handle.addEventListener('pointerdown', function (e) {
+      dragging = true; startY = e.clientY; startH = panelEl.getBoundingClientRect().height;
+      try { handle.setPointerCapture(e.pointerId); } catch (err) {}
+      document.body.classList.add('is-resizing-panel');
+    });
+    handle.addEventListener('pointermove', function (e) { if (dragging) setHeight(startH - (e.clientY - startY)); });
+    function endDrag() { dragging = false; document.body.classList.remove('is-resizing-panel'); }
+    handle.addEventListener('pointerup', endDrag);
+    handle.addEventListener('pointercancel', endDrag);
+    handle.addEventListener('dblclick', function () { setHeight(DEFAULT_H); });
+    window.addEventListener('resize', function () { setHeight(panelEl.getBoundingClientRect().height); });
+  })();
+
+  // ════════════════════════════════════════════════════════════
+  // 10. PICKER MODE — admin traces a plot's corners by clicking,
+  //     then posts them back to the admin tab that opened this one.
+  // ════════════════════════════════════════════════════════════
+  if (PICK_MODE) {
+    var isAdmin = false;
+    try { var meRes = await fetch('/api/auth/me'); if (meRes.ok) { var me = await meRes.json(); isAdmin = me.role === 'admin'; } } catch (e) {}
+
+    if (!isAdmin || !window.opener) {
+      showBanner('Corner-picking is opened from the admin panel by an administrator. This map is shown in normal view instead.');
+    } else {
+      panelNormal.style.display = 'none';
+      panelPicker.style.display = 'block';
+      btnMode3d.disabled = true;
+      btnMode3d.style.opacity = '0.4';
+      btnMode3d.title = 'Switch back to 2D in the admin panel to pick corners — picking only works in 2D.';
+      showBanner('Click 4 points on the map, in order, to trace this plot\u2019s corners.');
+
+      var pickerCorners = [null, null, null, null];
+      var pickerMarkers = [null, null, null, null];
+
+      var initCorners = qs('corners');
+      if (initCorners) {
+        try {
+          var decoded = JSON.parse(atob(initCorners));
+          if (Array.isArray(decoded)) decoded.slice(0, 4).forEach(function (c, i) { pickerCorners[i] = { x: Number(c.x) || 0, z: Number(c.z) || 0 }; });
+        } catch (e) {}
+      }
+      var initYLower = qs('yLower'), initYUpper = qs('yUpper'), initWorld = qs('world');
+      if (initYLower != null) document.getElementById('picker-ylower').value = initYLower;
+      if (initYUpper != null) document.getElementById('picker-yupper').value = initYUpper;
+      if (initWorld && filterWorldEl.querySelector('option[value="' + initWorld + '"]')) filterWorldEl.value = initWorld;
+
+      var rowsEl = document.getElementById('picker-corner-rows');
+      function renderPickerRows() {
+        rowsEl.innerHTML = pickerCorners.map(function (c, i) {
+          return '<div class="picker-corner-row">' +
+            '<span class="picker-corner-row__label">Corner ' + (i + 1) + '</span>' +
+            '<input class="picker-input' + (c ? ' set' : '') + '" type="number" data-i="' + i + '" data-axis="x" placeholder="X" value="' + (c ? c.x : '') + '"/>' +
+            '<input class="picker-input' + (c ? ' set' : '') + '" type="number" data-i="' + i + '" data-axis="z" placeholder="Z" value="' + (c ? c.z : '') + '"/>' +
+          '</div>';
+        }).join('');
+        Array.prototype.slice.call(rowsEl.querySelectorAll('input')).forEach(function (inp) {
+          inp.addEventListener('change', function () {
+            var i = Number(inp.dataset.i), axis = inp.dataset.axis;
+            var v = parseFloat(inp.value);
+            if (isNaN(v)) return;
+            if (!pickerCorners[i]) pickerCorners[i] = { x: 0, z: 0 };
+            pickerCorners[i][axis] = v;
+            redrawPickerMarkers();
+            updateUseButton();
+          });
+        });
+      }
+
+      function redrawPickerMarkers() {
+        pickerLayerGroup.clearLayers();
+        var pts = [];
+        pickerCorners.forEach(function (c, i) {
+          if (!c) return;
+          var ll = mcToLL(c.x, c.z);
+          pts.push(ll);
+          var icon = L.divIcon({ className: '', html: '<div class="pickermarker">' + (i + 1) + '</div>', iconSize: [22, 22], iconAnchor: [11, 11] });
+          L.marker(ll, { icon: icon }).addTo(pickerLayerGroup);
+        });
+        if (pts.length >= 2) L.polygon(pts, { color: '#e3bf4c', weight: 2, dashArray: '6 4', fillOpacity: 0.08, closeShape: pts.length === 4 }).addTo(pickerLayerGroup);
+      }
+
+      function updateUseButton() {
+        var ready = pickerCorners.every(function (c) { return !!c; });
+        var yL = parseFloat(document.getElementById('picker-ylower').value);
+        var yU = parseFloat(document.getElementById('picker-yupper').value);
+        document.getElementById('picker-use').disabled = !(ready && !isNaN(yL) && !isNaN(yU) && yU >= yL);
+      }
+
+      map2d.on('click', function (e) {
+        var firstEmpty = pickerCorners.indexOf(null);
+        if (firstEmpty === -1) return; // all 4 placed — Undo/Clear first
+        var mc = llToMc(e.latlng);
+        pickerCorners[firstEmpty] = mc;
+        renderPickerRows();
+        redrawPickerMarkers();
+        updateUseButton();
+      });
+
+      document.getElementById('picker-undo').addEventListener('click', function () {
+        var lastIdx = -1;
+        pickerCorners.forEach(function (c, i) { if (c) lastIdx = i; });
+        if (lastIdx !== -1) pickerCorners[lastIdx] = null;
+        renderPickerRows(); redrawPickerMarkers(); updateUseButton();
+      });
+      document.getElementById('picker-clear').addEventListener('click', function () {
+        pickerCorners = [null, null, null, null];
+        renderPickerRows(); redrawPickerMarkers(); updateUseButton();
+      });
+      document.getElementById('picker-ylower').addEventListener('input', updateUseButton);
+      document.getElementById('picker-yupper').addEventListener('input', updateUseButton);
+
+      document.getElementById('picker-use').addEventListener('click', function () {
+        var payload = {
+          corners: pickerCorners,
+          yLower: parseFloat(document.getElementById('picker-ylower').value),
+          yUpper: parseFloat(document.getElementById('picker-yupper').value),
+          world: filterWorldEl.value || MAPINFO.world
+        };
+        window.opener.postMessage({ type: 'land-plot-corners', payload: payload }, window.location.origin);
+        var msg = document.getElementById('picker-msg');
+        msg.textContent = 'Corners sent to the admin panel. You can close this tab and return there.';
+        msg.style.display = 'block';
+      });
+
+      renderPickerRows();
+      redrawPickerMarkers();
+      updateUseButton();
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════
+  // 11. BOOT
+  // ════════════════════════════════════════════════════════════
+  resize3D();
+  redraw();
+  setMode('2d');
+
+  if (FOCUS_NUM) {
+    var focusPlot = allPlots.filter(function (p) { return p.registerNumber === FOCUS_NUM; })[0];
+    if (focusPlot) {
+      var topmostSet = pickTopmostPerFootprint(applyFilters());
+      var isTopmost = topmostSet.some(function (p) { return p.registerNumber === focusPlot.registerNumber; });
+      if (!isTopmost) {
+        showBanner('This plot is beneath another at the same location, so the 2D view shows the one built over it instead. Switched to the 3D view.');
+        setMode('3d');
+      }
+      selectPlot(focusPlot);
+      if (mode === '2d') {
+        var b = plotBBox(focusPlot);
+        map2d.fitBounds([mcToLL(b.minX, b.minZ), mcToLL(b.maxX, b.maxZ)], { padding: [80, 80] });
+      }
+    }
+  }
+})();
+</script>
+</body>
+</html>
