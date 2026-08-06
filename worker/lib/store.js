@@ -961,3 +961,8 @@ export async function deleteCCTokenById(env, id) {
 export async function listCCTokens(env) {
   // token_hash intentionally excluded — it is a one-way hash, never returned to callers
   const { results } = await env.DB.prepare(
+    `SELECT id, terminal_type, computer_label, treasury_key, created_by, last_used_at, expires_at, created_at
+     FROM banking_cc_tokens ORDER BY created_at DESC`  ).all();
+  return results;
+}
+
