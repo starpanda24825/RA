@@ -14,6 +14,9 @@ import * as news from './routes/news.js';
 import * as legal from './routes/legal.js';
 import * as landregistry from './routes/landregistry.js';
 import * as dynmap from './routes/dynmap.js';
+import * as banking from './routes/banking.js';
+import * as bankingAdmin from './routes/banking-admin.js';
+import * as bankingCC from './routes/banking-cc.js';
 
 function json(data, init = {}) {
   const headers = new Headers(init.headers || {});
@@ -87,6 +90,99 @@ export default {
         if (m && method === 'PUT') return await landregistry.updatePlot(request, env, decodeURIComponent(m[1]));
         if (m && method === 'DELETE') return await landregistry.deletePlot(request, env, decodeURIComponent(m[1]));
 
+        // ---- Banking: Citizen Portal ----
+        if (pathname === '/api/banking/me' && method === 'GET') return await banking.getMe(request, env);
+        if (pathname === '/api/banking/me/transactions' && method === 'GET') return await banking.getMyTransactions(request, env);
+        if (pathname === '/api/banking/me/portfolio' && method === 'GET') return await banking.getMyPortfolio(request, env);
+        if (pathname === '/api/banking/transfer' && method === 'POST') return await banking.transfer(request, env);
+        if (pathname === '/api/banking/accounts/search' && method === 'GET') return await banking.searchAccounts(request, env);
+        if (pathname === '/api/banking/companies' && method === 'GET') return await banking.listCompanies(request, env);
+        if (pathname === '/api/banking/companies/top' && method === 'GET') return await banking.getTopCompanies(request, env);
+
+        m = pathname.match(/^\/api\/banking\/companies\/([^/]+)\/shareholders$/);
+        if (m && method === 'GET') return await banking.getCompanyShareholders(request, env, m[1]);
+
+        // ---- Banking: Admin/Banker Panel ----
+        if (pathname === '/api/banking/admin/accounts' && method === 'GET') return await bankingAdmin.listAccounts(request, env);
+        if (pathname === '/api/banking/admin/accounts' && method === 'POST') return await bankingAdmin.createAccount(request, env);
+        if (pathname === '/api/banking/admin/transaction' && method === 'POST') return await bankingAdmin.adminTransfer(request, env);
+        if (pathname === '/api/banking/admin/fine' && method === 'POST') return await bankingAdmin.adminFine(request, env);
+        if (pathname === '/api/banking/admin/settings' && method === 'GET') return await bankingAdmin.getSettings(request, env);
+        if (pathname === '/api/banking/admin/settings' && method === 'PUT') return await bankingAdmin.updateSettings(request, env);
+        if (pathname === '/api/banking/admin/treasuries' && method === 'GET') return await bankingAdmin.listTreasuries(request, env);
+        if (pathname === '/api/banking/admin/treasuries' && method === 'POST') return await bankingAdmin.createTreasury(request, env);
+        if (pathname === '/api/banking/admin/banker-assignments' && method === 'GET') return await bankingAdmin.listBankerAssignmentsRoute(request, env);
+        if (pathname === '/api/banking/admin/taxes/run' && method === 'POST') return await bankingAdmin.runTaxes(request, env);
+        if (pathname === '/api/banking/admin/companies' && method === 'GET') return await bankingAdmin.listCompaniesAdmin(request, env);
+        if (pathname === '/api/banking/admin/shares/issue' && method === 'POST') return await bankingAdmin.issueSharesAdmin(request, env);
+        if (pathname === '/api/banking/admin/cc-tokens' && method === 'GET') return await bankingAdmin.listCCTokens(request, env);
+        if (pathname === '/api/banking/admin/cc-tokens' && method === 'POST') return await bankingAdmin.issueCCToken(request, env);
+
+        m = pathname.match(/^\/api\/banking\/admin\/accounts\/([^/]+)$/);
+        if (m && method === 'GET') return await bankingAdmin.getAccount(request, env, m[1]);
+        if (m && method === 'PUT') return await bankingAdmin.updateAccount(request, env, m[1]);
+        if (m && method === 'DELETE') return await bankingAdmin.deleteAccount(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/banking\/admin\/accounts\/([^/]+)\/freeze$/);
+        if (m && method === 'PUT') return await bankingAdmin.freezeAccount(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/banking\/admin\/accounts\/([^/]+)\/password-reset$/);
+        if (m && method === 'PUT') return await bankingAdmin.resetPasswordAdmin(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/banking\/admin\/accounts\/([^/]+)\/log$/);
+        if (m && method === 'GET') return await bankingAdmin.getAccountLog(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/banking\/admin\/accounts\/([^/]+)\/link-user$/);
+        if (m && method === 'PUT') return await bankingAdmin.linkUser(request, env, m[1]);
+        if (m && method === 'DELETE') return await bankingAdmin.unlinkUser(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/banking\/admin\/accounts\/([^/]+)\/cards$/);
+        if (m && method === 'GET') return await bankingAdmin.listCards(request, env, m[1]);
+        if (m && method === 'POST') return await bankingAdmin.issueCard(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/banking\/admin\/accounts\/([^/]+)\/cards\/([^/]+)\/cancel$/);
+        if (m && method === 'PUT') return await bankingAdmin.cancelCard(request, env, m[1], m[2]);
+
+        m = pathname.match(/^\/api\/banking\/admin\/accounts\/([^/]+)\/cards\/([^/]+)$/);
+        if (m && method === 'DELETE') return await bankingAdmin.deleteCard(request, env, m[1], m[2]);
+
+        m = pathname.match(/^\/api\/banking\/admin\/treasuries\/([^/]+)$/);
+        if (m && method === 'PUT') return await bankingAdmin.updateTreasury(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/banking\/admin\/banker-assignments\/(\d+)$/);
+        if (m && method === 'PUT') return await bankingAdmin.upsertBankerAssignmentRoute(request, env, m[1]);
+        if (m && method === 'DELETE') return await bankingAdmin.deleteBankerAssignmentRoute(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/banking\/admin\/companies\/([^/]+)\/shareholders$/);
+        if (m && method === 'GET') return await bankingAdmin.getCompanyShareholdersAdmin(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/banking\/admin\/cc-tokens\/(\d+)$/);
+        if (m && method === 'DELETE') return await bankingAdmin.revokeCCToken(request, env, m[1]);
+
+        // ---- Banking: ComputerCraft Bridge ----
+        if (pathname === '/api/banking/cc/server-data' && method === 'POST') return await bankingCC.ccServerData(request, env);
+        if (pathname === '/api/banking/cc/client-data' && method === 'POST') return await bankingCC.ccClientData(request, env);
+        if (pathname === '/api/banking/cc/transaction' && method === 'POST') return await bankingCC.ccTransaction(request, env);
+        if (pathname === '/api/banking/cc/deposit' && method === 'POST') return await bankingCC.ccDeposit(request, env);
+        if (pathname === '/api/banking/cc/withdraw' && method === 'POST') return await bankingCC.ccWithdraw(request, env);
+        if (pathname === '/api/banking/cc/transaction-log' && method === 'POST') return await bankingCC.ccTransactionLog(request, env);
+        if (pathname === '/api/banking/cc/validate-card' && method === 'POST') return await bankingCC.ccValidateCard(request, env);
+        if (pathname === '/api/banking/cc/register-card' && method === 'POST') return await bankingCC.ccRegisterCard(request, env);
+        if (pathname === '/api/banking/cc/cancel-card' && method === 'POST') return await bankingCC.ccCancelCard(request, env);
+        if (pathname === '/api/banking/cc/list-cards' && method === 'POST') return await bankingCC.ccListCards(request, env);
+        if (pathname === '/api/banking/cc/new-account' && method === 'POST') return await bankingCC.ccNewAccount(request, env);
+        if (pathname === '/api/banking/cc/new-company' && method === 'POST') return await bankingCC.ccNewCompany(request, env);
+        if (pathname === '/api/banking/cc/delete-account' && method === 'POST') return await bankingCC.ccDeleteAccount(request, env);
+        if (pathname === '/api/banking/cc/set-password' && method === 'POST') return await bankingCC.ccSetPassword(request, env);
+        if (pathname === '/api/banking/cc/change-password' && method === 'POST') return await bankingCC.ccChangePassword(request, env);
+        if (pathname === '/api/banking/cc/reset-password' && method === 'POST') return await bankingCC.ccResetPassword(request, env);
+        if (pathname === '/api/banking/cc/freeze-account' && method === 'POST') return await bankingCC.ccFreezeAccount(request, env);
+        if (pathname === '/api/banking/cc/list-shareholders' && method === 'POST') return await bankingCC.ccListShareholders(request, env);
+        if (pathname === '/api/banking/cc/issue-shares' && method === 'POST') return await bankingCC.ccIssueShares(request, env);
+        if (pathname === '/api/banking/cc/get-portfolio' && method === 'POST') return await bankingCC.ccGetPortfolio(request, env);
+        if (pathname === '/api/banking/cc/top-companies' && method === 'POST') return await bankingCC.ccTopCompanies(request, env);
+        if (pathname === '/api/banking/cc/apply-taxes' && method === 'POST') return await bankingCC.ccApplyTaxes(request, env);
+
         // ---- Ballistic Calculator: DynMap proxy ----
         if (pathname === '/api/dynmap-config' && method === 'GET') return await dynmap.getConfig(request, env);
         if (pathname === '/api/maptile' && method === 'GET') return await dynmap.getTile(request, env);
@@ -98,7 +194,6 @@ export default {
       }
     }
 
-    // Everything else: static assets (the regnum-aeternum/ directory)
     return env.ASSETS.fetch(request);
   },
 };
