@@ -45,8 +45,19 @@
   var isAdmin = false;
   var isBanker = false;
   var allAccountsCache = [];
+  var treasuryNameMap = {};
 
   function esc(v) { return escapeHtml(v); }
+
+  function ensureTreasuryMap() {
+    if (Object.keys(treasuryNameMap).length > 0) return Promise.resolve(treasuryNameMap);
+    return api('/api/banking/admin/treasuries').then(function (res) {
+      if (res.ok && Array.isArray(res.data)) {
+        res.data.forEach(function (t) { treasuryNameMap[t.key] = t.name; });
+      }
+      return treasuryNameMap;
+    });
+  }
 
   /* ── Sub-navigation ────────────────────────────────────────── */
   var subNavs = null;
@@ -113,8 +124,11 @@
     if (filters.frozen !== undefined) params.set('frozen', String(filters.frozen));
     if (filters.search) params.set('search', filters.search);
     var qs = params.toString();
-    api('/api/banking/admin/accounts' + (qs ? '?' + qs : ''))
-      .then(function (res) {
+    Promise.all([
+      api('/api/banking/admin/accounts' + (qs ? '?' + qs : '')),
+      ensureTreasuryMap()
+    ]).then(function (results) {
+        var res = results[0];
         if (!res.ok) return;
         // Exclude treasury accounts — they have their own Treasuries tab
         var nonTreasury = (res.data || []).filter(function (a) { return a.type !== 'treasury'; });
@@ -132,7 +146,7 @@
         '<td>' + esc(a.name) + '</td>' +
         '<td>' + typePill(a.type) + '</td>' +
         '<td style="font-family:var(--font-mono);">$' + Number(a.balance).toLocaleString() + '</td>' +
-        '<td>' + (a.treasury_key ? '<span class="treasury-tag">' + esc(a.treasury_key) + '</span>' : '—') + '</td>' +
+        '<td>' + (a.treasury_key ? '<span class="treasury-tag" title="' + esc(a.treasury_key) + '">' + esc(treasuryNameMap[a.treasury_key] || a.treasury_key) + '</span>' : '—') + '</td>' +
         '<td>' + (a.frozen ? '<span class="frozen-badge">&#128274; FROZEN</span>' : 'Active') + '</td>' +
         '<td>' +
           '<button class="a-btn" data-ba-edit="' + esc(a.key) + '">Edit</button>' +
