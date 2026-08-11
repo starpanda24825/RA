@@ -1,0 +1,394 @@
+-- Stock Exchange Terminal
+os.pullEvent = os.pullEventRaw -- Lock the shell
+
+local modem = peripheral.find("modem")
+while (modem == nil) do
+    modem = peripheral.find("modem")
+    if (modem == nil) then
+        term.setBackgroundColor(colors.red)
+        term.setTextColor(colors.white)
+        term.clear()
+        term.setCursorPos(1,1)
+        print("Ender modem required. Please connect a modem to continue...")
+while true do
+    local ev = {os.pullEventRaw()}
+    if ev[1] == "peripheral" then break end
+end
+    end
+end
+peripheral.find("modem", rednet.open)
+
+os.loadAPI("bankapi.lua")
+local serverData = bankapi.getServerData()
+
+local diskdrive = peripheral.find("drive")
+local currentAccount = nil
+
+-- Find left monitor
+local monitor = peripheral.wrap("left")
+if monitor and type(monitor.setTextScale) == "function" then
+    monitor.setTextScale(0.5)
+end
+
+local function ensureSafeDisk()
+    if not diskdrive or not diskdrive.isDiskPresent() then return true end
+    if not fs.exists("disk") then return true end
+    local allowed = { ["fiducia.txt"] = true }
+    for _, name in ipairs(fs.list("disk")) do
+        if not allowed[name] then
+            diskdrive.ejectDisk()
+            bankapi.errorScreen("Unsafe disk detected and ejected")
+            return false
+        end
+    end
+    return true
+end
+
+local function loadAccountFromCard()
+    currentAccount = nil
+    if diskdrive and diskdrive.isDiskPresent() and ensureSafeDisk() then
+        local f = fs.open("disk/fiducia.txt", "r")
+        if f ~= nil then
+            local value = f.readLine()
+            f.close()
+            if value and value ~= "" then
+                local key = value
+                local id = nil
+                local pipePos = string.find(value, "|", 1, true)
+                if pipePos ~= nil then
+                    local k, i = value:match("([^|]+)|([^|]+)")
+                    key = k or value
+                    id = i
+                end
+                if id ~= nil and id ~= "" then
+                    local ok = bankapi.validateCard(key, id)
+                    if ok then
+                        -- Check if account is frozen
+                        local clientData = bankapi.getClientData()
+                        if clientData[key] and clientData[key].frozen then
+                            bankapi.errorScreen("Account is frozen")
+                            return
+                        end
+                        currentAccount = key
+                    end
+                else
+                    local data = bankapi.getClientData()
+                    if data[key] ~= nil then
+                        -- Check if account is frozen
+                        if data[key].frozen then
+                            bankapi.errorScreen("Account is frozen")
+                            return
+                        end
+                        currentAccount = key
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- Monitor update function
+local function drawMonitor()
+    if not monitor then return end
+    
+    local backgroundColor = colors.gray -- same as Bank API
+    if type(monitor.setBackgroundColor) == "function" then
+        monitor.setBackgroundColor(backgroundColor)
+    end
+    if type(monitor.clear) == "function" then
+        monitor.clear()
+    end
+    
+    local ok, companies
+    if type(bankapi.getTopCompanies) == "function" then
+        ok, companies = bankapi.getTopCompanies()
+    else
+        ok = false
+        companies = "API function not available"
+    end
+    if not ok then
+        if type(monitor.setTextColor) == "function" then monitor.setTextColor(colors.red) end
+        if type(monitor.setCursorPos) == "function" then monitor.setCursorPos(2, 2) end
+        if type(monitor.write) == "function" then monitor.write("Error loading data") end
+        return
+    end
+    
+    -- Title
+    if type(monitor.setTextColor) == "function" then monitor.setTextColor(colors.yellow) end
+    local w, h = 10, 10 -- default size
+    if type(monitor.getSize) == "function" then
+        w, h = monitor.getSize()
+    end
+    local title = "TOP COMPANIES"
+    if type(monitor.setCursorPos) == "function" then monitor.setCursorPos(math.floor(w/2 - #title/2) + 1, 2) end
+    if type(monitor.write) == "function" then monitor.write(title) end
+    
+    -- Companies
+    local y = 4
+    for i, comp in ipairs(companies) do
+        if y > h - 2 then break end
+        
+        -- Rank
+        if type(monitor.setTextColor) == "function" then monitor.setTextColor(colors.white) end
+        if type(monitor.setCursorPos) == "function" then monitor.setCursorPos(2, y) end
+        if type(monitor.write) == "function" then monitor.write(tostring(i)..".") end
+        
+        -- Name
+        local name = comp.name or "Unknown"
+        if #name > 15 then name = name:sub(1,12).."..." end
+        if type(monitor.setCursorPos) == "function" then monitor.setCursorPos(6, y) end
+        if type(monitor.write) == "function" then monitor.write(name) end
+        
+        -- Value
+        local valueStr = "$"..tostring(math.floor(comp.value))
+        if type(monitor.setCursorPos) == "function" then monitor.setCursorPos(24, y) end
+        if type(monitor.write) == "function" then monitor.write(valueStr) end
+        
+        -- Change
+        if type(monitor.setCursorPos) == "function" then monitor.setCursorPos(36, y) end
+        if comp.change == nil then
+            if type(monitor.setTextColor) == "function" then monitor.setTextColor(colors.lightGray) end
+            if type(monitor.write) == "function" then monitor.write("---") end
+        elseif comp.change > 0 then
+            if type(monitor.setTextColor) == "function" then monitor.setTextColor(colors.green) end
+            if type(monitor.write) == "function" then monitor.write(string.format("+%.1f%%", comp.change)) end
+        elseif comp.change < 0 then
+            if type(monitor.setTextColor) == "function" then monitor.setTextColor(colors.red) end
+            if type(monitor.write) == "function" then monitor.write(string.format("%.1f%%", comp.change)) end
+        else
+            if type(monitor.setTextColor) == "function" then monitor.setTextColor(colors.lightGray) end
+            if type(monitor.write) == "function" then monitor.write("---") end
+        end
+        
+        y = y + 1
+    end
+end
+
+local function monitorLoop()
+    while true do
+        drawMonitor()
+        sleep(5)
+    end
+end
+
+local function drawMainMenu()
+    bankapi.waitScreen("") -- clears/paints base background
+    local scrW, scrH = term.getSize()
+    term.setTextColor(colors.yellow)
+    term.setCursorPos(scrW/2 - string.len("Fiducia Stock Exchange")/2 + 1, 2)
+    term.write("Fiducia Stock Exchange")
+
+    -- Personalized header if logged in
+    local headerY = 4
+    local data = bankapi.getClientData()
+    if currentAccount ~= nil and data[currentAccount] ~= nil then
+        local line = string.rep(string.char(140), 3)
+        local header = line.." "..(data[currentAccount].name or "").." "..line
+        term.setTextColor(colors.white)
+        term.setCursorPos(scrW/2 - string.len(header)/2 + 1, headerY)
+        term.write(header)
+    else
+        term.setTextColor(colors.lightGray)
+        local header = "Insert your Fiducia card to log in"
+        term.setCursorPos(scrW/2 - string.len(header)/2 + 1, headerY)
+        term.write(header)
+    end
+
+    local w = 30
+    local spacing = 2
+    local x = math.floor(scrW/2 - w/2 + 1)
+    local y = headerY + 3
+
+    local buttons = {}
+    local accountType = nil
+    if currentAccount ~= nil and data[currentAccount] ~= nil then
+        accountType = data[currentAccount].type
+    end
+    
+    if accountType == "treasury" then
+        -- Treasury can't use stock exchange
+        term.setTextColor(colors.red)
+        local errorMsg = "Treasury accounts cannot use the Stock Exchange"
+        term.setCursorPos(scrW/2 - string.len(errorMsg)/2 + 1, y)
+        term.write(errorMsg)
+        
+        local back = bankapi.drawBackButton()
+        while true do
+            local ev = {bankapi.safePullEvent()}
+            if ev[1] == "peripheral" then
+                loadAccountFromCard()
+                return
+            elseif ev[1] == "mouse_click" then
+                local cx, cy = ev[3], ev[4]
+                if bankapi.mouseInButton(back, cx, cy) then
+                    return
+                end
+            end
+        end
+        return
+    end
+    
+    local buttonY = y
+    if accountType == "personal" then
+        local myStocksBtn = bankapi.drawButton(colors.red, colors.brown, colors.yellow, x, buttonY, w, "My Stocks")
+        buttonY = buttonY + spacing
+        local stockMarketBtn = bankapi.drawButton(colors.red, colors.brown, colors.yellow, x, buttonY, w, "Stock Market")
+        buttonY = buttonY + spacing
+        local profitBookBtn = bankapi.drawButton(colors.red, colors.brown, colors.yellow, x, buttonY, w, "Profit Book")
+        buttonY = buttonY + spacing
+        local logoutBtn = bankapi.drawButton(colors.magenta, colors.purple, colors.yellow, x, buttonY, w, "Logout")
+        
+        local back = bankapi.drawBackButton()
+        while true do
+            local ev = {bankapi.safePullEvent()}
+            if ev[1] == "peripheral" then
+                loadAccountFromCard()
+                return
+            elseif ev[1] == "mouse_click" then
+                local cx, cy = ev[3], ev[4]
+                if bankapi.mouseInButton(back, cx, cy) then
+                    return
+                elseif bankapi.mouseInButton(logoutBtn, cx, cy) then
+                    os.reboot()
+                end
+                -- Buttons don't do anything yet
+            end
+        end
+    elseif accountType == "company" then
+        local companyInfoBtn = bankapi.drawButton(colors.red, colors.brown, colors.yellow, x, buttonY, w, "Company Info")
+        buttonY = buttonY + spacing
+        local stockMarketBtn = bankapi.drawButton(colors.red, colors.brown, colors.yellow, x, buttonY, w, "Stock Market")
+        buttonY = buttonY + spacing
+        local shareholdersBtn = bankapi.drawButton(colors.red, colors.brown, colors.yellow, x, buttonY, w, "Shareholders")
+        buttonY = buttonY + spacing
+        local logoutBtn = bankapi.drawButton(colors.magenta, colors.purple, colors.yellow, x, buttonY, w, "Logout")
+        
+        local back = bankapi.drawBackButton()
+        while true do
+            local ev = {bankapi.safePullEvent()}
+            if ev[1] == "peripheral" then
+                loadAccountFromCard()
+                return
+            elseif ev[1] == "mouse_click" then
+                local cx, cy = ev[3], ev[4]
+                if bankapi.mouseInButton(back, cx, cy) then
+                    return
+                elseif bankapi.mouseInButton(logoutBtn, cx, cy) then
+                    os.reboot()
+                end
+                -- Buttons don't do anything yet
+            end
+        end
+    else
+        -- Guest menu (not logged in) - show Company Listings
+        local listingsBtn = bankapi.drawButton(colors.red, colors.brown, colors.yellow, x, buttonY, w, "Company Listings")
+        local back = bankapi.drawBackButton()
+        while true do
+            local ev = {bankapi.safePullEvent()}
+            if ev[1] == "peripheral" then
+                loadAccountFromCard()
+                return
+            elseif ev[1] == "mouse_click" then
+                local cx, cy = ev[3], ev[4]
+                if bankapi.mouseInButton(back, cx, cy) then
+                    return
+                elseif bankapi.mouseInButton(listingsBtn, cx, cy) then
+                    bankapi.companyListScreen(currentAccount)
+                    return
+                end
+            end
+        end
+    end
+end
+
+-- Guest menu identical to ATM Terminal
+local function drawGuestMenu()
+    local tempClientData = bankapi.getClientData()
+    local command = bankapi.optionMenu("Welcome!", {
+        {option = "login", text = "Log In"},
+        {option = "info", text = "What is Fiducia"},
+        {option = "createaccount", text = "How do I make an account"},
+        {option = "pricing", text = "Cost"},
+    })
+
+    if (command == "login") then
+        -- If card already present, log in immediately
+        if (diskdrive and diskdrive.isDiskPresent()) then
+            loadAccountFromCard()
+            return
+        end
+        -- Otherwise prompt. Confirm attempts login; Back returns to menu.
+        local accept = bankapi.confirmScreen({"","","","","","Please insert your", "card in the disk drive"})
+        if (accept) then
+            if (diskdrive and diskdrive.isDiskPresent()) then
+                loadAccountFromCard()
+                return
+            else
+                bankapi.errorScreen("No card in disk drive")
+                return
+            end
+        else
+            -- Back: do nothing here; return to caller to show menu again
+            return
+        end
+    elseif (command == "info") then
+        bankapi.textScreen({"","","","Welcome to Fiducia!","","With your Fiducia card you won't need to have","money on you ever again. You will be able to","perform remote transactions and have a full","movement log.","","You will be able to install machines at your","stores, with catalogues and automatic checkout.","All payments will end up in your account. No","more shuffling through chests to collect your","payments!"})
+    elseif (command == "createaccount") then
+        bankapi.textScreen({"","","","","","","","To make an account, contact your local Fiducia","employee and arrange a meeting. You will open an","account together in the bank."})
+    elseif (command == "pricing") then
+        bankapi.textScreen({
+            "","","","","",
+            "The Fiducia card is free!",
+            "",
+            "The bank automatically charges",
+            "$"..serverData.cumulativePrice.." per every ".."$"..serverData.cumulativeLimit,
+            "transferred to or from your account.",
+            "",
+            "",
+            "Ask about the Fiducia phone, which acts as a",
+            "card and lets perform transactions anywhere!",
+        })
+    end
+end
+
+os.pullEvent = os.pullEventRaw -- Lock the shell
+
+local function run()
+    loadAccountFromCard()
+    local firstRun = true
+    while true do
+        if firstRun then
+            -- Always start on guest menu the first time
+            drawGuestMenu()
+            firstRun = false
+            loadAccountFromCard()
+        else
+            if currentAccount == nil then
+                drawGuestMenu()
+            else
+                drawMainMenu()
+            end
+        end
+    end
+end
+
+local function main()
+    parallel.waitForAll(run, monitorLoop)
+end
+
+while true do
+    local ok, err = pcall(main)
+    if not ok then
+        term.setBackgroundColor(colors.black)
+        term.setTextColor(colors.red)
+        term.clear()
+        term.setCursorPos(1,1)
+        if err == "Terminated" then
+            print("Termination prohibited.")
+        else
+            print("Stock Exchange Error: " .. tostring(err))
+        end
+        print("Restarting in 5 seconds...")
+        sleep(5)
+    end
+end

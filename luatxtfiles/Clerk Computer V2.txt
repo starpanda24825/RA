@@ -1,0 +1,992 @@
+-- Store clerk Computer (Master)
+-- Handles UI and logic, commands the Clerk Turtle for item movement.
+os.pullEvent = os.pullEventRaw -- Lock the shell (No Ctrl+T)
+
+local protocol = "fiducia_clerk"
+local linkedTurtleID = nil
+
+local diskdrive = peripheral.find("drive")
+local function ensureSafeDisk()
+    if not diskdrive or not diskdrive.isDiskPresent() then return true end
+    if not fs.exists("disk") then return true end
+    local allowed = { ["fiducia.txt"] = true, ["owner.txt"] = true }
+    for _, name in ipairs(fs.list("disk")) do
+        if not allowed[name] then
+            diskdrive.ejectDisk()
+            bankapi.errorScreen("Unsafe disk detected and ejected")
+            return false
+        end
+    end
+    return true
+end
+
+-------------------- Start
+print("Finding modem...")
+local modem = peripheral.find("modem")
+while modem == nil do
+    modem = peripheral.find("modem")
+    if modem == nil then
+        term.setBackgroundColor(colors.red)
+        term.setTextColor(colors.white)
+        term.clear()
+        term.setCursorPos(1,1)
+        print("Modem required. Please connect a modem...")
+        os.pullEvent("peripheral")
+    end
+end
+peripheral.find("modem", rednet.open)
+print("Modem found!")
+
+local diskdrive = peripheral.find("drive")
+os.loadAPI("bankapi.lua")
+local serverData = bankapi.getServerData()
+local lang = serverData.lang
+
+-- Discovery logic (similar to ATM Terminal)
+local function discoverTurtle()
+    local f = fs.open("turtle_id.txt", "r")
+    if f then
+        linkedTurtleID = tonumber(f.readLine())
+        f.close()
+        -- Ping to check if still alive
+        rednet.send(linkedTurtleID, {action = "ping"}, protocol)
+        local id, msg = rednet.receive(protocol, 1)
+        if msg ~= "pong" then
+            linkedTurtleID = nil
+        end
+    end
+    
+    if not linkedTurtleID then
+        print("Looking for Clerk Turtle...")
+        while true do
+            rednet.broadcast("hiring", protocol)
+            local sender, message = rednet.receive(protocol, 1)
+            if message == "offering" then
+                linkedTurtleID = sender
+                break
+            end
+        end
+        print("Turtle found: #" .. tostring(linkedTurtleID))
+        local f = fs.open("turtle_id.txt", "w")
+        f.write(tostring(linkedTurtleID))
+        f.close()
+    end
+end
+
+discoverTurtle()
+
+local function callTurtle(action, data)
+    local msg = {action = action}
+    if data then for k, v in pairs(data) do msg[k] = v end end
+    
+    rednet.send(linkedTurtleID, msg, protocol)
+    local sender, response = rednet.receive(protocol, 3)
+    if sender == linkedTurtleID then
+        return response
+    end
+    return {success = false, error = "Timeout"}
+end
+
+--------------------------
+
+local owner = nil
+local ownerView = false
+local catalog = {}
+local caralogueDirty = false
+local backgroundColor = colors.gray
+
+local currentAccount = 0
+
+-- UI strings
+local STR_CLAIMED = {"You are now the owner", "of this machine"}
+local STR_INVALID_CARD = "Invalid card"
+local STR_UNREGISTERED_DISK = "The inserted disk is not registered"
+local STR_INSERT_CARD_TO_CONFIGURE = "Insert a card to configure"
+local STR_REGISTERING_PAYMENT = {"Registering payment. Please wait.", "Do not remove the items", "from the turtle yet..."}
+local STR_PURCHASE_CANCELED = "Purchase cancelled"
+local STR_FOUL_PLAY = {"", "", "Dont remove or add items", "while I'm counting.", "Please try again."}
+local STR_THANKS_FOR_SHOPPING_AT = "Thanks for buying at "
+local STR_ITEMS_READY = {"You can now take your items", "from the barrel"}
+local STR_PLEASE_RETURN_ITEMS = {"Please return the items", "to their places before leaving."}
+local STR_COME_AGAIN = "Come again!"
+local STR_ADD_ITEM_STEPS = {"Products to register", "Product name", "Price", "Amount"}
+local STR_ADD_ITEM_INSTRUCTIONS = {"Items selected", "will be detected automatically.", "Press accept to register them."}
+local STR_DETECTED_ITEMS = " Detected items "
+local STR_VARIOUS = "<various>"
+local STR_REGISTER_CONFIRM = "Register these products?"
+local STR_REGISTER_COMPLETE = "Product registered"
+local STR_BUTTON_EDITNAME = "Edit name"
+local STR_BUTTON_EDITPRICE = "Edit price"
+local STR_BUTTON_EDITCOUNT = "Edit amount"
+local STR_BUTTON_REMOVE = "Remove"
+local STR_BUTTON_BACK = "Back"
+local STR_CHOOSE_ITEM_NAME = "Choose item's name"
+local STR_RENAME_SUCCESSFUL = "Item successfully renamed"
+local STR_CHOOSE_ITEM_PRICE = "Choose item's price"
+local STR_REPRICE_SUCCESSFUL = "Price changed successfully"
+local STR_CHOOSE_ITEM_COUNT = "Choose item amount"
+local STR_RECOUNT_SUCCESSFUL = "Amount changed successfully"
+local STR_REMOVE_CONFIRM = {"Are you sure you want", "to remove this item?"}
+local STR_REMOVE_SUCCESSFUL = "Item removed successfully"
+local STR_ADD_ITEMS = "Add item(s)"
+local STR_EDIT_SHOP_NAME = "Edit shop name"
+local STR_EDIT_CATALOG = "Edit catalog"
+local STR_RESIGN = "Resign as owner"
+local STR_QUIT = "Exit"
+local STR_CHOOSE_SHOP_NAME = "Choose shop name"
+local STR_SHOP_RENAMED_TO = "Shop renamed to "
+local STR_RESIGN_CONFIRM = {"Do you want to resign", "as the owner of this machine?"}
+local STR_RESIGN_SUCCESSFUL = "Successfully resigned as owner."
+local STR_SEE_YOU_LATER = "See you later!"
+local STR_SEE_CATALOG = "View catalog"
+local STR_BUY = "Buy"
+local STR_CANT_BUY_MISSING_CARD = {"To buy, insert a Fiducia", "card into the disk drive."}
+local STR_BUY_INSTRUCTIONS = {"Items you pick out will appear", "here automatically."}
+local STR_YOUR_BALANCE = "Your balance"
+local STR_TOTAL_PRICE = "Total price"
+local STR_FINAL_BALANCE = "Final balance"
+local STR_BUY_AND_CONTINUE = "Buy and continue"
+local STR_BUY_AND_QUIT = "Buy and exit"
+local STR_CANCEL = "Cancel"
+local STR_THANKS_COME_AGAIN = "Thank you! Come again!"
+local STR_DEFAULT_SHOP_NAME = "Shop"
+
+local shopName = STR_DEFAULT_SHOP_NAME
+
+if (not fs.exists("owner.txt")) then
+    if (diskdrive.isDiskPresent()) then
+        local tempClientData = bankapi.getClientData()
+        local f = fs.open("disk/fiducia.txt", "r")
+        if (f ~= nil) then
+            local value = f.readLine()
+            f.close()
+            if value ~= nil then
+                local key = value
+                local id = nil
+                local pipePos = string.find(value, "|", 1, true)
+                if pipePos ~= nil then
+                    local k, i = value:match("([^|]+)|([^|]+)")
+                    key = k or value
+                    id = i
+                end
+                if id ~= nil and id ~= "" then
+                    local ok = bankapi.validateCard(key, id)
+                    if ok then
+                        local cf = fs.open("owner.txt", "w")
+                        cf.writeLine(key)
+                        cf.close()
+                        bankapi.successScreen(STR_CLAIMED)
+                    else
+                        bankapi.errorScreen(STR_INVALID_CARD)
+                    end
+                else
+                    if (tempClientData[key] ~= nil) then
+                        local cf = fs.open("owner.txt", "w")
+                        cf.writeLine(key)
+                        cf.close()
+                        bankapi.successScreen(STR_CLAIMED)
+                    else
+                        bankapi.errorScreen(STR_INVALID_CARD)
+                    end
+                end
+            else
+                bankapi.errorScreen(STR_UNREGISTERED_DISK)
+            end
+        else
+            bankapi.errorScreen(STR_UNREGISTERED_DISK)
+        end
+        os.reboot()
+    else
+        bankapi.errorScreen(STR_INSERT_CARD_TO_CONFIGURE)
+        os.shutdown()
+    end
+else
+    local f = fs.open("owner.txt", "r")
+    owner = f.readLine()
+    f.close()
+end
+
+local function readDisk()
+    if (fs.exists("disk")) then
+        local f = fs.open("disk/fiducia.txt", "r")
+        if (f ~= nil) then
+            local value = f.readLine()
+            f.close()
+            if (value ~= nil) then
+                local key = value
+                local id = nil
+                local pipePos = string.find(value, "|", 1, true)
+                if pipePos ~= nil then
+                    local k, i = value:match("([^|]+)|([^|]+)")
+                    key = k or value
+                    id = i
+                end
+                if id ~= nil and id ~= "" then
+                    local ok = bankapi.validateCard(key, id)
+                    if ok then
+                        -- Check if account is frozen
+                        local tempClientData = bankapi.getClientData()
+                        if tempClientData[key] and tempClientData[key].frozen then
+                            currentAccount = 0
+                            bankapi.errorScreen("Account is frozen")
+                        else
+                            currentAccount = key
+                        end
+                    else
+                        currentAccount = 0
+                    end
+                else
+                    local tempClientData = bankapi.getClientData()
+                    if (tempClientData[key] ~= nil) then
+                        if tempClientData[key].frozen then
+                            currentAccount = 0
+                            bankapi.errorScreen("Account is frozen")
+                        else
+                            currentAccount = key
+                        end
+                    else
+                        currentAccount = 0
+                    end
+                end
+            end
+        end
+    end
+end
+
+readDisk()
+
+local function loadShopName()
+    local f = fs.open("shopname.txt", "r")
+    if (f ~= nil) then
+        local value = f.readLine()
+        if (value ~= nil) then
+            shopName = value
+        end
+        f.close()
+    else
+        local f = fs.open("shopname.txt", "w")
+        f.writeLine("Shop")
+        f.close()
+    end
+end
+
+local function loadCatalog()
+    local f = fs.open("catalog.txt", "r")
+    if (f ~= nil) then
+        catalog = {}
+        local line = f.readLine()
+        while line ~= nil do
+            local lline = line
+            local item = ""
+            local damage = 0
+            local count = 0
+            local price = 0
+            local name = ""
+
+            while lline ~= "" and lline ~= nil do
+                if (lline == "item") then
+                    item = f.readLine()
+                elseif (lline == "damage") then
+                    damage = tonumber(f.readLine())
+                elseif (lline == "count") then
+                    count = tonumber(f.readLine())
+                elseif (lline == "price") then
+                    price = tonumber(f.readLine())
+                elseif (lline == "name") then
+                    name = f.readLine()
+                end
+                lline = f.readLine()
+            end
+
+            if (catalog[item] == nil) then
+                catalog[item] = {}
+            end
+            catalog[item][damage] = {
+                count=count,
+                price=price,
+                name=name
+            }
+
+            line = f.readLine()
+        end
+
+        f.close()
+    else
+        local f = fs.open("catalog.txt", "w")
+        f.close()
+    end
+end
+
+local function updateCatalog()
+    caralogueDirty = true
+    local f = fs.open("catalog.txt", "w")
+    for name, damagetypes in pairs(catalog) do
+        for damage, detail in pairs(damagetypes) do
+            f.writeLine("item")
+            f.writeLine(name)
+            f.writeLine("damage")
+            f.writeLine(tostring(damage))
+            f.writeLine("count")
+            f.writeLine(tostring(detail.count))
+            f.writeLine("name")
+            f.writeLine(detail.name)
+            f.writeLine("price")
+            f.writeLine(tostring(detail.price))
+            f.writeLine("")
+        end
+    end
+    f.close()
+end
+
+local function printWithPadding(x, leftText, rightText, newLine, color, dotColor)
+    local scrW, scrH = term.getSize()
+    leftText = string.rep(" ", x-1)..leftText
+    if (newLine == nil) then newLine = true end
+    local space = string.len(leftText)+string.len(rightText)
+    local padding = scrW-space
+    local paddingText = ""
+    if (padding > 0) then
+        paddingText = string.rep(".", padding)
+    else
+        leftText = string.sub(leftText, 1, string.len(leftText)+padding-1)
+        paddingText = "."
+    end
+    if (color == nil) then
+        term.setTextColor(colors.white)
+    else
+        term.setTextColor(color)
+    end
+    if (dotColor == nil) then dotColor = colors.gray end
+    term.write(leftText)
+    term.setTextColor(dotColor)
+    term.write(paddingText)
+    if (color == nil) then
+        term.setTextColor(colors.white)
+    else
+        term.setTextColor(color)
+    end
+    term.write(rightText)
+    if (newLine) then
+        print("")
+    end
+end
+
+local function buy(previousEstimatedPrice, slotsToDrop)
+    local scrW, scrH = term.getSize()
+    bankapi.waitScreen(STR_REGISTERING_PAYMENT)
+
+    local resp = callTurtle("scan")
+    if not resp.success then
+        bankapi.errorScreen("Turtle communication error")
+        return
+    end
+    
+    local turtleItems = resp.items
+    
+    local buyingItems = {}
+    local totalPrice = 0
+    local totalReceitDescription = shopName..": "
+
+    for _, slot in ipairs(slotsToDrop) do
+        local detail = turtleItems[slot]
+        if (detail ~= nil) then
+            local item = detail.name
+            if (catalog[item] ~= nil) then
+                local damage = detail.damage or 1
+                if (catalog[item][damage] ~= nil) then
+                    local product = catalog[item][damage]
+
+                    if (buyingItems[item] == nil) then
+                        buyingItems[item] = {}
+                    end
+                    if (buyingItems[item][damage] == nil) then
+                        buyingItems[item][damage] = detail.count
+                    else
+                        buyingItems[item][damage] = buyingItems[item][damage]+detail.count
+                    end
+                end
+            end
+        end
+    end
+
+    for item, damagetypes in pairs(buyingItems) do
+        for damage, count in pairs(damagetypes) do
+            local product = catalog[item][damage]
+            local estimatedPrice = math.ceil(count*product.price/product.count)
+            totalPrice = totalPrice+estimatedPrice
+            totalReceitDescription = totalReceitDescription.." "..product.name.." x"..count.." ($"..estimatedPrice..") |"
+        end
+    end
+
+    if (previousEstimatedPrice ~= totalPrice) then
+        bankapi.waitScreen(STR_PURCHASE_CANCELED)
+        callTurtle("reject") -- Reject everything on mismatch
+        bankapi.textScreen(STR_FOUL_PLAY)
+    else
+        local tempClientData = bankapi.getClientData()
+        local senderInfo = tempClientData[currentAccount] or {}
+        local ownerInfo = tempClientData[owner] or {}
+        local senderType = tostring(senderInfo.type or "personal")
+        local ownerType = tostring(ownerInfo.type or "personal")
+        local allowed = false
+        if senderType == "personal" then
+            allowed = (ownerType == "personal")
+        elseif senderType == "company" then
+            allowed = (ownerType == "personal" or ownerType == "company")
+        elseif senderType == "treasury" then
+            allowed = (ownerType == "personal" or ownerType == "company")
+        end
+        if not allowed then
+            bankapi.errorScreen("Cannot pay to this account type from your account")
+            return
+        end
+        
+        local success, msg = bankapi.transaction(currentAccount, owner, totalPrice, totalReceitDescription)
+        if success then
+            callTurtle("drop", {slots = slotsToDrop}) -- Tell turtle to drop purchased items forward, others to side
+            bankapi.successScreen({STR_THANKS_FOR_SHOPPING_AT, shopName.."!"})
+            bankapi.successScreen(STR_ITEMS_READY)
+        else
+            bankapi.errorScreen(msg)
+        end
+    end
+end
+
+local function logout()
+    local resp = callTurtle("scan")
+    if resp.success then
+        local hasItems = false
+        for i=1, 16 do
+            if resp.items[i] ~= nil then
+                hasItems = true
+                break
+            end
+        end
+        if hasItems then
+            bankapi.waitScreen(STR_PLEASE_RETURN_ITEMS)
+            diskdrive.ejectDisk()
+            sleep(2.5)
+        end
+    end
+    diskdrive.ejectDisk()
+    bankapi.successScreen(STR_COME_AGAIN)
+    os.shutdown()
+end
+
+local function addItemToCatalog()
+    local steps = STR_ADD_ITEM_STEPS
+    local returning = false
+    local totalItems
+    local detail = {}
+
+    repeat 
+        local accept = bankapi.confirmScreen(STR_ADD_ITEM_INSTRUCTIONS, {}, steps, 1)
+        if (not accept) then
+            returning = true
+            break
+        end
+        
+        local resp = callTurtle("scan")
+        if not resp.success then
+            bankapi.errorScreen("Turtle communication error")
+            return
+        end
+        
+        totalItems = 0
+        detail = {}
+        for i=1, 16 do
+            local itemDetail = resp.items[i]
+            if (itemDetail ~= nil) then
+                detail[i] = itemDetail
+                totalItems = totalItems + itemDetail.count
+            end
+        end
+    until totalItems > 0
+    
+    if (returning) then return end
+
+    local itemList = {}
+    itemList[1] = string.char(31)..STR_DETECTED_ITEMS..string.char(31)
+
+    local count = 0
+    for i=1, 16 do
+        if detail[i] then
+            count = count + 1
+            if count < 9 then
+                itemList[count+1] = detail[i].name
+            elseif count == 9 then
+                itemList[count+1] = "..."
+            end
+        end
+    end
+
+    bankapi.waitScreen(itemList)
+    local continueButton = bankapi.drawContinueButton()
+    bankapi.safePullEvent("mouse_click")
+
+    local name = bankapi.inputTextScreen(steps, 2)
+    if (name == nil) then return end
+
+    local price = bankapi.inputNumberScreen(steps, 3)
+    if (price == nil) then return end
+
+    local count = bankapi.inputNumberScreen(steps, 4)
+    if (count == nil) then return end
+
+    local displayName = nil
+    local oneName = true
+    local set = false
+    for k, v in pairs(detail) do
+        if (not set) then
+            displayName = v.name
+            set = true
+        else
+            if (displayName ~= v.name) then
+                oneName = false
+                displayName = STR_VARIOUS
+            end
+        end
+    end
+
+    local confirmData = {
+        name = name,
+        product = displayName,
+        quantity = "x"..count,
+        price = "$"..price
+    }
+    local accept = bankapi.confirmScreen({STR_REGISTER_CONFIRM}, confirmData)
+    if (not accept) then return end
+
+    for k, v in pairs(detail) do
+        if (catalog[v.name] == nil) then
+            catalog[v.name] = {}
+        end
+        local damage = v.damage or 1
+        catalog[v.name][damage] = {
+            ["name"] = name,
+            ["count"] = tonumber(count),
+            ["price"] = tonumber(price)
+        }
+    end
+
+    updateCatalog()
+    bankapi.successScreen(STR_REGISTER_COMPLETE)
+end
+
+local function editItem(itemID)
+    local item = catalog[itemID.name][itemID.damage]
+    while (true) do
+        local command = bankapi.optionMenu(item.name, {
+            [1] = {["option"] = "editname", ["text"] = STR_BUTTON_EDITNAME},
+            [2] = {["option"] = "editprice", ["text"] = STR_BUTTON_EDITPRICE},
+            [3] = {["option"] = "editcount", ["text"] = STR_BUTTON_EDITCOUNT},
+            [4] = {["option"] = "remove", ["text"] = STR_BUTTON_REMOVE},
+            [5] = {["option"] = "back", ["text"] = STR_BUTTON_BACK},
+        })
+
+        if (command == "editname") then
+            local newname = bankapi.inputTextScreen({STR_CHOOSE_ITEM_NAME}, 1, 30)
+            if (newname ~= nil) then
+                catalog[itemID.name][itemID.damage].name = newname
+                updateCatalog()
+                bankapi.successScreen(STR_RENAME_SUCCESSFUL)
+            end
+        elseif(command == "editprice") then
+            local newprice = bankapi.inputNumberScreen({STR_CHOOSE_ITEM_PRICE}, 1)
+            if (newprice ~= nil) then
+                catalog[itemID.name][itemID.damage].price = tonumber(newprice)
+                updateCatalog()
+                bankapi.successScreen(STR_REPRICE_SUCCESSFUL)
+            end
+        elseif(command == "editcount") then
+            local newcount = bankapi.inputNumberScreen({STR_CHOOSE_ITEM_COUNT}, 1)
+            if (newcount ~= nil) then
+                catalog[itemID.name][itemID.damage].count = tonumber(newcount)
+                updateCatalog()
+                bankapi.successScreen(STR_RECOUNT_SUCCESSFUL)
+            end
+        elseif(command == "remove") then
+            local confirm = bankapi.confirmScreen(STR_REMOVE_CONFIRM, {item_name=item.name})
+            if (confirm) then
+                catalog[itemID.name][itemID.damage] = nil
+                updateCatalog()
+                bankapi.successScreen(STR_REMOVE_SUCCESSFUL)
+                return
+            end
+        elseif(command == "back") then
+            return
+        end
+    end
+end
+
+local function displayCatalogItem(item, x, y, w, status)
+    term.setCursorPos(x,y)
+    local bg = colors.white
+    local textC = colors.black
+    local dotC = colors.lightGray
+    if status == "excluded" then
+        bg = colors.gray
+        textC = colors.lightGray
+        dotC = colors.lightGray
+    end
+    term.setBackgroundColor(bg)
+    term.setTextColor(colors.gray)
+    term.write(string.rep(string.char(131), w))
+    term.setCursorPos(x,y+1)
+    term.setTextColor(dotC)
+    term.write(" ")
+    term.write(string.rep(".", w-2))
+    term.write(" ")
+    term.setCursorPos(x+1,y+1)
+    term.setTextColor(textC)
+    term.write(item.name)
+    local text = "$"..item.price
+    if (item.count > 1) then
+        text = item.count.." x $"..item.price
+    end
+    term.setCursorPos(x+w-string.len(text)-1,y+1)
+    term.write(text)
+end
+
+local function displayCatalog(edit)
+    local scrW, scrH = term.getSize()
+    local first = 0
+
+    if (caralogueDirty) then
+        loadCatalog()
+        caralogueDirty = false
+    end
+
+    while (true) do
+        local encounteredItems = {}
+        term.setBackgroundColor(backgroundColor)
+        term.clear()
+
+        local row = 0
+        local max = 5
+        local buttons = {}
+        local total = 0
+        local width = scrW-2
+        if (edit) then 
+            max = 4
+            width = scrW-7
+        end
+        
+        for name, damagetypes in pairs(catalog) do
+            for damage, detail in pairs(damagetypes) do
+                if (total >= first and total < first+max) then
+                    if (encounteredItems[detail.name]) == nil then
+                        term.setBackgroundColor(backgroundColor)
+                        displayCatalogItem(detail, 2, row*2+1, width)
+                        if (edit) then
+                            term.setBackgroundColor(colors.cyan)
+                            term.setTextColor(backgroundColor)
+                            term.setCursorPos(scrW-5, row*2+1)
+                            term.write(string.rep(string.char(143), 5))
+                            term.setBackgroundColor(colors.cyan)
+                            term.setTextColor(colors.white)
+                            term.setCursorPos(scrW-5, row*2+2)
+                            term.write(" Edit")
+                            buttons[row*2+1] = {name=name, damage=damage}
+                            buttons[row*2+2] = {name=name, damage=damage}
+                        end
+                        row = row+1
+                    end
+                end
+                total = total+1
+                encounteredItems[detail.name] = true
+            end
+        end
+
+        local backButton = bankapi.drawBackButton()
+        local prevPage = bankapi.drawButton(colors.red, colors.brown, colors.yellow, 16, scrH-1, 7, string.char(27))
+        if (first <= 0) then
+            bankapi.drawButton(colors.lightGray, colors.gray, colors.yellow, 16, scrH-1, 7, string.char(27))
+        end
+
+        local nextPage = bankapi.drawButton(colors.red, colors.brown, colors.yellow, 32, scrH-1, 7, string.char(26))
+        if (first+max >= total) then
+            bankapi.drawButton(colors.lightGray, colors.gray, colors.yellow, 32, scrH-1, 7, string.char(26))
+        end
+
+        local addButton
+        if (edit) then
+            addButton = bankapi.drawButton(colors.red, colors.brown, colors.yellow, 2, scrH-3, scrW-2, STR_ADD_ITEMS)
+        end
+
+        local pages = math.max(1,math.ceil(total/max))
+        local pageText = tostring((first/max)+1).."/"..pages
+        term.setCursorPos(28-string.len(pageText)/2, scrH-1)
+        term.setBackgroundColor(backgroundColor)
+        term.setTextColor(colors.orange)
+        term.write(pageText)
+
+        local eventData = {bankapi.safePullEvent()}
+        local event = eventData[1]
+
+        if event == "mouse_click" then
+            local cx = eventData[3]
+            local cy = eventData[4]
+            if (edit and bankapi.mouseInButton(addButton, cx, cy)) then
+                addItemToCatalog()
+            end
+            if (bankapi.mouseInButton(prevPage, cx, cy)) then
+                if (first > 0) then first = first-max end
+            end
+            if (bankapi.mouseInButton(nextPage, cx, cy)) then
+                if (first+max < total) then first = first+max end
+            end
+            if (bankapi.mouseInButton(backButton, cx, cy)) then
+                return nil
+            end
+            if buttons[cy] ~= nil then
+                editItem(buttons[cy])
+            end
+        elseif event == "mouse_scroll" then
+            local scroll = eventData[2]
+            if (scroll < 0) then
+                if (first > 0) then first = first-max end
+            else
+                if (first+max < total) then first = first+max end
+            end
+        end
+    end
+end
+
+local function main()
+loadShopName()
+loadCatalog()
+
+local breaking = false
+while true do
+    readDisk()
+    ownerView = (owner == currentAccount and currentAccount ~= 0)
+    breaking = false
+    
+    if (ownerView) then
+        while true do
+            local command = bankapi.optionMenu(shopName, {
+                [1] = {["option"] = "name", ["text"] = STR_EDIT_SHOP_NAME},
+                [2] = {["option"] = "catalog", ["text"] = STR_EDIT_CATALOG},
+                [3] = {["option"] = "resign", ["text"] = STR_RESIGN},
+                [4] = {["option"] = "quit", ["text"] = STR_QUIT},
+            })
+
+            if (command == "name") then
+                local newname = bankapi.inputTextScreen({STR_CHOOSE_SHOP_NAME}, 1, 30)
+                if (newname ~= nil) then
+                    shopName = newname
+                    os.setComputerLabel(newname)
+                    local f = fs.open("shopname.txt", "w")
+                    f.writeLine(shopName)
+                    f.close()
+                    bankapi.successScreen(STR_SHOP_RENAMED_TO..shopName)
+                end
+            elseif (command == "catalog") then
+                displayCatalog(true)
+            elseif (command == "resign") then
+                local accept = bankapi.confirmScreen(STR_RESIGN_CONFIRM)
+                if (accept) then
+                    fs.delete("owner.txt")
+                    diskdrive.ejectDisk()
+                    bankapi.successScreen(STR_RESIGN_SUCCESSFUL)
+                    os.shutdown()
+                end
+            elseif (command == "quit") then
+                diskdrive.ejectDisk()
+                bankapi.successScreen(STR_SEE_YOU_LATER)
+                os.shutdown()
+            end
+        end
+    else
+        while true do
+            local command = bankapi.optionMenu(shopName, {
+                [1] = {["option"] = "catalog", ["text"] = STR_SEE_CATALOG},
+                [2] = {["option"] = "buy", ["text"] = STR_BUY},
+                [3] = {["option"] = "quit", ["text"] = STR_QUIT},
+            })
+
+            if (command == "catalog") then
+                displayCatalog()
+            elseif (command == "buy") then
+                while true do
+                    readDisk()
+                    if (currentAccount == 0) then
+                        bankapi.waitScreen(STR_CANT_BUY_MISSING_CARD)
+                        local backButton = bankapi.drawBackButton()
+                        local exitWait = false
+                        while true do
+                            local eventData = {bankapi.safePullEvent()}
+                            if eventData[1] == "mouse_click" and bankapi.mouseInButton(backButton, eventData[3], eventData[4]) then
+                                exitWait = true
+                                break
+                            elseif eventData[1] == "disk" then
+                                break
+                            end
+                        end
+                        if exitWait then break end
+                    else
+                        -- Valid client buying loop
+                        local excludedGroups = {}
+                        local first = 0
+                        local scrW, scrH = term.getSize()
+                        while true do
+                            local resp = callTurtle("scan")
+                            if not resp.success then
+                                bankapi.errorScreen("Turtle error")
+                                break
+                            end
+                           
+                            local buyingItems = {}
+                            local totalPrice = 0
+                            for i=1, 16 do
+                                local d = resp.items[i]
+                                if d and catalog[d.name] then
+                                    local dmg = d.damage or 1
+                                    if catalog[d.name][dmg] then
+                                        local prod = catalog[d.name][dmg]
+                                        local key = d.name..":"..dmg
+                                        if not buyingItems[key] then 
+                                            buyingItems[key] = {
+                                                name = prod.name,
+                                                price = prod.price,
+                                                unitCount = prod.count,
+                                                totalCount = 0,
+                                                slots = {}
+                                            }
+                                        end
+                                        buyingItems[key].totalCount = buyingItems[key].totalCount + d.count
+                                        table.insert(buyingItems[key].slots, i)
+                                    end
+                                end
+                            end
+
+                            term.setBackgroundColor(backgroundColor)
+                            term.clear()
+                            
+                            local total = 0
+                            local row = 0
+                            local max = 4
+                            local displayList = {}
+                            local sortedKeys = {}
+                            for k in pairs(buyingItems) do table.insert(sortedKeys, k) end
+                            table.sort(sortedKeys)
+
+                            local slotsToDrop = {}
+
+                            for _, key in ipairs(sortedKeys) do
+                                local group = buyingItems[key]
+                                local est = math.ceil(group.totalCount * group.price / group.unitCount)
+                                local status = excludedGroups[key] and "excluded" or "active"
+                                
+                                if total >= first and total < first+max then
+                                    displayCatalogItem({name=group.name, price=est, count=group.totalCount}, 2, row*2+1, scrW-2, status)
+                                    displayList[row*2+1] = key
+                                    displayList[row*2+2] = key
+                                    row = row + 1
+                                end
+                                
+                                if status == "active" then
+                                    totalPrice = totalPrice + est
+                                    for _, s in ipairs(group.slots) do table.insert(slotsToDrop, s) end
+                                end
+                                total = total + 1
+                            end
+
+                            if total == 0 then bankapi.waitScreen(STR_BUY_INSTRUCTIONS) end
+                            
+                            local backButton = bankapi.drawBackButton()
+                            local tempClientData = bankapi.getClientData()
+                            local balance = (tempClientData[currentAccount] or {balance=0}).balance
+                            
+                            local prevPage, nextPage = nil, nil
+                            if total > 0 then
+                                prevPage = bankapi.drawButton(colors.red, colors.brown, colors.yellow, 20, scrH-4, 7, string.char(27))
+                                if first <= 0 then bankapi.drawButton(colors.lightGray, colors.gray, colors.yellow, 20, scrH-4, 7, string.char(27)) end
+                                nextPage = bankapi.drawButton(colors.red, colors.brown, colors.yellow, 32, scrH-4, 7, string.char(26))
+                                if first+max >= total then bankapi.drawButton(colors.lightGray, colors.gray, colors.yellow, 32, scrH-4, 7, string.char(26)) end
+                                
+                                local pages = math.max(1, math.ceil(total/max))
+                                local pageText = tostring((first/max)+1).."/"..pages
+                                term.setCursorPos(30-string.len(pageText)/2, scrH-4)
+                                term.setBackgroundColor(backgroundColor)
+                                term.setTextColor(colors.orange)
+                                term.write(pageText)
+
+                                printWithPadding(20, STR_YOUR_BALANCE, "$"..balance, true, colors.white, colors.lightGray)
+                                printWithPadding(20, STR_TOTAL_PRICE, "$"..totalPrice, nil, colors.white, colors.lightGray)
+                                local finalBalance = balance-totalPrice
+                                local finalColor = finalBalance < 0 and colors.red or colors.white
+                                printWithPadding(20, STR_FINAL_BALANCE, "$"..finalBalance, false, finalColor, colors.lightGray)
+                            end
+
+                            local buyButton = bankapi.drawButton(colors.red, colors.brown, colors.yellow, 1, scrH-3, 18, STR_BUY_AND_CONTINUE)
+                            local buyAndExitButton = bankapi.drawButton(colors.red, colors.brown, colors.yellow, 1, scrH-2, 18, STR_BUY_AND_QUIT)
+                            local cancelButton = bankapi.drawButton(colors.magenta, colors.purple, colors.yellow, 1, scrH-1, 18, STR_CANCEL)
+
+                            local exitBuyLoop = false
+                            local timerID = os.startTimer(1) -- Start a timer for refreshing
+                            while true do
+                                local ev = {os.pullEvent()} -- Use os.pullEvent directly to catch timers
+                                local event = ev[1]
+                                
+                                if event == "mouse_click" then
+                                    local cx, cy = ev[3], ev[4]
+                                    if total > 0 then
+                                        if bankapi.mouseInButton(prevPage, cx, cy) and first > 0 then first = first - max; break end
+                                        if bankapi.mouseInButton(nextPage, cx, cy) and first+max < total then first = first + max; break end
+                                        if displayList[cy] then
+                                            local key = displayList[cy]
+                                            excludedGroups[key] = not excludedGroups[key]
+                                            break
+                                        end
+                                    end
+                                    if bankapi.mouseInButton(cancelButton, cx, cy) then
+                                        callTurtle("reject") -- Reject everything on cancel
+                                        exitBuyLoop = true; break 
+                                    end
+                                    if totalPrice > 0 and totalPrice <= balance then
+                                        if bankapi.mouseInButton(buyButton, cx, cy) then buy(totalPrice, slotsToDrop); break end
+                                        if bankapi.mouseInButton(buyAndExitButton, cx, cy) then buy(totalPrice, slotsToDrop); logout(); break end
+                                    end
+                                elseif event == "mouse_scroll" and total > 0 then
+                                    if ev[2] < 0 and first > 0 then first = first - max; break end
+                                    if ev[2] > 0 and first+max < total then first = first + max; break end
+                                elseif event == "rednet_message" and ev[4] == protocol and ev[3] == linkedTurtleID then
+                                    break
+                                elseif event == "turtle_inventory" then
+                                    break
+                                elseif event == "timer" and ev[2] == timerID then
+                                    break -- Refresh the scan
+                                end
+                            end
+                            if exitBuyLoop then break end
+                        end
+                        break
+                    end
+                end
+            elseif (command == "quit") then
+                diskdrive.ejectDisk()
+                bankapi.successScreen(STR_THANKS_COME_AGAIN)
+                os.shutdown()
+            end
+        end
+    end
+end
+
+while true do
+    local ok, err = pcall(main)
+    if not ok then
+        term.setBackgroundColor(colors.black)
+        term.setTextColor(colors.red)
+        term.clear()
+        term.setCursorPos(1,1)
+        if err == "Terminated" then
+            print("Termination prohibited.")
+        else
+            print("Critical Clerk Error: " .. tostring(err))
+        end
+        print("Restarting in 5 seconds...")
+        sleep(5)
+    end
+end

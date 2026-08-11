@@ -1,0 +1,660 @@
+-- Admin Terminal
+--(called using "pastebin run 2RAZwkys")
+os.pullEvent = os.pullEventRaw -- Lock the shell (No Ctrl+T)
+
+
+-----------------------Params
+local bankServerID
+local adminPassword
+local assignedTreasuryKey
+local assignedTreasuryName
+local assignedTreasuryTag
+local assignedTreasuryColor
+
+local text_error_noconnection = "Can't connect to server"
+--------------------------
+
+local diskdrive = peripheral.find("drive")
+local function ensureSafeDisk()
+    if not diskdrive or not diskdrive.isDiskPresent() then return true end
+    if not fs.exists("disk") then return true end
+    -- Admin terminal: allowed files: fiducia.txt, installClerkPlease.txt, installATMPlease.txt (installer flags)
+    local allowed = { ["fiducia.txt"] = true, ["installClerkPlease.txt"] = true, ["installATMPlease.txt"] = true }
+    for _, name in ipairs(fs.list("disk")) do
+        if not allowed[name] then
+            diskdrive.ejectDisk()
+            bankapi.errorScreen("Unsafe disk detected and ejected")
+            return false
+        end
+    end
+    return true
+end
+local modem = peripheral.find("modem")
+
+while (modem == nil) do
+    modem = peripheral.find("modem")
+    if (modem == nil) then
+        term.setBackgroundColor(colors.red)
+        term.setTextColor(colors.white)
+        term.clear()
+        term.setCursorPos(1,1)
+        print("Ender modem required. Please connect a modem to continue...")
+        -- Wait for a peripheral without allowing Ctrl+T to terminate
+        while true do
+            local ev = {os.pullEventRaw()}
+            if ev[1] == "peripheral" then break end
+        end
+    end
+end
+
+peripheral.find("modem", rednet.open)
+
+os.loadAPI("bankapi.lua")
+local serverData = bankapi.getServerData()
+--------------------------
+--------------------------
+
+local function main()
+-- One-time Treasury assignment for this terminal
+local tempClientData = bankapi.getClientData()
+if fs.exists("terminal_treasury.txt") then
+    local tf = fs.open("terminal_treasury.txt", "r")
+    assignedTreasuryKey = tostring(tf.readAll() or "")
+    tf.close()
+else
+    -- Require selecting an available Treasury
+    local treasuries = {}
+    for k, v in pairs(tempClientData) do
+        if tostring(v.type or "") == "treasury" then treasuries[k] = v end
+    end
+    if next(treasuries) == nil then
+        bankapi.errorScreen("No treasury accounts exist. Please create one on the server.")
+        -- Wait safely for user acknowledgment, ignoring Ctrl+T
+        while true do
+            local ev = {bankapi.safePullEvent()}
+            local e = ev[1]
+            if e == "mouse_click" or e == "key" then break end
+        end
+        error()
+    end
+    local sel = bankapi.selectAccountScreen({"Select Treasury to assign"}, 1, 0, treasuries)
+    if sel == nil then error() end
+    assignedTreasuryKey = sel
+    local tfw = fs.open("terminal_treasury.txt", "w")
+    tfw.write(assignedTreasuryKey)
+    tfw.close()
+end
+
+-- Resolve assigned Treasury details for UI and auth
+do
+    tempClientData = bankapi.getClientData()
+    local tinfo = tempClientData[assignedTreasuryKey] or {}
+    assignedTreasuryName = tostring(tinfo.name or "Treasury")
+    assignedTreasuryTag = tostring(tinfo.tag or "??")
+    assignedTreasuryColor = tonumber(tinfo.color or colors.red)
+end
+
+-- Password protection (Treasury password)
+local pass = ""
+repeat
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.yellow)
+    term.clear()
+    local scrW, scrH = term.getSize()
+    local title1 = "Fiducia -- "
+    local title2 = assignedTreasuryName
+    term.setCursorPos(scrW/2-(string.len(title1)+string.len(title2))/2, scrH/2)
+    term.write(title1)
+    term.setTextColor(assignedTreasuryColor)
+    term.write(title2)
+    term.setTextColor(colors.yellow)
+    term.setCursorPos((scrW/2-(string.len(title1)+string.len(title2))/2)+5, scrH/2+1)
+    pass = bankapi.readPassword(64)
+until (
+    (tempClientData[assignedTreasuryKey] ~= nil and tostring(tempClientData[assignedTreasuryKey].password or ""):match("^[^:]+:[^:]+:%d+$") ~= nil and bankapi.verifyPasswordAgainstFullHash(pass, tempClientData[assignedTreasuryKey].password))
+    or (tempClientData[assignedTreasuryKey] ~= nil and pass == tostring(tempClientData[assignedTreasuryKey].password or ""))
+)
+
+while true do -- Second while to allow the use of breaks as continues
+while true do
+	
+    local command = bankapi.optionMenu("Fiducia Admin Terminal", {
+        {option = "accountoptions",
+        text = "Account Options"},
+        {option = "transaction",
+        text = "Perform transaction"},
+        {option = "assigncard",
+        text = "Link account to card/phone"},
+        {option = "managecards",
+        text = "Manage ATM Cards"},
+        {option = "fine",
+        text = "Fine account"},
+        {option = "switchtreasury",
+        text = "Switch Treasury"},
+        {option = "installapp",
+        text = "Install application on phone"},
+        {option = "logout",
+        text =  "Exit"},
+    }, 2, 36)
+
+    if (command == "accountoptions") then
+        local sub = bankapi.optionMenu("Account Options", {
+            {option = "new",
+            text = "Create new account"},
+            {option = "balance",
+            text = "Check balance"},
+            {option = "delete",
+            text = "Delete account"},
+            {option = "log",
+            text = "Transaction Logs"},
+            {option = "resetpassword",
+            text = "Reset account Password (1234)"},
+            {option = "freezeaccounts",
+            text = "Freeze/Unfreeze Accounts"},
+            {option = "back",
+            text = "Back"},
+        }, 2, 36)
+
+        if (sub == "new") then
+            -- Choose account type
+            local acctType = bankapi.optionMenu("Create Account", {
+                {option = "personal", text = "Personal Account"},
+                {option = "company", text = "Company Account"},
+                {option = "cancel", text = "Cancel"},
+            }, 2, 36)
+            if (acctType == nil or acctType == "cancel") then break end
+
+            if (acctType == "personal") then
+                local steps = {"Name", "Representative color"}
+                local name = bankapi.inputTextScreen(steps, 1, 25)
+                if (name == nil) then break end
+                local color = bankapi.selectColorScreen(steps, 2)
+                if (color == nil) then break end
+                -- Auto-link to this terminal's assigned Treasury
+                local success, message = bankapi.newAccount(name, 0, color, assignedTreasuryKey)
+                bankapi.responseScreen(success, message)
+            elseif (acctType == "company") then
+                local steps = {"Company name", "Owner account", "Initial shares", "Representative color"}
+                local name = bankapi.inputTextScreen(steps, 1, 25)
+                if (name == nil) then break end
+                -- Restrict owner selection to internal accounts (same Treasury)
+                local tempClientData = bankapi.getClientData()
+                local internal = {}
+                for k,v in pairs(tempClientData) do
+                    if tostring(v.treasury or "") == tostring(assignedTreasuryKey) and tostring(v.type or "") ~= "treasury" then
+                        internal[k] = v
+                    end
+                end
+                local owner = bankapi.selectAccountScreen(steps, 2, 0, internal)
+                if (owner == nil) then break end
+                local shares = bankapi.inputNumberScreen(steps, 3, 0)
+                if (shares == nil) then break end
+                local color = bankapi.selectColorScreen(steps, 4)
+                if (color == nil) then break end
+                local success, message = bankapi.newCompany(name, owner, color, shares)
+                bankapi.responseScreen(success, message)
+            end
+        elseif (sub == "balance") then
+            local tempData = bankapi.getClientData()
+            local internal = {}
+            -- Include all accounts within this treasury, including the treasury itself
+            for k,v in pairs(tempData) do
+                local vtre = tostring(v.treasury or "")
+                local vtype = tostring(v.type or "")
+                if vtre == tostring(assignedTreasuryKey) then
+                    internal[k] = v
+                elseif vtype == "treasury" and tostring(k) == tostring(assignedTreasuryKey) then
+                    internal[k] = v
+                elseif vtype == "company" then
+                    local ownerKey = tostring(v.owner or "")
+                    local ownerAcct = tempClientData[ownerKey]
+                    local ownerTreasury = tostring((ownerAcct or {}).treasury or "")
+                    if ownerTreasury == tostring(assignedTreasuryKey) then
+                        internal[k] = v
+                    end
+                end
+            end
+            local account = bankapi.selectAccountScreen({"Account to check"}, 1, 0, internal)
+            if (account == nil) then break end
+            bankapi.showBalance(account)
+        elseif (sub == "delete") then
+            local steps = {"Account to delete"}
+            local tempData = bankapi.getClientData()
+            local internal = {}
+            for k,v in pairs(tempData) do
+                local vtre = tostring(v.treasury or "")
+                local vtype = tostring(v.type or "")
+                if vtype ~= "treasury" then
+                    if vtre == tostring(assignedTreasuryKey) then
+                        internal[k] = v
+                    elseif vtype == "company" then
+                        local ownerKey = tostring(v.owner or "")
+                        local ownerAcct = tempData[ownerKey]
+                        local ownerTreasury = tostring((ownerAcct or {}).treasury or "")
+                        if ownerTreasury == tostring(assignedTreasuryKey) then
+                            internal[k] = v
+                        end
+                    end
+                end
+            end
+            local deletion = bankapi.selectAccountScreen(steps, 1, 0, internal)
+            if (deletion == nil) then break end
+
+            local tempClientData = bankapi.getClientData()
+            local accept = bankapi.confirmScreen({"Are you sure you want to delete this account?"}, {
+                name = tempClientData[deletion].name,
+                key = deletion,
+                balance = tempClientData[deletion].balance
+            })
+            if (not accept) then break end
+
+            local success, message = bankapi.deleteAccount(deletion)
+            bankapi.responseScreen(success, message)
+        elseif (sub == "log") then
+            local tempClientData = bankapi.getClientData()
+            local internal = {}
+            for k,v in pairs(tempClientData) do
+                local vtre = tostring(v.treasury or "")
+                local vtype = tostring(v.type or "")
+                if vtype ~= "treasury" then
+                    if vtre == tostring(assignedTreasuryKey) then
+                        internal[k] = v
+                    elseif vtype == "company" then
+                        local ownerKey = tostring(v.owner or "")
+                        local ownerAcct = tempClientData[ownerKey]
+                        local ownerTreasury = tostring((ownerAcct or {}).treasury or "")
+                        if ownerTreasury == tostring(assignedTreasuryKey) then
+                            internal[k] = v
+                        end
+                    end
+                end
+            end
+            local steps = {"Account to check"}
+            local account = bankapi.selectAccountScreen(steps, 1, 0, internal)
+            if (account == nil) then break end
+            bankapi.transactionLogScreen(account)
+        elseif (sub == "resetpassword") then
+            local tempData = bankapi.getClientData()
+            local internal = {}
+            for k,v in pairs(tempData) do
+                local vtre = tostring(v.treasury or "")
+                local vtype = tostring(v.type or "")
+                local hasPass = tostring(v.password or "") ~= ""
+                if hasPass then
+                    if vtre == tostring(assignedTreasuryKey) and vtype ~= "treasury" then
+                        internal[k] = v
+                    elseif vtype == "company" then
+                        local ownerKey = tostring(v.owner or "")
+                        local ownerAcct = tempData[ownerKey]
+                        local ownerTreasury = tostring((ownerAcct or {}).treasury or "")
+                        if ownerTreasury == tostring(assignedTreasuryKey) then
+                            internal[k] = v
+                        end
+                    end
+                end
+            end
+            local account = bankapi.selectAccountScreen({"Select account to reset online password"}, 1, 0, internal)
+            if (account == nil) then break end
+            local success, message = bankapi.resetPassword(account)
+            bankapi.responseScreen(success, message)
+        elseif (sub == "freezeaccounts") then
+            local tempData = bankapi.getClientData()
+            local internal = {}
+            for k,v in pairs(tempData) do
+                local vtre = tostring(v.treasury or "")
+                local vtype = tostring(v.type or "")
+                if vtype ~= "treasury" then
+                    if vtre == tostring(assignedTreasuryKey) then
+                        internal[k] = v
+                    elseif vtype == "company" then
+                        local ownerKey = tostring(v.owner or "")
+                        local ownerAcct = tempData[ownerKey]
+                        local ownerTreasury = tostring((ownerAcct or {}).treasury or "")
+                        if ownerTreasury == tostring(assignedTreasuryKey) then
+                            internal[k] = v
+                        end
+                    end
+                end
+            end
+            local account = bankapi.selectAccountScreen({"Select account to freeze/unfreeze"}, 1, 0, internal)
+            if (account == nil) then break end
+            
+            -- Get current frozen status
+            local currentFrozen = tempData[account].frozen or false
+            local toggleOption = bankapi.optionMenu("Freeze/Unfreeze Account", {
+                {option = "toggle",
+                text = (currentFrozen and "Unfreeze" or "Freeze") .. " account"},
+                {option = "back",
+                text = "Back"}
+            }, 2, 32)
+            
+            if (toggleOption == "toggle") then
+                -- Send request to server
+                rednet.send(bankServerID, {
+                    action = "toggleAccountFrozen",
+                    key = account,
+                    frozen = not currentFrozen
+                }, "fiducia")
+                
+                local sender, response = rednet.receive("fiducia", 5)
+                if sender == bankServerID then
+                    bankapi.responseScreen(response.success, response.response)
+                else
+                    bankapi.errorScreen(text_error_noconnection)
+                end
+            end
+        end
+	elseif (command == "transaction") then
+		local tempClientData = bankapi.getClientData()
+		local steps = {"Sender account", "Recipient account", "Amount", "Transaction description"}
+		-- Restrict sender to internal accounts (same Treasury)
+		local internal = {}
+		for k,v in pairs(tempClientData) do
+            local vtre = tostring(v.treasury or "")
+            local vtype = tostring(v.type or "")
+            if vtype ~= "treasury" then
+                if vtre == tostring(assignedTreasuryKey) then
+                    internal[k] = v
+                elseif vtype == "company" then
+                    local ownerKey = tostring(v.owner or "")
+                    local ownerAcct = tempClientData[ownerKey]
+                    local ownerTreasury = tostring((ownerAcct or {}).treasury or "")
+                    if ownerTreasury == tostring(assignedTreasuryKey) then
+                        internal[k] = v
+                    end
+                end
+            end
+		end
+		local from = bankapi.selectAccountScreen(steps, 1, 0, internal)
+		if (from == nil) then break end
+		-- Recipient filtering by sender type rules
+		local recipients = {}
+		local senderType = tostring((tempClientData[from] or {}).type or "personal")
+		for k,v in pairs(tempClientData) do
+			if k ~= from then
+				local t = tostring(v.type or "personal")
+				if senderType == "personal" then
+					if t == "personal" then recipients[k] = v end
+				elseif senderType == "company" then
+					if t == "personal" or t == "company" then recipients[k] = v end
+				elseif senderType == "treasury" then
+					if t == "personal" or t == "company" then recipients[k] = v end
+				end
+			end
+		end
+		local to = bankapi.selectAccountScreen(steps, 2, from, recipients)
+		if (to == nil) then break end
+		local amount = bankapi.inputNumberScreen(steps, 3, tempClientData[from].balance)
+		if (amount == nil) then break end
+		local description = bankapi.inputTextScreen(steps, 4, 100)
+		if (description == nil) then break end
+
+		local success, message = bankapi.transaction(from, to, amount, description)
+		bankapi.responseScreen(success, message)
+
+	elseif (command == "fine") then
+		local tempClientData = bankapi.getClientData()
+		local steps = {"Account to fine", "Fine amount", "Fine description"}
+		
+		-- Filter internal accounts (same Treasury)
+		local internal = {}
+		for k,v in pairs(tempClientData) do
+            local vtre = tostring(v.treasury or "")
+            local vtype = tostring(v.type or "")
+            if vtype ~= "treasury" then
+                if vtre == tostring(assignedTreasuryKey) then
+                    internal[k] = v
+                elseif vtype == "company" then
+                    local ownerKey = tostring(v.owner or "")
+                    local ownerAcct = tempClientData[ownerKey]
+                    local ownerTreasury = tostring((ownerAcct or {}).treasury or "")
+                    if ownerTreasury == tostring(assignedTreasuryKey) then
+                        internal[k] = v
+                    end
+                end
+            end
+		end
+
+		local account = bankapi.selectAccountScreen(steps, 1, 0, internal)
+		if (account == nil) then break end
+
+		local balance = tempClientData[account].balance
+		local amount = bankapi.inputNumberScreen(steps, 2, balance)
+		if (amount == nil) then break end
+
+		if (balance - amount < 0) then
+			bankapi.errorScreen({"The fine is invalid.", "Contact the prosecutor who", "ordered to fine, and let them", "know the fine is invalid"})
+			break
+		end
+
+		local description = bankapi.inputTextScreen(steps, 3, 100)
+		if (description == nil) then break end
+
+		-- Perform transaction from user account to treasury account
+		local success, message = bankapi.transaction(account, assignedTreasuryKey, amount, description)
+		bankapi.responseScreen(success, message)
+
+	elseif (command == "delete") then
+		local steps = {"Account to delete"}
+		local deletion = bankapi.selectAccountScreen(steps, 1, 0)
+		if (deletion == nil) then break end
+
+		local tempClientData = bankapi.getClientData()
+		local accept = bankapi.confirmScreen({"Are you sure you want to delete this account?"}, {
+			name = tempClientData[deletion].name,
+			key = deletion,
+			balance = tempClientData[deletion].balance
+		})
+		if (not accept) then break end
+
+		local success, message = bankapi.deleteAccount(deletion)
+		bankapi.responseScreen(success, message)
+
+	elseif (command == "log") then
+		local tempClientData = bankapi.getClientData()
+		local steps = {"Account to check"}
+		local account = bankapi.selectAccountScreen(steps, 1, 0)
+		if (account == nil) then break end
+		bankapi.transactionLogScreen(account)
+
+	elseif (command == "balance") then
+		local account = bankapi.selectAccountScreen({"Account to check"}, 1, 0)
+		if (account == nil) then break end
+		bankapi.showBalance(account)
+
+	elseif (command == "assigncard") then
+		if (fs.exists("disk")) then
+			local tempData = bankapi.getClientData()
+			local internal = {}
+			-- Allow linking cards for personal under this Treasury, Treasury itself, and companies whose owner belongs to this Treasury
+			for k,v in pairs(tempData) do
+                local vtre = tostring(v.treasury or "")
+                local vtype = tostring(v.type or "")
+                if vtre == tostring(assignedTreasuryKey) then
+                    internal[k] = v
+                elseif vtype == "treasury" and tostring(k) == tostring(assignedTreasuryKey) then
+                    internal[k] = v
+                elseif vtype == "company" then
+                    local ownerKey = tostring(v.owner or "")
+                    local ownerAcct = tempData[ownerKey]
+                    local ownerTreasury = tostring((ownerAcct or {}).treasury or "")
+                    if ownerTreasury == tostring(assignedTreasuryKey) then
+                        internal[k] = v
+                    end
+                end
+            end
+			local account = bankapi.selectAccountScreen({"Account to link"}, 1, 0, internal)
+			if (account == nil) then break end
+			local tempClientData = bankapi.getClientData()
+			local acct = tempClientData[account]
+			local name = acct.name
+			-- Determine label tag: for company, use owner's treasury tag; otherwise assigned treasury
+			local labelTag = tostring(assignedTreasuryTag)
+			if tostring(acct.type or "") == "company" then
+				local ownerKey = acct.owner
+				local ownerAcct = tempClientData[ownerKey]
+				if ownerAcct ~= nil then
+					local ownerTreasuryKey = ownerAcct.treasury
+					local ownerTreasury = ownerTreasuryKey and tempClientData[ownerTreasuryKey] or nil
+					if ownerTreasury and tostring(ownerTreasury.tag or "") ~= "" then
+						labelTag = tostring(ownerTreasury.tag)
+					end
+				end
+			end
+			local ok, resp = bankapi.registerCard(account)
+			if ok then
+				local newId = resp -- server returns id
+				-- Persist key|id on the card for validation
+				local f = fs.open("disk/fiducia.txt", "w")
+				f.write(tostring(account).."|"..tostring(newId))
+				f.close()
+				
+				-- Set the disk label only after successful registration
+				local diskdrive = peripheral.find("drive")
+				diskdrive.setDiskLabel("Fiducia["..labelTag.."] | "..name)
+				
+				bankapi.successScreen("Card linked to "..name.." (ID: "..tostring(newId)..")")
+			else
+				bankapi.errorScreen("Registry failed: "..tostring(resp))
+			end
+		else
+			bankapi.errorScreen("Please insert disk or phone into disk drive")
+		end
+
+	elseif (command == "managecards") then
+		-- Manage cards: list, cancel, delete (Admin Terminal only)
+		local tempData = bankapi.getClientData()
+		local internal = {}
+		-- Include personal accounts under this Treasury, the Treasury itself, and companies whose owner belongs to this Treasury
+		for k,v in pairs(tempData) do
+            local vtre = tostring(v.treasury or "")
+            local vtype = tostring(v.type or "")
+            if vtre == tostring(assignedTreasuryKey) then
+                internal[k] = v
+            elseif vtype == "treasury" and tostring(k) == tostring(assignedTreasuryKey) then
+                internal[k] = v
+            elseif vtype == "company" then
+                local ownerKey = tostring(v.owner or "")
+                local ownerAcct = tempData[ownerKey]
+                local ownerTreasury = tostring((ownerAcct or {}).treasury or "")
+                if ownerTreasury == tostring(assignedTreasuryKey) then
+                    internal[k] = v
+                end
+            end
+        end
+		local account = bankapi.selectAccountScreen({"Select account"}, 1, 0, internal)
+		if (account == nil) then break end
+		local ok, cards = bankapi.listCards(account)
+		if not ok then bankapi.errorScreen(tostring(cards)); break end
+		while true do
+			local options = {}
+			for i, c in ipairs(cards) do
+				options[#options+1] = { option = tostring(c.id), text = "ID "..tostring(c.id).." | "..tostring(c.status).." | "..tostring(c.date) }
+			end
+			options[#options+1] = { option = "back", text = "Back" }
+			local choice = bankapi.optionMenu("Cards for "..tostring(tempData[account].name), options, 2, 40)
+			if choice == "back" or choice == nil then break end
+			-- Locate card
+			local selected = nil
+			for _, c in ipairs(cards) do if tostring(c.id) == tostring(choice) then selected = c break end end
+			if selected == nil then bankapi.errorScreen("Card not found"); break end
+			local action = bankapi.optionMenu("Card "..tostring(selected.id), {
+				{ option = "cancel", text = "Cancel card" },
+				{ option = "delete", text = "Delete record" },
+				{ option = "back", text = "Back" }
+			}, 2, 36)
+			if action == "cancel" then
+				local aok, aresp = bankapi.cancelCard(account, selected.id)
+				bankapi.responseScreen(aok, aresp)
+			elseif action == "delete" then
+				local dok, dresp = bankapi.deleteCardRecord(account, selected.id)
+				bankapi.responseScreen(dok, dresp)
+			end
+			-- refresh list
+			local rok, rcards = bankapi.listCards(account)
+			if rok then cards = rcards end
+		end
+
+	elseif (command == "switchtreasury") then
+		-- Re-assign this Admin Terminal to another Treasury with password verification
+		local temp = bankapi.getClientData()
+		local treasuries = {}
+		for k,v in pairs(temp) do if tostring(v.type or "") == "treasury" then treasuries[k] = v end end
+		if next(treasuries) == nil then bankapi.errorScreen("No treasuries available"); break end
+		local steps = {"Select Treasury", "Enter Treasury password"}
+		local selected = bankapi.selectAccountScreen(steps, 1, 0, treasuries)
+		if (selected == nil) then break end
+		local tpass = bankapi.inputTextScreen(steps, 2, 64)
+		if (tpass == nil or tpass == "") then break end
+		local stored = tostring((temp[selected] or {}).password or "")
+		local ok = false
+		if stored:match("^[^:]+:[^:]+:%d+$") ~= nil then
+			ok = bankapi.verifyPasswordAgainstFullHash(tpass, stored)
+		else
+			ok = (tpass == stored)
+		end
+		if not ok then bankapi.errorScreen("Incorrect Treasury password"); break end
+		assignedTreasuryKey = selected
+		local tfw = fs.open("terminal_treasury.txt", "w")
+		tfw.write(assignedTreasuryKey)
+		tfw.close()
+		assignedTreasuryName = tostring(temp[selected].name or "Treasury")
+		assignedTreasuryTag = tostring(temp[selected].tag or "??")
+		assignedTreasuryColor = tonumber(temp[selected].color or colors.red)
+		bankapi.successScreen("Switched to Treasury: "..assignedTreasuryName)
+		os.reboot()
+	
+	elseif (command == "installapp") then
+		if (fs.exists("disk")) then
+			term.setBackgroundColor(colors.black)
+			term.setTextColor(colors.white)
+			term.setCursorPos(1,1)
+			term.clear()
+			print("Installing Fiducia app in inserted phone...")
+			shell.run("delete disk/startup.lua")
+			shell.run("pastebin get XpFw5fV5 disk/startup.lua")
+			shell.run("delete disk/bankapi.lua")
+			shell.run("pastebin get mWQN0120 disk/bankapi.lua")
+			shell.run("delete disk/fiduciapp.lua")
+			shell.run("pastebin get JsAAxYaL disk/fiduciapp.lua")
+			bankapi.successScreen("Application installed!")
+		else
+			bankapi.errorScreen("Please insert phone into disk drive")
+		end
+
+	elseif (command == "resetpassword") then
+		local temp = bankapi.getClientData()
+		local onlyOnline = {}
+		for k,v in pairs(temp) do
+			if tostring(v.password or "") ~= "" then
+				onlyOnline[k] = v
+			end
+		end
+		local account = bankapi.selectAccountScreen({"Select account to reset online password"}, 1, 0, onlyOnline)
+		if (account == nil) then break end
+		local success, message = bankapi.resetPassword(account)
+		bankapi.responseScreen(success, message)
+
+	elseif (command == "logout") then
+		os.reboot()
+	end
+end
+
+end
+
+while true do
+    local ok, err = pcall(main)
+    if not ok then
+        term.setBackgroundColor(colors.black)
+        term.setTextColor(colors.red)
+        term.clear()
+        term.setCursorPos(1,1)
+        if err == "Terminated" then
+            print("Termination prohibited.")
+        else
+            print("Critical Admin Error: " .. tostring(err))
+        end
+        print("Restarting in 5 seconds...")
+        sleep(5)
+    end
+end

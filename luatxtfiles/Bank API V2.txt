@@ -1,0 +1,2182 @@
+-- Bank API (mWQN0120)
+
+local backgroundColor = colors.gray
+local buttonShadowColor = colors.brown
+local buttonTextColor = colors.yellow
+local grayedOutColor = colors.lightGray
+local specialTextColor = colors.yellow
+
+-- General buttons: lighter red center, darker red edges
+local buttonColor = colors.red
+local secondaryButtonColor = colors.brown
+
+-- Accept/Continue use the general lighter red gradient
+local acceptButtonColor = colors.red
+local acceptSecondaryColor = colors.brown
+
+-- Danger buttons (Logout, Cancel, Back): slightly darker red gradient
+local cancelButtonColor = colors.magenta
+local cancelSecondaryColor = colors.purple
+
+local function applyRedButtonPalette()
+    -- Apply requested red gradients via palette remap
+    -- General buttons: center #972634, edges #7f2839
+    -- Danger buttons:  center #931A28, edges #731a27
+    if term and term.setPaletteColor then
+        -- General buttons
+        pcall(term.setPaletteColor, colors.red,   0x972634)
+        pcall(term.setPaletteColor, colors.brown, 0x7f2839)
+        -- Danger buttons
+        pcall(term.setPaletteColor, colors.magenta, 0x931A28)
+        pcall(term.setPaletteColor, colors.purple,  0x731a27)
+    end
+end
+
+applyRedButtonPalette()
+
+local bankServerID = 0
+local readingPosX = 0
+local readingPosY = 0
+local readingString = ""
+local reading = false
+local readingMax = 10
+
+local function contrastColor(color)
+	if (color == colors.white) then return colors.black end
+	if (color == colors.orange) then return colors.black end
+	if (color == colors.magenta) then return colors.black end
+	if (color == colors.lightBlue) then return colors.black end
+	if (color == colors.yellow) then return colors.black end
+	if (color == colors.lime) then return colors.black end
+	if (color == colors.pink) then return colors.black end
+	if (color == colors.gray) then return colors.black end
+	if (color == colors.lightGray) then return colors.black end
+	if (color == colors.cyan) then return colors.white end
+	if (color == colors.purple) then return colors.white end
+	if (color == colors.blue) then return colors.white end
+	if (color == colors.brown) then return colors.white end
+	if (color == colors.green) then return colors.black end
+	if (color == colors.red) then return colors.black end
+	if (color == colors.black) then return colors.white end
+	return colors.black
+end
+
+local serverData = nil
+
+-- Secure channel configuration on client (ATM/API)
+-- Set `networkSecret` to the same secret configured on the server to enable encryption.
+local networkSecret = ""
+local api_sessionNonce = ""
+local api_secureEnabledServer = false
+local api_secure_enabled = false
+
+-- Secure channel helpers (AES-256-CTR, Base64, keyed MAC using ASHA-like hash)
+-- Byte helpers
+local function to_bytes(str)
+    local t = {}
+    for i=1,#str do t[#t+1] = string.byte(str,i) end
+    return t
+end
+local function from_bytes(t)
+    local s = {}
+    for i=1,#t do s[#s+1] = string.char(t[i]) end
+    return table.concat(s)
+end
+
+-- Base64
+local b64chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+local function b64encode(data)
+    local bytes = to_bytes(data)
+    local out = {}
+    for i=1,#bytes,3 do
+        local b1 = bytes[i] or 0
+        local b2 = bytes[i+1] or 0
+        local b3 = bytes[i+2] or 0
+        local n = bit32.bor(bit32.lshift(b1,16), bit32.lshift(b2,8), b3)
+        local c1 = bit32.band(bit32.rshift(n,18),0x3F)+1
+        local c2 = bit32.band(bit32.rshift(n,12),0x3F)+1
+        local c3 = bit32.band(bit32.rshift(n,6),0x3F)+1
+        local c4 = bit32.band(n,0x3F)+1
+        out[#out+1] = b64chars:sub(c1,c1)
+        out[#out+1] = b64chars:sub(c2,c2)
+        if (i+1) <= #bytes then out[#out+1] = b64chars:sub(c3,c3) else out[#out+1] = '=' end
+        if (i+2) <= #bytes then out[#out+1] = b64chars:sub(c4,c4) else out[#out+1] = '=' end
+    end
+    return table.concat(out)
+end
+local function b64decode(data)
+    local out = {}
+    local i = 1
+    while i <= #data do
+        local c1 = data:sub(i,i); i=i+1
+        local c2 = data:sub(i,i); i=i+1
+        local c3 = data:sub(i,i); i=i+1
+        local c4 = data:sub(i,i); i=i+1
+        local n1 = b64chars:find(c1,1,true); local n2 = b64chars:find(c2,1,true)
+        local n3 = (c3=='=') and nil or b64chars:find(c3,1,true)
+        local n4 = (c4=='=') and nil or b64chars:find(c4,1,true)
+        if n1 and n2 then
+            local n = bit32.bor(bit32.lshift(n1-1,18), bit32.lshift(n2-1,12), (n3 and bit32.lshift(n3-1,6) or 0), (n4 and (n4-1) or 0))
+            out[#out+1] = bit32.band(bit32.rshift(n,16),0xFF)
+            if n3 then out[#out+1] = bit32.band(bit32.rshift(n,8),0xFF) end
+            if n4 then out[#out+1] = bit32.band(n,0xFF) end
+        end
+    end
+    return from_bytes(out)
+end
+
+-- Minimal AES-256-CTR (structure aligned with server)
+local function xtime(a)
+    local r = bit32.lshift(a,1)
+    if bit32.band(a,0x80) ~= 0 then r = bit32.bxor(r,0x1B) end
+    return bit32.band(r,0xFF)
+end
+local function sub_byte(b)
+    local s = {
+        99,124,119,123,242,107,111,197,48,1,103,43,254,215,171,118,
+        202,130,201,125,250,89,71,240,173,212,162,175,156,164,114,192,
+        183,253,147,38,54,63,247,204,52,165,229,241,113,216,49,21,
+        4,199,35,195,24,150,5,154,7,18,128,226,235,39,178,117,
+        9,131,44,26,27,110,90,160,82,59,214,179,41,227,47,132,
+        83,209,0,237,32,252,177,91,106,203,190,57,74,76,88,207,
+        208,239,170,251,67,77,51,133,69,249,2,127,80,60,159,168,
+        81,163,64,143,146,157,56,245,188,182,218,33,16,255,243,210,
+        205,12,19,236,95,151,68,23,196,167,126,61,100,93,25,115,
+        96,129,79,220,34,42,144,136,70,238,184,20,222,94,11,219,
+        224,50,58,10,73,6,36,92,194,211,172,98,145,149,228,121,
+        231,200,55,109,141,213,78,169,108,86,244,234,101,122,174,8,
+        186,120,37,46,28,166,180,198,232,221,116,31,75,189,139,138,
+        112,62,181,102,72,3,246,14,97,53,87,185,134,193,29,158,
+        225,248,152,17,105,217,142,148,155,30,135,233,206,85,40,223,
+        140,161,137,13,191,230,66,104,65,153,45,15,176,84,187,22
+    }
+    return s[(b or 0)+1] or 0
+end
+local function sub_bytes(s)
+    for i=1,16 do s[i] = sub_byte(s[i]) end
+end
+local function shift_rows(s)
+    local r = {}
+    for i=1,16 do r[i] = s[i] end
+    s[2],s[6],s[10],s[14] = r[6],r[10],r[14],r[2]
+    s[3],s[7],s[11],s[15] = r[11],r[15],r[3],r[7]
+    s[4],s[8],s[12],s[16] = r[16],r[4],r[8],r[12]
+end
+local function mix_columns(s)
+    for c=0,3 do
+        local i = 1 + c*4
+        local a0,a1,a2,a3 = s[i],s[i+1],s[i+2],s[i+3]
+        local r0 = bit32.bxor(bit32.bxor(xtime(a0), a1), bit32.bxor(a2, a3))
+        local r1 = bit32.bxor(bit32.bxor(xtime(a1), a2), bit32.bxor(a3, a0))
+        local r2 = bit32.bxor(bit32.bxor(xtime(a2), a3), bit32.bxor(a0, a1))
+        local r3 = bit32.bxor(bit32.bxor(xtime(a3), a0), bit32.bxor(a1, a2))
+        s[i],s[i+1],s[i+2],s[i+3] = bit32.band(r0,0xFF),bit32.band(r1,0xFF),bit32.band(r2,0xFF),bit32.band(r3,0xFF)
+    end
+end
+local function add_round_key(s, rk, round)
+    local off = round*16
+    for i=1,16 do s[i] = bit32.band(bit32.bxor(s[i], rk[off+i]), 0xFF) end
+end
+local function rot_word(w)
+    return {w[2],w[3],w[4],w[1]}
+end
+local function sub_word(w)
+    return {sub_byte(w[1]),sub_byte(w[2]),sub_byte(w[3]),sub_byte(w[4])}
+end
+local rcon = {1,2,4,8,16,32,64,128,27,54}
+local function key_expansion_256(key)
+    local w = {}
+    for i=1,32,4 do w[#w+1]={key[i] or 0,key[i+1] or 0,key[i+2] or 0,key[i+3] or 0} end
+    local i = 9
+    while #w < 60 do
+        local temp = w[#w]
+        local t = rot_word(temp)
+        t = sub_word(t)
+        t[1] = bit32.band(bit32.bxor(t[1], rcon[i-8]), 0xFF)
+        local nw = {}
+        for j=1,4 do nw[j] = bit32.band(bit32.bxor(w[#w-8][j], t[j]),0xFF) end
+        w[#w+1] = nw
+        for k=1,3 do
+            local prev = w[#w]
+            local nww = {}
+            for j=1,4 do nww[j] = bit32.band(bit32.bxor(w[#w-8][j], prev[j]),0xFF) end
+            w[#w+1] = nww
+        end
+        local temp2 = sub_word(w[#w])
+        local nww2 = {}
+        for j=1,4 do nww2[j] = bit32.band(bit32.bxor(w[#w-8][j], temp2[j]),0xFF) end
+        w[#w+1] = nww2
+        for k=1,3 do
+            local prev = w[#w]
+            local nww = {}
+            for j=1,4 do nww[j] = bit32.band(bit32.bxor(w[#w-8][j], prev[j]),0xFF) end
+            w[#w+1] = nww
+        end
+        i=i+1
+    end
+    local rk = {}
+    for r=0,14 do for c=1,4 do for j=1,4 do rk[#rk+1]=w[r*4+c][j] end end end
+    return rk
+end
+local function aes_encrypt_block(state, round_keys)
+    local s = {}
+    for i=1,16 do s[i] = state[i] or 0 end
+    add_round_key(s, round_keys, 0)
+    for r=1,13 do
+        sub_bytes(s); shift_rows(s); mix_columns(s); add_round_key(s, round_keys, r)
+    end
+    sub_bytes(s); shift_rows(s); add_round_key(s, round_keys, 14)
+    return s
+end
+local function ctr_inc(counter_bytes)
+    for i = #counter_bytes, 1, -1 do
+        local v = (counter_bytes[i] or 0) + 1
+        counter_bytes[i] = bit32.band(v, 0xFF)
+        if v <= 0xFF then break end
+    end
+end
+local function aes_ctr_crypt(round_keys, iv_bytes, data)
+    local input = to_bytes(data)
+    local out = {}
+    local counter = {}
+    for i=1,16 do counter[i] = iv_bytes[i] or 0 end
+    for i=1,#input,16 do
+        local block = {}
+        for j=1,16 do block[j] = input[i+j-1] or 0 end
+        local ks = aes_encrypt_block(counter, round_keys)
+        for j=1,16 do out[#out+1] = bit32.band(bit32.bxor(block[j], ks[j]), 0xFF) end
+        ctr_inc(counter)
+    end
+    return from_bytes(out)
+end
+
+local function hex_to_bytes(hex)
+    local t = {}
+    for i=1,#hex,2 do t[#t+1] = tonumber(hex:sub(i,i+1),16) or 0 end
+    return t
+end
+
+local function derive_keys()
+    local encHex = api_ASHA512(networkSecret.."|enc|"..api_sessionNonce, "", 1)
+    local macHex = api_ASHA512(networkSecret.."|mac|"..api_sessionNonce, "", 1)
+    local encBytes = hex_to_bytes(encHex)
+    local aesKey = {}
+    for i=1,32 do aesKey[i] = encBytes[i] or 0 end
+    local roundKeys = key_expansion_256(aesKey)
+    return roundKeys, macHex
+end
+
+local api_out_ctr = 0
+local server_in_ctr = 0
+local roundKeys_cached, macHex_cached
+local function ensure_keys()
+    if (roundKeys_cached == nil or macHex_cached == nil) then
+        roundKeys_cached, macHex_cached = derive_keys()
+    end
+end
+
+local function keyed_mac(macHex, role, iv_b64, ctr_str, ct_b64)
+    local material = role.."|"..iv_b64.."|"..ctr_str.."|"..ct_b64
+    return api_ASHA512(macHex.."|"..material, "", 1)
+end
+
+local function random_bytes(n)
+    local s = {}
+    for i=1,n do s[#s+1] = string.char(math.random(0,255)) end
+    return table.concat(s)
+end
+
+local function secure_send_envelope(payload_table)
+    ensure_keys()
+    api_out_ctr = api_out_ctr + 1
+    local iv = random_bytes(16)
+    local iv_b64 = b64encode(iv)
+    local payload_str = textutils.serialize(payload_table)
+    local ct = aes_ctr_crypt(roundKeys_cached, to_bytes(iv), payload_str)
+    local ct_b64 = b64encode(ct)
+    local mac = keyed_mac(macHex_cached, "api", iv_b64, tostring(api_out_ctr), ct_b64)
+    return { role = "api", secure = true, iv = iv_b64, ctr = api_out_ctr, ct = ct_b64, mac = mac }
+end
+
+local function secure_receive_decode(envelope)
+    ensure_keys()
+    local iv = b64decode(envelope.iv or "")
+    local ct = b64decode(envelope.ct or "")
+    local mac = tostring(envelope.mac or "")
+    local ctr_str = tostring(envelope.ctr or "0")
+    local expect = keyed_mac(macHex_cached, "server", envelope.iv, ctr_str, envelope.ct)
+    if expect ~= mac then return false, "Invalid MAC" end
+    local pt = aes_ctr_crypt(roundKeys_cached, to_bytes(iv), ct)
+    if tonumber(ctr_str) <= server_in_ctr then return false, "Replay" end
+    server_in_ctr = tonumber(ctr_str)
+    return true, textutils.unserialize(pt)
+end
+
+local function sendRequest(message)
+    -- Decide secure/plain based on negotiated flags
+    if api_secure_enabled then
+        local envelope = secure_send_envelope(message)
+        rednet.send(bankServerID, envelope, "fiducia")
+        local sender, response = rednet.receive("fiducia", 3)
+        if response and response.secure == true then
+            local ok, dec = secure_receive_decode(response)
+            if ok then return { success = dec.success, response = dec.response } else return { success=false, response=dec } end
+        else
+            return response
+        end
+    else
+        rednet.send(bankServerID, message, "fiducia")
+        local sender, response = rednet.receive("fiducia", 3)
+        return response
+    end
+end
+
+function getServerData()
+	print("Connecting to server...")
+	local message = {
+		action = "getServerData"
+	}
+	while (true) do
+		rednet.broadcast(message, "fiducia")
+		local sender, message = rednet.receive("fiducia", 3)
+		if (message ~= nil and os.computerID() ~= sender and message.response ~= nil) then
+			bankServerID = sender
+			print("Successfully connected to server [#"..sender.."]")
+			lang = message.response.lang
+			serverData = message.response
+			-- Secure channel negotiation parameters
+			if (serverData.sessionNonce ~= nil) then api_sessionNonce = tostring(serverData.sessionNonce) else api_sessionNonce = "" end
+			api_secureEnabledServer = (serverData.secureEnabled == true)
+			api_secure_enabled = (api_secureEnabledServer and networkSecret ~= nil and networkSecret ~= "" and api_sessionNonce ~= "")
+			return message.response
+		end
+	end
+end
+
+function getClientData()
+    local message = {
+        action = "getClientData"
+    }
+    -- Be robust on first world load: server may still be starting.
+    -- Try a few times, then fall back to an empty table to avoid nil errors.
+    for i = 1, 5 do
+        local resp = sendRequest(message)
+        if resp and resp.response ~= nil then
+            return resp.response
+        end
+        sleep(0.2)
+    end
+    return {}
+end
+
+local function drawBox(background, foreground, x, y, w, h)
+	term.setBackgroundColor(background)
+	term.setTextColor(foreground)
+	-- Top
+	term.setCursorPos(x, y)
+	term.write(string.char(151))
+	term.write(string.rep(string.char(131), w-2))
+	term.setBackgroundColor(foreground)
+	term.setTextColor(background)
+	term.write(string.char(148))
+	-- Left
+	term.setBackgroundColor(background)
+	term.setTextColor(foreground)
+	for i=y+1, y+h-2 do
+		term.setCursorPos(x, i)
+		term.write(string.char(149))
+	end
+	-- Right
+	term.setBackgroundColor(foreground)
+	term.setTextColor(background)
+	for i=y+1, y+h-2 do
+		term.setCursorPos(x+w-1, i)
+		term.write(string.char(149))
+	end
+	-- Bottom
+	term.setCursorPos(x, y+h-1)
+	term.write(string.char(138))
+	term.write(string.rep(string.char(143), w-2))
+	term.setBackgroundColor(foreground)
+	term.setTextColor(background)
+	term.write(string.char(133))
+end
+
+local function drawBackground()
+	local scrW, scrH = term.getSize()
+	term.setBackgroundColor(backgroundColor)
+	term.clear()
+end
+
+function drawButton(primary, secondary, textColor, x, y, w, text)
+	local ch = string.char(127)
+	term.setCursorPos(x, y)
+	term.setBackgroundColor(secondary)
+	term.setTextColor(primary)
+	term.write(" ")
+	term.write(ch)
+	term.setBackgroundColor(primary)
+	term.setTextColor(secondary)
+	term.write(ch)
+	term.setBackgroundColor(primary)
+	term.write(string.rep(" ", w-6))
+	term.setBackgroundColor(primary)
+	term.setTextColor(secondary)
+	term.write(ch)
+	term.setBackgroundColor(secondary)
+	term.setTextColor(primary)
+	term.write(ch)
+	term.write(" ")
+
+	-- Shadow
+	term.setBackgroundColor(backgroundColor)
+	term.setTextColor(colors.black)
+	term.write(string.char(148))
+	local scrW, scrH = term.getSize()
+	if (y < scrH) then
+		term.setCursorPos(x, y+1)
+		term.write(string.char(130))
+		term.write(string.rep(string.char(131), w-1))
+		term.write(string.char(129))
+	end
+
+	term.setBackgroundColor(primary)
+	term.setTextColor(textColor)
+
+	term.setCursorPos(x+w/2-string.len(text)/2, y)
+	term.write(text)
+
+	return {x=x, y=y, w=w}
+end
+
+function mouseInButton(button, mousex, mousey)
+	return (mousex >= button.x and mousex <= button.x+button.w and button.y == mousey)
+end
+
+function drawBackButton()
+    local scrW, scrH = term.getSize()
+    local text = "Back"
+	local x = 2
+	local y = scrH-1
+
+	local ch = string.char(127)
+
+	local width = string.len(text)
+
+	return drawButton(cancelButtonColor, cancelSecondaryColor, buttonTextColor, x, y, width+6, text)
+end
+
+function drawContinueButton()
+    local scrW, scrH = term.getSize()
+    local text = "Continue"
+	local x = 2
+	local y = scrH-1
+
+	local ch = string.char(127)
+
+	local width = string.len(text)
+
+	return drawButton(acceptButtonColor, acceptSecondaryColor, buttonTextColor, scrW-width-7, y, width+6, text)
+end
+
+function drawAcceptButton()
+    local scrW, scrH = term.getSize()
+    local text = "Accept"
+	local x = 2
+	local y = scrH-1
+
+	local ch = string.char(127)
+
+	local width = string.len(text)
+
+	return drawButton(acceptButtonColor, acceptSecondaryColor, buttonTextColor, scrW-width-7, y, width+6, text)
+end
+
+function transaction(from, to, amount, description)
+	--local success, response = transaction(from, to, amount, description)
+	local message = {
+		action = "transaction",
+		from = from,
+		to = to,
+		amount = amount,
+		description = description
+	}
+	local resp = sendRequest(message)
+	return resp.success, resp.response
+end
+
+function deposit(key, amount)
+	local message = {
+		action = "deposit",
+		key = key,
+		amount = amount
+	}
+	local resp = sendRequest(message)
+	return resp.success, resp.response
+end
+
+function withdraw(key, amount)
+	local message = {
+		action = "withdraw",
+		key = key,
+		amount = amount
+	}
+	local resp = sendRequest(message)
+	return resp.success, resp.response
+end
+
+function newAccount(name, balance, color, treasuryKey)
+    local message = {
+        action = "new",
+        name = name,
+        balance = balance,
+        color = color
+    }
+    if treasuryKey ~= nil and tostring(treasuryKey) ~= "" then
+        message.treasury = tostring(treasuryKey)
+    end
+    local resp = sendRequest(message)
+    if resp == nil then
+        return false, text_error_noconnection
+    end
+    return resp.success, resp.response
+end
+
+-- Create a company account linked to an owner account
+function newCompany(name, ownerKey, color, shares)
+    local message = {
+        action = "newCompany",
+        name = name,
+        owner = ownerKey,
+        color = color,
+        shares = tonumber(shares or 0)
+    }
+    local resp = sendRequest(message)
+    return resp.success, resp.response
+end
+
+function deleteAccount(key)
+	local message = {
+		action = "delete",
+		key = key
+	}
+	local resp = sendRequest(message)
+	return resp.success, resp.response
+end
+
+function setPassword(key, password)
+    local message = {
+        action = "setPassword",
+        key = key,
+        password = password
+    }
+    local resp = sendRequest(message)
+    return resp.success, resp.response
+end
+
+function getTransactionLog(key)
+	local message = {
+		action = "getTransactionLog",
+		key = key
+	}
+	local resp = sendRequest(message)
+	if (resp == nil) then
+		print(text_error_noconnection)
+		return {}
+	end
+	return resp.response
+end
+
+function transactionInfoScreen(log)
+	local tempClientData = getClientData()
+
+	drawBackground()
+	term.setCursorPos(1,2)
+	term.setTextColor(colors.white)
+    local amountText
+    if (tonumber(log.amount) > 0) then
+        print("Sender: "..tempClientData[log.other].name)
+        term.write("Amount: ")
+        amountText = "+$"..log.amount
+        term.setTextColor(colors.green)
+    end
+    if (tonumber(log.amount) < 0) then
+        print("Recipient: "..tempClientData[log.other].name)
+        term.write("Amount: ")
+        amountText = "-$"..math.abs(log.amount)
+        term.setTextColor(colors.red)
+    end
+    print(amountText)
+    term.setTextColor(colors.white)
+    print("Resulting balance: $"..log.balance)
+    print("Date and time: "..log.time)
+    if (string.len(log.description) > 0) then
+        print("Description:")
+        term.setTextColor(specialTextColor)
+        print(log.description)
+    else
+        term.setTextColor(grayedOutColor)
+        print("No description")
+    end
+
+	drawBackButton()
+	safePullEvent("mouse_click")
+end
+
+local function startRead(maxLength)
+	local scrW, scrH = term.getSize()
+	readingPosX, readingPosY = term.getCursorPos()
+	reading = true
+	readingString = ""
+	readingMax = maxLength
+	term.setBackgroundColor(colors.white)
+	term.setTextColor(colors.black)
+	term.setCursorPos(readingPosX, readingPosY)
+	term.write(string.rep(" ", scrW-2))
+	term.setCursorBlink(true)
+end
+
+local function processChar(char)
+	term.setBackgroundColor(colors.white)
+	term.setTextColor(colors.black)
+	term.setCursorPos(readingPosX, readingPosY)
+	readingString = readingString..char
+	term.write(readingString)
+end
+
+local function processKey(key)
+	if (key == keys.backspace) then
+		readingString = string.sub(readingString, 1, string.len(readingString)-1)
+		term.setBackgroundColor(colors.white)
+		term.setCursorPos(readingPosX+string.len(readingString), readingPosY)
+		term.write(" ")
+		term.setCursorPos(readingPosX+string.len(readingString), readingPosY)
+	elseif (key == keys.enter) then
+		term.setCursorBlink(false)
+		return readingString
+	end
+	return nil
+end
+
+local function cancelableRead(maxLength, secondaryButtonX)
+	startRead(maxLength)
+	local back = drawBackButton()
+	local accept = drawAcceptButton()
+	term.setCursorPos(readingPosX, readingPosY)
+	local input = nil
+	while input == nil do
+		local event, a, b, c = safePullEvent()
+		if (event == "char") then
+			processChar(a)
+		elseif (event == "key") then
+			input = processKey(a)
+		elseif (event == "mouse_click") then
+			local cx = b
+			local cy = c
+			if (mouseInButton(back, cx, cy)) then
+				term.setCursorBlink(false)
+				return nil
+			elseif (mouseInButton(accept, cx, cy)) then
+				term.setCursorBlink(false)
+				input = readingString
+				break
+			elseif (secondaryButtonX ~= nil) then
+				if (cy == back.y and cx >= secondaryButtonX) then
+					return true
+				end
+			end
+		end
+	end
+	term.setCursorBlink(false)
+	if (readingMax > 0 and string.len(input) > readingMax) then
+		input = string.sub(input, 1, readingMax)
+	end
+	return input
+end
+
+function transactionLogScreen(key)
+	local tempClientData = getClientData()
+	local backwardsLogs = getTransactionLog(key)
+	local allLogs = {}
+
+	local logCount = #backwardsLogs
+	for i=0, logCount-1 do
+		allLogs[i+1] = backwardsLogs[logCount-i] -- Newest first
+	end
+
+	local scrW, scrH = term.getSize()
+	local y = 3 -- Moved down for search bar
+	local floor = 1
+	local x = 1
+	local w = scrW
+
+	if (pocket) then
+		floor = 2
+	end
+
+	local first = 0
+	local logHeight = 2
+	local max = math.floor((scrH-floor-logHeight-1)/logHeight)
+
+	local scrollButtonY = scrH-1
+	local scrollButtonCenterX = math.floor(scrW/2)+10
+
+	if (pocket) then
+		scrollButtonY = scrH-3
+		scrollButtonCenterX = math.floor(scrW/2)+1
+	end
+
+	local filterText = ""
+
+	while true do
+		local filteredLogs = {}
+		if filterText == "" then
+			filteredLogs = allLogs
+		else
+			local lowerFilter = string.lower(filterText)
+			for _, v in ipairs(allLogs) do
+				local name = "deleted"
+				if tempClientData[v.other] then name = string.lower(tempClientData[v.other].name) end
+				local desc = string.lower(v.description or "")
+				local date = string.lower(v.time or "")
+				if string.find(name, lowerFilter) or string.find(desc, lowerFilter) or string.find(date, lowerFilter) then
+					table.insert(filteredLogs, v)
+				end
+			end
+		end
+
+		drawBackground()
+		
+		-- Search Bar
+		term.setCursorPos(1, 1)
+		term.setBackgroundColor(colors.white)
+		term.setTextColor(colors.gray)
+		term.write(" Search: ")
+		term.setTextColor(colors.black)
+		local displayFilter = filterText
+		if filterText == "" then 
+			term.setTextColor(colors.lightGray)
+			displayFilter = "Type to filter (Name/Desc/Date)" 
+		end
+		term.write(string.sub(displayFilter, 1, scrW - 10))
+		term.write(string.rep(" ", scrW - string.len(" Search: ") - string.len(string.sub(displayFilter, 1, scrW - 10))))
+
+		local prevPage = drawButton(buttonColor, secondaryButtonColor, buttonTextColor,scrollButtonCenterX-13, scrollButtonY, 7, string.char(27))
+		if (first <= 0) then
+    		drawButton(colors.lightGray, colors.gray, buttonTextColor, scrollButtonCenterX-13, scrollButtonY, 7, string.char(27))
+		end
+
+		local totalLogs = #filteredLogs
+		local i = 0
+		local buttons = {}
+		
+		for k = first + 1, math.min(first + max, totalLogs) do
+			local v = filteredLogs[k]
+			local order = totalLogs - k + 1
+			local amountText = ""
+			if (tonumber(v.amount) > 0) then
+				amountText = "+$"..v.amount
+			else
+				amountText = "-$"..math.abs(v.amount)
+			end
+
+			-- content row
+			term.setCursorPos(1, y + i)
+			buttons[y + i] = k
+			term.setBackgroundColor(colors.white)
+			term.write(string.rep(" ", scrW))
+			
+			term.setCursorPos(1, y + i)
+			local name = tempClientData[v.other] and tempClientData[v.other].name or "<deleted>"
+			
+			term.setTextColor(colors.lightGray)
+			term.write(string.sub(v.time, 1, 5).." ") -- Time prefix
+
+			term.setTextColor(colors.black)
+			term.write(string.sub(name, 1, math.floor(scrW*0.3)))
+
+			term.setCursorPos(scrW*0.4, y + i)
+			if (tonumber(v.amount) >= 0) then
+				term.setTextColor(colors.green)
+			else
+				term.setTextColor(colors.red)
+			end
+			term.write(amountText)
+
+			term.setCursorPos(scrW*0.6, y + i)
+			term.setTextColor(colors.gray)
+			term.write(string.sub(v.description, 1, scrW - (scrW*0.6) - 1))
+
+			-- separator
+			if k < math.min(first + max, totalLogs) then
+				term.setCursorPos(1, y + i + 1)
+				term.setBackgroundColor(backgroundColor)
+				term.setTextColor(colors.lightGray)
+				term.write(string.rep(string.char(140), scrW))
+			end
+
+			i = i + logHeight
+		end
+
+		local nextPage = drawButton(buttonColor, secondaryButtonColor, buttonTextColor, scrollButtonCenterX+5, scrollButtonY, 7, string.char(26))
+		if (first+max >= totalLogs) then
+    		drawButton(colors.lightGray, colors.gray, buttonTextColor, scrollButtonCenterX+5, scrollButtonY, 7, string.char(26))
+		end
+
+		-- page indicator
+		local pages = math.max(1, math.ceil(totalLogs/max))
+		local pageText = tostring(math.floor(first/max)+1).."/"..pages
+		term.setCursorPos(scrollButtonCenterX-string.len(pageText)/2, scrollButtonY)
+		term.setBackgroundColor(backgroundColor)
+		term.setTextColor(colors.orange)
+		term.write(pageText)
+
+		local backButton = drawBackButton()
+
+		local eventData = {safePullEvent()}
+		local event = eventData[1]
+
+		if event == "mouse_click" then
+			local cx = eventData[3]
+			local cy = eventData[4]
+			
+			if cy == 1 then -- Clicked search bar
+				term.setCursorPos(10, 1)
+				term.setCursorBlink(true)
+				local input = cancelableRead(30, nil)
+				if input ~= nil then
+					filterText = input
+					first = 0
+				end
+				term.setCursorBlink(false)
+			elseif (mouseInButton(prevPage, cx, cy)) then
+				if (first > 0) then
+					first = first-max
+				end
+			elseif (mouseInButton(nextPage, cx, cy)) then
+				if (first+max < totalLogs) then
+					first = first+max
+				end
+			elseif cy >= y and buttons[cy] then
+				transactionInfoScreen(filteredLogs[buttons[cy]])
+			elseif (mouseInButton(backButton, cx, cy)) then
+				return nil
+			end
+		elseif event == "mouse_scroll" then
+			local scroll = eventData[2]
+			if (scroll < 0) then
+				if (first > 0) then first = first-max end
+			else
+				if (first+max < totalLogs) then first = first+max end
+			end
+		elseif event == "char" then
+			filterText = filterText .. eventData[2]
+			first = 0
+		elseif event == "key" then
+			if eventData[2] == keys.backspace then
+				filterText = string.sub(filterText, 1, -2)
+				first = 0
+			end
+		end
+	end
+end
+
+function optionMenu(title, options, spacing, width)
+	if (spacing == nil) then spacing = 2 end
+	if (width == nil) then width = 30 end
+	drawBackground()
+	local buttons = {}
+	local scrW, scrH = term.getSize()
+	local w = width
+	local x = scrW/2-w/2+1
+	local y = math.floor(scrH/2-(#options+1)*spacing/2)+2
+	local i = 0
+	term.setCursorPos(scrW/2-string.len(title)/2+1, y+i)
+	term.setTextColor(specialTextColor)
+	term.write(title)
+	i = i+spacing
+
+	term.setBackgroundColor(buttonColor)
+	term.setTextColor(buttonTextColor)
+	for k, v in ipairs(options) do
+		drawButton(buttonColor, secondaryButtonColor, buttonTextColor, x, y+i, w, v.text)
+		
+		buttons[y+i] = v.option
+		i = i+spacing
+	end
+
+	while true do
+		local event, button, cx, cy = safePullEvent("mouse_click")
+		if (cx >= x-1 and cx <= x+width-1 and cy >= y and cy < y+(#options+1)*spacing) then
+			if buttons[cy] ~= nil then
+				return buttons[cy]
+			end
+		end
+	end
+end
+
+local function drawSteps(steps, currentStep)
+	term.setCursorPos(1, 2)
+	drawBackground()
+	local stepCount = #steps
+	if (stepCount == 1) then
+		term.setTextColor(specialTextColor)
+		print(steps[1])
+	else
+		for k, v in ipairs(steps) do
+			term.setTextColor(grayedOutColor)
+			if (k == currentStep) then
+				term.setTextColor(specialTextColor)
+				term.write(string.char(16).." "..k..". ")
+			else
+				term.write(" "..k..". ")
+			end
+			print(v)
+		end
+	end
+end
+
+function showBalance(key)
+	local tempClientData = getClientData()
+	drawBackground()
+	local scrW, scrH = term.getSize()
+	
+    local text = "Balance:" 
+	term.setTextColor(specialTextColor)
+	term.setCursorPos(scrW/2-string.len(text)/2+2,scrH/2-3)
+	term.write(text)
+	local itemMax = math.floor(tempClientData[key].balance/serverData.valueMultiplier)
+
+	text = "$"..tempClientData[key].balance
+	drawBox(backgroundColor, colors.lightGray, 4, scrH/2-1, scrW-6, 5)
+	term.setCursorPos(scrW/2-string.len(text)/2+1,scrH/2)
+	term.setBackgroundColor(backgroundColor)
+	term.setTextColor(specialTextColor)
+	term.write(text)
+
+    text = itemMax.." "..serverData.currency[1].plural
+	term.setCursorPos(scrW/2-string.len(text)/2+1,scrH/2+2)
+	term.write(text)
+
+	drawBackButton()
+
+	while true do
+		local event = safePullEvent()
+		if (event == "mouse_click" or event == "key") then
+			break
+		end
+	end
+end
+
+function selectAccountScreen(steps, currentStep, disabledAccount, overrideClientData)
+	local tempClientData
+	
+	if (overrideClientData == nil) then
+		tempClientData = getClientData()
+	else
+		tempClientData = overrideClientData
+	end
+
+	local clientCount = 0
+	for k, v in pairs(tempClientData) do
+		clientCount = clientCount+1
+	end
+
+    if (clientCount == 0) then
+        errorScreen("There are no accounts at the moment")
+        return nil
+    end
+	
+	local scrW, scrH = term.getSize()
+	local x, y, w, h = scrW/4, #steps+4, scrW/2+2, scrH-5
+
+	local back = drawBackButton()
+
+	local first = 0
+	local max = scrH-y-2
+
+	local upButtonY = y-2
+	local downButtonY = y+1+max
+
+	while true do
+		drawSteps(steps, currentStep)
+		drawBackButton()
+		local i = 0
+		local buttons = {}
+
+		if (first > 0) then
+			term.setCursorPos(scrW/2-3,upButtonY)
+			term.setTextColor(buttonTextColor)
+			term.setBackgroundColor(buttonColor)
+			term.write("  "..string.char(24).."  ")
+		end
+
+		local totalAccounts = 0
+		local showAccounts = 0
+		for k, v in pairs(tempClientData) do
+			if (disabledAccount ~= nil and disabledAccount ~= k) then
+				if (totalAccounts >= first and showAccounts < first+max) then
+					buttons[y+i] = k
+					term.setCursorPos(x,y+i)
+					term.setTextColor(contrastColor(tonumber(v.color)))
+					term.setBackgroundColor(tonumber(v.color))
+					term.write(string.rep(" ", w))
+					term.setCursorPos(x+w/2-string.len(v.name)/2-1,y+i)
+					term.write(v.name)
+					i = i+1
+				end
+				showAccounts = showAccounts+1
+			end
+			totalAccounts = totalAccounts+1
+		end
+
+		if (first+max < showAccounts) then
+			term.setCursorPos(scrW/2-3,downButtonY)
+			term.setTextColor(buttonTextColor)
+			term.setBackgroundColor(buttonColor)
+			term.write("  "..string.char(25).."  ")
+		end
+
+		local event, button, cx, cy = safePullEvent("mouse_click")
+		if (cx >= scrW/2-3 and cx < scrW/2+3 and cy == upButtonY) then
+			if (first > 0) then
+				first = first-max
+			end
+		end
+		if (cx >= scrW/2-3 and cx < scrW/2+3 and cy == downButtonY) then
+			if (first+max < showAccounts) then
+				first = first+max
+			end
+		end
+		if (cx >= x and cx <= x+w and cy >= y and cy < y+i) then
+			return buttons[cy]
+		end
+		if (mouseInButton(back, cx, cy)) then
+			return nil
+		end
+	end
+end
+
+function inputNumberScreen(steps, currentStep, max, maxString)
+	if (max == nil) then max = 0 end
+	local y = #steps+3
+	while true do
+		drawSteps(steps, currentStep)
+
+		term.setCursorPos(1, y)
+		term.setBackgroundColor(backgroundColor)
+		term.setTextColor(specialTextColor)
+        local text = "Input number"
+        if (maxString ~= nil and maxString ~= "") then
+            text = text.." (Max "..maxString..")"
+        elseif (max ~= nil and max ~= 0) then
+            text = text.." (Max $"..max..")"
+        end
+		text = text..":"
+		print(text)
+		local scrW, scrH = term.getSize()
+
+		term.setCursorPos(2, y+2)
+	
+		local result = cancelableRead(max)
+
+		if (result == nil) then
+			return nil
+		end
+
+		local numberResult = tonumber(result)
+		-- Allow zero; only reject negatives, non-numbers, and non-integers
+		if (numberResult == nil or numberResult < 0 or numberResult%1 ~= 0) then
+            errorScreen("Invalid value")
+		else
+			return result
+		end
+	end
+end
+
+function inputTextScreen(steps, currentStep, maxLength)
+	if (maxLength == nil) then maxLength = 0 end
+	drawSteps(steps, currentStep)
+	local y = #steps+3
+	term.setCursorPos(1, y)
+	term.setBackgroundColor(backgroundColor)
+	term.setTextColor(specialTextColor)
+    local text = "Input text"
+    if (maxLength ~= nil and maxLength ~= 0) then
+        text = text.." (Max length "..maxLength..")"
+    end
+	text = text..":"
+	print(text)
+	local scrW, scrH = term.getSize()
+	term.setCursorPos(2, y+2)
+	return cancelableRead(maxLength)
+end
+
+function selectColorScreen(steps, currentStep)
+    drawSteps(steps, currentStep)
+    local y = #steps+3
+    local scrW, scrH = term.getSize()
+    local x = math.floor(scrW/2 - 20)
+    local w = 5 -- swatch width
+    local h = 1 -- swatch height
+
+    -- Explicit palette and names (16 ComputerCraft colors)
+    local palette = {
+        colors.white, colors.orange, colors.magenta, colors.lightBlue,
+        colors.yellow, colors.lime, colors.pink, colors.gray,
+        colors.lightGray, colors.cyan, colors.purple, colors.blue,
+        colors.brown, colors.green, colors.red, colors.black
+    }
+    local names = {
+        "White","Orange","Magenta","Light Blue",
+        "Yellow","Lime","Pink","Gray",
+        "Light Gray","Cyan","Purple","Blue",
+        "Brown","Green","Red","Black"
+    }
+    local buttons = {}
+    for _x = 0, 7 do buttons[_x] = {} end
+
+    -- Draw 8x2 grid to expose all colors with consistent ordering
+    for i = 1, #palette do
+        local col = palette[i]
+        local gx = (_G.math.floor((i-1) % 8))
+        local gy = (_G.math.floor((i-1) / 8))
+        local bx = x + gx * w + 1
+        local by = y + gy * (h + 1)
+        term.setCursorPos(bx, by)
+        term.setBackgroundColor(col)
+        term.setTextColor(contrastColor(col))
+        term.write("[")
+        term.write(string.rep(" ", w-2))
+        term.write("]")
+        buttons[gx][gy] = col
+    end
+
+    -- Draw names column as a reference
+    local namesX = x + (8 * w) + 3
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.white)
+    for i = 1, #names do
+        local gy = _G.math.floor((i-1) / 8)
+        local rowY = y + gy * (h + 1)
+        term.setCursorPos(namesX, rowY)
+        local label = table.concat(names, ", ", gy*8+1, _G.math.min(gy*8+8, #names))
+        term.write(label)
+    end
+
+    local backButton = drawBackButton()
+
+    while true do
+        local event, button, cx, cy = safePullEvent("mouse_click")
+        if (cx >= x and cx <= x + w*8 and cy >= y and cy < y + 2*(h+1)) then
+            local _x = _G.math.floor((cx - x) / w)
+            local dy = _G.math.floor((cy - y) / (h + 1))
+            if buttons[_x] and buttons[_x][dy] then
+                return buttons[_x][dy]
+            end
+        end
+        if mouseInButton(backButton, cx, cy) then
+            return nil
+        end
+    end
+end
+
+function responseScreen(success, response)
+	if (success) then
+		successScreen(response)
+	else
+		errorScreen(response)
+	end
+end
+
+function errorScreen(message)
+    term.setBackgroundColor(colors.red)
+    term.setTextColor(colors.white)
+    term.clear()
+    term.setCursorBlink(false)
+    term.setBackgroundColor(colors.black)
+    local scrW, scrH = term.getSize()
+    term.setBackgroundColor(colors.red)
+    if (type(message) == 'table') then
+        local count = #message
+        for k, v in pairs(message) do
+            local s = tostring(v or "")
+            term.setCursorPos(scrW/2-string.len(s)/2+1, scrH/2-math.ceil(count/2)+k)
+            term.write(s)
+        end
+        local tid = os.startTimer(1.5 * #message)
+        while true do
+            local ev, p1 = os.pullEventRaw()
+            if ev == "terminate" then
+                -- ignore Ctrl+T
+            elseif ev == "timer" and p1 == tid then
+                break
+            end
+        end
+    else
+        local s = tostring(message or "Error")
+        term.setCursorPos(scrW/2-string.len(s)/2+1, scrH/2)
+        term.write(s)
+        local tid = os.startTimer(1.5)
+        while true do
+            local ev, p1 = os.pullEventRaw()
+            if ev == "terminate" then
+                -- ignore Ctrl+T
+            elseif ev == "timer" and p1 == tid then
+                break
+            end
+        end
+    end
+end
+
+function successScreen(message)
+    term.setBackgroundColor(colors.green)
+    term.setTextColor(colors.white)
+    term.clear()
+    term.setCursorBlink(false)
+    local scrW, scrH = term.getSize()
+    if (type(message) == 'table') then
+        local count = #message
+        for k, v in pairs(message) do
+            local s = tostring(v or "")
+            term.setCursorPos(scrW/2-string.len(s)/2+1, scrH/2-math.ceil(count/2)+k)
+            term.write(s)
+        end
+        local tid = os.startTimer(1.5 * count)
+        while true do
+            local ev, p1 = os.pullEventRaw()
+            if ev == "terminate" then
+                -- ignore Ctrl+T
+            elseif ev == "timer" and p1 == tid then
+                break
+            end
+        end
+    else
+        local s = tostring(message or "Success")
+        term.setCursorPos(scrW/2-string.len(s)/2+1, scrH/2)
+        term.write(s)
+        local tid = os.startTimer(1.5)
+        while true do
+            local ev, p1 = os.pullEventRaw()
+            if ev == "terminate" then
+                -- ignore Ctrl+T
+            elseif ev == "timer" and p1 == tid then
+                break
+            end
+        end
+    end
+end
+
+function waitScreen(message)
+    drawBackground()
+    term.setTextColor(colors.white)
+    local scrW, scrH = term.getSize()
+    if (type(message) == 'table') then
+        for k, v in pairs(message) do
+            term.setCursorPos(scrW/2-string.len(v)/2+1, scrH/2-math.ceil(#message/2)+k)
+            term.write(v)
+        end
+    else
+        term.setCursorPos(scrW/2-string.len(message)/2+1, scrH/2)
+        term.write(message)
+    end
+    -- keep screen responsive and ignore terminate until a click or key
+    while true do
+        local ev = os.pullEventRaw()
+        if ev == "terminate" then
+            -- ignore Ctrl+T
+        elseif ev == "mouse_click" or ev == "key" then
+            break
+        end
+    end
+end
+
+function confirmScreen(message, data, steps, currentStep)
+	local y = 2
+	drawBackground()
+	if (steps ~= nil) then
+		drawSteps(steps, currentStep)
+		y = #steps+3
+	end
+	local scrW, scrH = term.getSize()
+	term.setTextColor(specialTextColor)
+	for k, v in pairs(message) do
+		term.setCursorPos((scrW-string.len(v))/2, y)
+		term.write(v)
+		y = y+1
+	end
+	y = y+1
+    if (data ~= nil) then
+        for k, v in pairs(data) do
+            local text = tostring(k)..": "..tostring(v)
+            term.setCursorPos((scrW-string.len(text))/2, y)
+            term.write(text)
+            y = y+1
+        end
+        y = y+1
+    end
+
+	local buttonY = math.min(scrH-3, y)
+	local buttonW = 20
+	local buttonX = scrW/2-buttonW/2
+
+    local acceptButton = drawButton(acceptButtonColor, acceptSecondaryColor, buttonTextColor, buttonX, buttonY, buttonW, "Accept")
+
+    local cancelButton = drawButton(cancelButtonColor, cancelSecondaryColor, buttonTextColor, buttonX, buttonY+2, buttonW, "Cancel")
+
+    while true do
+        local event, button, cx, cy = safePullEvent("mouse_click")
+        if (mouseInButton(acceptButton, cx, cy)) then
+            return true
+        end
+        if (mouseInButton(cancelButton, cx, cy)) then
+            return false
+        end
+    end
+end
+
+function textScreen(message)
+	local y = 1
+	local scrW, scrH = term.getSize()
+	drawBackground()
+	term.setTextColor(colors.white)
+	for k, v in pairs(message) do
+		term.setCursorPos((scrW-string.len(v))/2+1, y)
+		term.write(v)
+		y = y+1
+	end
+
+	drawBackButton()
+	
+	safePullEvent("mouse_click")
+end
+
+function changePassword(key, current, new)
+    local message = {
+        action = "changePassword",
+        key = key,
+        current = current,
+        new = new
+    }
+    local resp = sendRequest(message)
+    return resp.success, resp.response
+end
+
+function resetPassword(key)
+    local message = {
+        action = "resetPassword",
+        key = key
+    }
+    local resp = sendRequest(message)
+    return resp.success, resp.response
+end
+
+-- Hashing helpers: ASHA-512-inspired with salt and iterations
+local function api_rightRotate(n, b)
+    return bit32.band(bit32.bor(bit32.rshift(n, b), bit32.lshift(n, 32 - b)), 0xFFFFFFFF)
+end
+
+local function api_rightShift(n, b)
+    return bit32.rshift(n, b)
+end
+
+local function api_toBytes(str)
+    local bytes = {}
+    for i = 1, #str do bytes[#bytes + 1] = string.byte(str:sub(i, i)) end
+    return bytes
+end
+
+local api_k = {
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+}
+
+local function api_ASHA512(password, salt, iterations)
+    salt = salt or ""
+    iterations = iterations or 10000
+    local h = {0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19}
+    local function compress(chunk)
+        local w = {}
+        for i = 1, 16 do
+            local o = (i - 1) * 4 + 1
+            w[i] = bit32.band(bit32.bor(bit32.lshift(chunk[o] or 0, 24), bit32.lshift(chunk[o+1] or 0, 16), bit32.lshift(chunk[o+2] or 0, 8), (chunk[o+3] or 0)), 0xFFFFFFFF)
+        end
+        for i = 17, 64 do
+            local s0 = bit32.bxor(api_rightRotate(w[i-15],7), api_rightRotate(w[i-15],18), api_rightShift(w[i-15],3))
+            local s1 = bit32.bxor(api_rightRotate(w[i-2],17), api_rightRotate(w[i-2],19), api_rightShift(w[i-2],10))
+            w[i] = bit32.band((w[i-16] + s0 + w[i-7] + s1), 0xFFFFFFFF)
+        end
+        local a,b,c,d,e,f,g,hh = h[1],h[2],h[3],h[4],h[5],h[6],h[7],h[8]
+        for i = 1, 64 do
+            local S1 = bit32.bxor(api_rightRotate(e,6), api_rightRotate(e,11), api_rightRotate(e,25))
+            local ch = bit32.bxor(bit32.band(e,f), bit32.band(bit32.bnot(e), g))
+            local temp1 = bit32.band((hh + S1 + ch + api_k[i] + w[i]), 0xFFFFFFFF)
+            local S0 = bit32.bxor(api_rightRotate(a,2), api_rightRotate(a,13), api_rightRotate(a,22))
+            local maj = bit32.bxor(bit32.band(a,b), bit32.band(a,c), bit32.band(b,c))
+            local temp2 = bit32.band((S0 + maj), 0xFFFFFFFF)
+            hh = g; g = f; f = e; e = bit32.band((d + temp1), 0xFFFFFFFF)
+            d = c; c = b; b = a; a = bit32.band((temp1 + temp2), 0xFFFFFFFF)
+        end
+        h[1] = bit32.band(h[1] + a, 0xFFFFFFFF)
+        h[2] = bit32.band(h[2] + b, 0xFFFFFFFF)
+        h[3] = bit32.band(h[3] + c, 0xFFFFFFFF)
+        h[4] = bit32.band(h[4] + d, 0xFFFFFFFF)
+        h[5] = bit32.band(h[5] + e, 0xFFFFFFFF)
+        h[6] = bit32.band(h[6] + f, 0xFFFFFFFF)
+        h[7] = bit32.band(h[7] + g, 0xFFFFFFFF)
+        h[8] = bit32.band(h[8] + hh, 0xFFFFFFFF)
+    end
+    local message = password .. salt
+    local msgBytes = api_toBytes(message)
+    local originalBitLength = #message * 8
+    msgBytes[#msgBytes + 1] = 0x80
+    while (#msgBytes % 64) ~= 56 do msgBytes[#msgBytes + 1] = 0x00 end
+    -- Append 8-byte big-endian length: high 4 bytes zero, low 4 bytes from originalBitLength
+    for i = 1, 4 do msgBytes[#msgBytes + 1] = 0 end
+    for i = 3, 0, -1 do
+        msgBytes[#msgBytes + 1] = bit32.band(bit32.rshift(originalBitLength, i * 8), 0xFF)
+    end
+    for i = 1, #msgBytes, 64 do
+        local chunk = {}
+        for j = i, i + 63 do chunk[#chunk + 1] = msgBytes[j] or 0 end
+        compress(chunk)
+    end
+    local hash = ""
+    for i = 1, 8 do hash = hash .. string.format("%08x", h[i]) end
+    if iterations > 1 then return api_ASHA512(hash, salt, iterations - 1) end
+    return hash
+end
+
+function hashPassword(password, customSalt, iterations)
+    local salt = customSalt or ""
+    if salt == "" then
+        math.randomseed(os.time())
+        local chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/"
+        for i = 1, 32 do
+            local idx = math.random(1, #chars)
+            salt = salt .. chars:sub(idx, idx)
+        end
+    end
+    local iters = iterations or 10000
+    local hash = api_ASHA512(password, salt, iters)
+    return hash .. ":" .. salt .. ":" .. tostring(iters)
+end
+
+function verifyPasswordAgainstFullHash(password, fullHash)
+    local storedHash, salt, iters = fullHash:match("([^:]+):([^:]+):(%d+)")
+    if not storedHash or not salt or not iters then return false end
+    local computed = api_ASHA512(password, salt, tonumber(iters))
+    return computed == storedHash
+end
+
+-- Show company details in the same style as transactionInfoScreen
+function companyInfoScreen(key)
+    local tempClientData = getClientData()
+    local acct = tempClientData[key]
+    if acct == nil then
+        errorScreen("Invalid company")
+        return
+    end
+    drawBackground()
+    term.setCursorPos(1,2)
+    term.setTextColor(colors.white)
+    print("Company: "..tostring(acct.name))
+    local ownerName = "- not assigned -"
+    if acct.owner ~= nil and tempClientData[acct.owner] ~= nil then
+        ownerName = tempClientData[acct.owner].name
+    elseif acct.owner ~= nil and tostring(acct.owner) ~= "" then
+        ownerName = "- deleted -"
+    end
+    print("Owner: "..ownerName)
+    print("Balance: $"..tostring(acct.balance))
+    local sharesText = tonumber(acct.shares or 0) or 0
+    print("Shares: "..tostring(sharesText))
+
+    drawBackButton()
+    os.pullEvent("mouse_click")
+end
+
+-- Paginated list of registered companies, styled like transactionLogScreen
+function companyListScreen(viewerKey)
+    local tempClientData = getClientData()
+    local companies = {}
+    for k, v in pairs(tempClientData) do
+        if tostring(v.type or "personal") == "company" then
+            companies[#companies+1] = { key = k, name = v.name or k, owner = v.owner, balance = tonumber(v.balance) or 0 }
+        end
+    end
+
+    if (#companies == 0) then
+        errorScreen("There are no registered companies")
+        return nil
+    end
+
+    table.sort(companies, function(a,b) return tostring(a.name) < tostring(b.name) end)
+
+    local scrW, scrH = term.getSize()
+    local y = 2
+    local floor = 1
+    local x = 1
+    local w = scrW
+
+    if (pocket) then floor = 2 end
+
+    local first = 0
+    local rowHeight = 2
+    local max = math.floor((scrH - floor - rowHeight) / rowHeight)
+
+    local scrollButtonY = scrH - 1
+    local scrollButtonCenterX = math.floor(scrW/2) + 10
+    if (pocket) then
+        scrollButtonY = scrH - 3
+        scrollButtonCenterX = math.floor(scrW/2) + 1
+    end
+
+    while true do
+        drawBackground()
+
+        local prevPage = drawButton(buttonColor, secondaryButtonColor, buttonTextColor, scrollButtonCenterX-13, scrollButtonY, 7, string.char(27))
+        if (first <= 0) then
+    drawButton(colors.lightGray, colors.gray, buttonTextColor, scrollButtonCenterX-13, scrollButtonY, 7, string.char(27))
+        end
+
+        local total = 0
+        local i = 0
+        local buttons = {}
+        for idx, c in ipairs(companies) do
+            if (total >= first and total < first+max) then
+                local order = idx
+                local text = "#"..order.." "..c.name
+
+                -- box
+                if (i > 0) then
+                    term.setCursorPos(1, y+i-1)
+                    term.setBackgroundColor(colors.white)
+                    term.setTextColor(colors.lightGray)
+                    print(string.rep(string.char(140), scrW))
+                    term.setBackgroundColor(colors.white)
+                    print(string.rep(" ", scrW))
+                else
+                    term.setCursorPos(1, y+i)
+                    term.setBackgroundColor(colors.white)
+                    print(string.rep(" ", scrW))
+                end
+
+                -- content
+                term.setCursorPos(1, y+i)
+                buttons[y+i] = c.key
+                term.setTextColor(colors.lightGray)
+                term.write("#"..order.." ")
+                term.setTextColor(colors.black)
+                term.write(c.name.." ")
+
+                -- balance column
+                local balText = "$"..tostring(c.balance)
+                if (pocket) then
+                    term.setCursorPos(scrW*0.5, y+i)
+                else
+                    term.setCursorPos(scrW*0.3, y+i)
+                end
+                term.setTextColor(colors.black)
+                term.write(balText)
+
+                -- owner column (right side)
+                local ownerName = "- not assigned -"
+                if c.owner ~= nil and tempClientData[c.owner] ~= nil then
+                    ownerName = tempClientData[c.owner].name
+                elseif c.owner ~= nil and tostring(c.owner) ~= "" then
+                    ownerName = "- deleted -"
+                end
+                local ownerText = ownerName
+                term.setTextColor(colors.lightGray)
+                term.setCursorPos(scrW - string.len(ownerText), y+i)
+                term.write(" "..ownerText)
+
+                i = i + rowHeight
+            end
+            total = total + 1
+        end
+
+        local nextPage = drawButton(buttonColor, secondaryButtonColor, buttonTextColor, scrollButtonCenterX+5, scrollButtonY, 7, string.char(26))
+        if (first+max >= total) then
+    drawButton(colors.lightGray, colors.gray, buttonTextColor, scrollButtonCenterX+5, scrollButtonY, 7, string.char(26))
+        end
+
+        -- page indicator
+        local pages = math.max(1, math.ceil(total/max))
+        local pageText = tostring((first/max)+1).."/"..pages
+        term.setCursorPos(scrollButtonCenterX-string.len(pageText)/2, scrollButtonY)
+        term.setBackgroundColor(backgroundColor)
+        term.setTextColor(colors.orange)
+        term.write(pageText)
+
+        local backButton = drawBackButton()
+
+        term.setCursorPos(scrW/2 - string.len("Click Company for more Info")/2 + 1, 1)
+        term.setBackgroundColor(backgroundColor)
+        term.setTextColor(grayedOutColor)
+        term.write("Click Company for more Info")
+
+        local eventData = {os.pullEvent()}
+        local event = eventData[1]
+        if event == "mouse_click" then
+            local cx = eventData[3]
+            local cy = eventData[4]
+            if (mouseInButton(prevPage, cx, cy)) then
+                if (first > 0) then first = first - max end
+            end
+            if (mouseInButton(nextPage, cx, cy)) then
+                if (first + max < total) then first = first + max end
+            end
+            if (cx >= x and cx <= x+w and cy >= y) then
+                if buttons[cy] ~= nil then
+                    companyMarketScreen(buttons[cy], viewerKey)
+                end
+            end
+            if (mouseInButton(backButton, cx, cy)) then
+                return nil
+            end
+        elseif event == "mouse_scroll" then
+            local scroll = eventData[2]
+            if (scroll < 0) then
+                if (first > 0) then first = first - max end
+            else
+                if (first + max < total) then first = first + max end
+            end
+        end
+    end
+end
+
+-- Paginated list of companies owned by a specific account
+function companyOwnedListScreen(ownerKey)
+    local tempClientData = getClientData()
+    local companies = {}
+    for k, v in pairs(tempClientData) do
+        if tostring(v.type or "personal") == "company" and tostring(v.owner or "") == tostring(ownerKey or "") then
+            companies[#companies+1] = { key = k, name = v.name or k, owner = v.owner, balance = tonumber(v.balance) or 0 }
+        end
+    end
+
+    if (#companies == 0) then
+        errorScreen("You do not own any companies")
+        return nil
+    end
+
+    table.sort(companies, function(a,b) return tostring(a.name) < tostring(b.name) end)
+
+    local scrW, scrH = term.getSize()
+    local y = 2
+    local floor = 1
+    local x = 1
+    local w = scrW
+
+    if (pocket) then floor = 2 end
+
+    local first = 0
+    local rowHeight = 2
+    local max = math.floor((scrH - floor - rowHeight) / rowHeight)
+
+    local scrollButtonY = scrH - 1
+    local scrollButtonCenterX = math.floor(scrW/2) + 10
+    if (pocket) then
+        scrollButtonY = scrH - 3
+        scrollButtonCenterX = math.floor(scrW/2) + 1
+    end
+
+    while true do
+        drawBackground()
+
+        local prevPage = drawButton(buttonColor, secondaryButtonColor, buttonTextColor, scrollButtonCenterX-13, scrollButtonY, 7, string.char(27))
+        if (first <= 0) then
+    drawButton(colors.lightGray, colors.gray, buttonTextColor, scrollButtonCenterX-13, scrollButtonY, 7, string.char(27))
+        end
+
+        local total = 0
+        local i = 0
+        local buttons = {}
+        for idx, c in ipairs(companies) do
+            if (total >= first and total < first+max) then
+                local order = idx
+                local text = "#"..order.." "..c.name
+
+                -- box
+                if (i > 0) then
+                    term.setCursorPos(1, y+i-1)
+                    term.setBackgroundColor(colors.white)
+                    term.setTextColor(colors.lightGray)
+                    print(string.rep(string.char(140), scrW))
+                    term.setBackgroundColor(colors.white)
+                    print(string.rep(" ", scrW))
+                else
+                    term.setCursorPos(1, y+i)
+                    term.setBackgroundColor(colors.white)
+                    print(string.rep(" ", scrW))
+                end
+
+                -- content
+                term.setCursorPos(1, y+i)
+                buttons[y+i] = c.key
+                term.setTextColor(colors.lightGray)
+                term.write("#"..order.." ")
+                term.setTextColor(colors.black)
+                term.write(c.name.." ")
+
+                -- balance column
+                local balText = "$"..tostring(c.balance)
+                if (pocket) then
+                    term.setCursorPos(scrW*0.5, y+i)
+                else
+                    term.setCursorPos(scrW*0.3, y+i)
+                end
+                term.setTextColor(colors.black)
+                term.write(balText)
+
+                -- owner column (right side)
+                local ownerName = "- not assigned -"
+                if c.owner ~= nil and tempClientData[c.owner] ~= nil then
+                    ownerName = tempClientData[c.owner].name
+                elseif c.owner ~= nil and tostring(c.owner) ~= "" then
+                    ownerName = "- deleted -"
+                end
+                local ownerText = ownerName
+                term.setTextColor(colors.lightGray)
+                term.setCursorPos(scrW - string.len(ownerText), y+i)
+                term.write(" "..ownerText)
+
+                i = i + rowHeight
+            end
+            total = total + 1
+        end
+
+        local nextPage = drawButton(buttonColor, secondaryButtonColor, buttonTextColor, scrollButtonCenterX+5, scrollButtonY, 7, string.char(26))
+        if (first+max >= total) then
+    drawButton(colors.lightGray, colors.gray, buttonTextColor, scrollButtonCenterX+5, scrollButtonY, 7, string.char(26))
+        end
+
+        -- page indicator
+        local pages = math.max(1, math.ceil(total/max))
+        local pageText = tostring((first/max)+1).."/"..pages
+        term.setCursorPos(scrollButtonCenterX-string.len(pageText)/2, scrollButtonY)
+        term.setBackgroundColor(backgroundColor)
+        term.setTextColor(colors.orange)
+        term.write(pageText)
+
+        local backButton = drawBackButton()
+
+        term.setCursorPos(scrW/2 - string.len("Click Company for more Info")/2 + 1, 1)
+        term.setBackgroundColor(backgroundColor)
+        term.setTextColor(grayedOutColor)
+        term.write("Click Company for more Info")
+
+        local eventData = {os.pullEvent()}
+        local event = eventData[1]
+        if event == "mouse_click" then
+            local cx = eventData[3]
+            local cy = eventData[4]
+            if (mouseInButton(prevPage, cx, cy)) then
+                if (first > 0) then first = first - max end
+            end
+            if (mouseInButton(nextPage, cx, cy)) then
+                if (first + max < total) then first = first + max end
+            end
+            if (cx >= x and cx <= x+w and cy >= y) then
+                if buttons[cy] ~= nil then
+                    companyMarketScreen(buttons[cy])
+                end
+            end
+            if (mouseInButton(backButton, cx, cy)) then
+                return nil
+            end
+        elseif event == "mouse_scroll" then
+            local scroll = eventData[2]
+            if (scroll < 0) then
+                if (first > 0) then first = first - max end
+            else
+                if (first + max < total) then first = first + max end
+            end
+        end
+    end
+end
+
+-- Value/Price helpers (currently value = balance)
+function estimateCompanyValue(key)
+    local tempClientData = getClientData()
+    local acct = tempClientData[key]
+    if acct == nil then return 0 end
+    return tonumber(acct.balance or 0) or 0
+end
+
+function estimateSharePrice(key)
+    local tempClientData = getClientData()
+    local acct = tempClientData[key]
+    if acct == nil then return 0 end
+    local value = estimateCompanyValue(key)
+    local shares = tonumber(acct.shares or 0) or 0
+    if shares <= 0 then return 0 end
+    return math.floor((value / shares) * 100 + 0.5) / 100
+end
+
+-- Special market page for company details with value and share price
+function companyMarketScreen(key, viewerKey)
+    local tempClientData = getClientData()
+    local acct = tempClientData[key]
+    if acct == nil then
+        errorScreen("Invalid company")
+        return
+    end
+    drawBackground()
+    term.setCursorPos(1,2)
+    term.setTextColor(colors.white)
+    print("Company: "..tostring(acct.name))
+    local ownerName = "- not assigned -"
+    if acct.owner ~= nil and tempClientData[acct.owner] ~= nil then
+        ownerName = tempClientData[acct.owner].name
+    elseif acct.owner ~= nil and tostring(acct.owner) ~= "" then
+        ownerName = "- deleted -"
+    end
+    print("Owner: "..ownerName)
+    print("Balance: $"..tostring(acct.balance))
+    local sharesText = tonumber(acct.shares or 0) or 0
+    print("Shares: "..tostring(sharesText))
+    local value = estimateCompanyValue(key)
+    local price = estimateSharePrice(key)
+    print("Estimated Value: $"..tostring(value))
+    print("Estimated Share Price: $"..tostring(price))
+
+    -- Buttons: View Ownership (always), Issue Shares (owner only)
+    local scrW, scrH = term.getSize()
+    local bx = scrW/2 - 20
+    local by = scrH - 5
+    local viewBtn = drawButton(buttonColor, secondaryButtonColor, buttonTextColor, bx, by, 20, "View Ownership")
+    local issueBtn = nil
+    local isOwner = (viewerKey ~= nil and tostring(acct.owner or "") == tostring(viewerKey or ""))
+    if isOwner then
+        issueBtn = drawButton(buttonColor, secondaryButtonColor, buttonTextColor, bx + 22, by, 20, "Issue Shares")
+    else
+        -- Render disabled Issue button
+        drawButton(colors.lightGray, colors.gray, buttonTextColor, bx + 22, by, 20, "Issue Shares")
+    end
+    local backButton = drawBackButton()
+
+    while true do
+        local event, button, cx, cy = safePullEvent("mouse_click")
+        if mouseInButton(backButton, cx, cy) then
+            return nil
+        elseif mouseInButton(viewBtn, cx, cy) then
+            showShareholdersScreen(key)
+            drawBackground()
+            -- redraw summary and buttons
+            term.setCursorPos(1,2)
+            term.setTextColor(colors.white)
+            print("Company: "..tostring(acct.name))
+            print("Owner: "..ownerName)
+            print("Balance: $"..tostring(acct.balance))
+            print("Shares: "..tostring(sharesText))
+            print("Estimated Value: $"..tostring(value))
+            print("Estimated Share Price: $"..tostring(price))
+            viewBtn = drawButton(buttonColor, secondaryButtonColor, buttonTextColor, bx, by, 20, "View Ownership")
+            if isOwner then
+                issueBtn = drawButton(buttonColor, secondaryButtonColor, buttonTextColor, bx + 22, by, 20, "Issue Shares")
+            else
+                drawButton(colors.lightGray, colors.gray, buttonTextColor, bx + 22, by, 20, "Issue Shares")
+            end
+            backButton = drawBackButton()
+        elseif isOwner and issueBtn ~= nil and mouseInButton(issueBtn, cx, cy) then
+            issueSharesFlow(key, viewerKey)
+            -- refresh client data to reflect changes
+            tempClientData = getClientData()
+            acct = tempClientData[key]
+            sharesText = tonumber(acct.shares or 0) or 0
+            value = estimateCompanyValue(key)
+            price = estimateSharePrice(key)
+            drawBackground()
+            term.setCursorPos(1,2)
+            term.setTextColor(colors.white)
+            print("Company: "..tostring(acct.name))
+            print("Owner: "..ownerName)
+            print("Balance: $"..tostring(acct.balance))
+            print("Shares: "..tostring(sharesText))
+            print("Estimated Value: $"..tostring(value))
+            print("Estimated Share Price: $"..tostring(price))
+            viewBtn = drawButton(buttonColor, secondaryButtonColor, buttonTextColor, bx, by, 20, "View Ownership")
+            issueBtn = drawButton(buttonColor, secondaryButtonColor, buttonTextColor, bx + 22, by, 20, "Issue Shares")
+            backButton = drawBackButton()
+        end
+    end
+end
+
+function showShareholdersScreen(companyKey)
+    local ok, list = listShareholders(companyKey)
+    if not ok then
+        errorScreen(tostring(list))
+        return
+    end
+    drawBackground()
+    local scrW, scrH = term.getSize()
+    term.setCursorPos(1,2)
+    term.setTextColor(specialTextColor)
+    print("Shareholders")
+    term.setTextColor(colors.white)
+    local y = 4
+    if #list == 0 then
+        term.setCursorPos(2,y)
+        print("No shareholders recorded")
+    else
+        for i, entry in ipairs(list) do
+            term.setCursorPos(2, y + i - 1)
+            print(string.format("%s: %d", tostring(entry.name), tonumber(entry.shares or 0)))
+        end
+    end
+    local back = drawBackButton()
+    while true do
+        local e, b, cx, cy = safePullEvent("mouse_click")
+        if mouseInButton(back, cx, cy) then
+            return nil
+        end
+    end
+end
+
+function issueSharesFlow(companyKey, ownerKey)
+    local steps = { "Select buyer", "Number of shares" }
+    -- Build recipients: personal and company accounts only
+    local data = getClientData()
+    local filtered = {}
+    for k, v in pairs(data) do
+        local t = tostring(v.type or "personal")
+        if t == "personal" or t == "company" then
+            filtered[k] = v
+        end
+    end
+    local buyer = selectAccountScreen(steps, 1, 0, filtered)
+    if buyer == nil then return nil end
+    local countStr = inputNumberScreen(steps, 2, 0, "shares count")
+    if countStr == nil then return nil end
+    local count = tonumber(countStr)
+    if count == nil or count <= 0 or count % 1 ~= 0 then
+        errorScreen("Invalid share count")
+        return
+    end
+    local ok, resp = issueShares(ownerKey, companyKey, buyer, count)
+    if not ok then
+        errorScreen(tostring(resp))
+    else
+        successScreen("Issued "..tostring(count).." shares to "..(getClientData()[buyer].name or buyer).."\nTotal: $"..tostring(resp.total_price))
+    end
+end
+
+-- Card registry API
+function listCards(key)
+    local message = { action = "listCards", key = key }
+    local resp = sendRequest(message)
+    if resp == nil then return false, text_error_noconnection end
+    return resp.success, resp.response
+end
+
+function registerCard(key)
+    local message = { action = "registerCard", key = key }
+    local resp = sendRequest(message)
+    if resp == nil then return false, text_error_noconnection end
+    return resp.success, resp.response
+end
+
+function cancelCard(key, id)
+    local message = { action = "cancelCard", key = key, id = id }
+    local resp = sendRequest(message)
+    if resp == nil then return false, text_error_noconnection end
+    return resp.success, resp.response
+end
+
+function deleteCardRecord(key, id)
+    local message = { action = "deleteCardRecord", key = key, id = id }
+    local resp = sendRequest(message)
+    if resp == nil then return false, text_error_noconnection end
+    return resp.success, resp.response
+end
+
+function validateCard(key, id)
+    local message = { action = "validateCard", key = key, id = id }
+    local resp = sendRequest(message)
+    if resp == nil then return false, text_error_noconnection end
+    return resp.success, resp.response
+end
+
+-- Share registry API wrappers
+function listShareholders(companyKey)
+    local message = { action = "listShareholders", company = companyKey }
+    local resp = sendRequest(message)
+    if resp == nil then return false, text_error_noconnection end
+    return resp.success, resp.response
+end
+
+function issueShares(issuerKey, companyKey, buyerKey, count)
+    local message = { action = "issueShares", issuer = issuerKey, company = companyKey, buyer = buyerKey, count = count }
+    local resp = sendRequest(message)
+    if resp == nil then return false, text_error_noconnection end
+    return resp.success, resp.response
+end
+
+-- Portfolio API wrapper
+function getPortfolio(accountKey)
+    local message = { action = "getPortfolio", account = accountKey }
+    local resp = sendRequest(message)
+    if resp == nil then return false, text_error_noconnection end
+    return resp.success, resp.response
+end
+
+-- Top companies API wrapper
+function getTopCompanies()
+    local message = { action = "getTopCompanies" }
+    local resp = sendRequest(message)
+    if resp == nil then return false, text_error_noconnection end
+    return resp.success, resp.response
+end
+
+-- Portfolio UI screen
+function showPortfolioScreen(accountKey)
+    local ok, items = getPortfolio(accountKey)
+    if not ok then
+        errorScreen(tostring(items))
+        return nil
+    end
+    local scrW, scrH = term.getSize()
+    local y = 2
+    local floor = 1
+    local x = 1
+    local w = scrW
+    local first = 0
+    local rowHeight = 2
+    local max = math.floor((scrH - floor - rowHeight) / rowHeight)
+    local scrollButtonY = scrH - 1
+    local scrollButtonCenterX = math.floor(scrW/2) + 10
+    drawBackground()
+    term.setCursorPos(1,1)
+    term.setBackgroundColor(backgroundColor)
+    term.setTextColor(specialTextColor)
+    print("My Portfolio")
+
+    while true do
+        drawBackground()
+        local prevPage = drawButton(buttonColor, secondaryButtonColor, buttonTextColor, scrollButtonCenterX-13, scrollButtonY, 7, string.char(27))
+        if (first <= 0) then
+            drawButton(colors.lightGray, colors.gray, buttonTextColor, scrollButtonCenterX-13, scrollButtonY, 7, string.char(27))
+        end
+        local total = 0
+        local i = 0
+        for idx, it in ipairs(items) do
+            if (total >= first and total < first+max) then
+                if (i > 0) then
+                    term.setCursorPos(1, y+i-1)
+                    term.setBackgroundColor(colors.white)
+                    term.setTextColor(colors.lightGray)
+                    print(string.rep(string.char(140), scrW))
+                    term.setBackgroundColor(colors.white)
+                    print(string.rep(" ", scrW))
+                else
+                    term.setCursorPos(1, y+i)
+                    term.setBackgroundColor(colors.white)
+                    print(string.rep(" ", scrW))
+                end
+                term.setCursorPos(1, y+i)
+                term.setTextColor(colors.black)
+                term.write(tostring(it.name).." ")
+                -- shares column
+                local sharesText = tostring(it.shares).." sh"
+                term.setCursorPos(scrW*0.5, y+i)
+                term.setTextColor(colors.black)
+                term.write(sharesText)
+                -- value column (right)
+                local valText = "$"..tostring(it.estimated_value)
+                term.setTextColor(colors.lightGray)
+                term.setCursorPos(scrW - string.len(valText), y+i)
+                term.write(" "..valText)
+                i = i + rowHeight
+            end
+            total = total + 1
+        end
+        local nextPage = drawButton(buttonColor, secondaryButtonColor, buttonTextColor, scrollButtonCenterX+5, scrollButtonY, 7, string.char(26))
+        if (first+max >= total) then
+            drawButton(colors.lightGray, colors.gray, buttonTextColor, scrollButtonCenterX+5, scrollButtonY, 7, string.char(26))
+        end
+        local pages = math.max(1, math.ceil(total/max))
+        local pageText = tostring((first/max)+1).."/"..pages
+        term.setCursorPos(scrollButtonCenterX-string.len(pageText)/2, scrollButtonY)
+        term.setBackgroundColor(backgroundColor)
+        term.setTextColor(colors.orange)
+        term.write(pageText)
+
+        local backButton = drawBackButton()
+        term.setCursorPos(scrW/2 - string.len("Your holdings and estimated value")/2 + 1, 1)
+        term.setBackgroundColor(backgroundColor)
+        term.setTextColor(grayedOutColor)
+        term.write("Your holdings and estimated value")
+
+        local ev = {os.pullEvent()}
+        if ev[1] == "mouse_click" then
+            local cx = ev[3]
+            local cy = ev[4]
+            if mouseInButton(prevPage, cx, cy) then
+                if (first > 0) then first = first - max end
+            elseif mouseInButton(nextPage, cx, cy) then
+                if (first + max < total) then first = first + max end
+            elseif mouseInButton(backButton, cx, cy) then
+                return nil
+            end
+        elseif ev[1] == "mouse_scroll" then
+            local scroll = ev[2]
+            if (scroll < 0) then
+                if (first > 0) then first = first - max end
+            else
+                if (first + max < total) then first = first + max end
+            end
+        end
+    end
+end
+
+-- Security hardening: ignore Ctrl+T terminate and only emit desired events
+function safePullEvent(filter)
+    while true do
+        local ev = {os.pullEventRaw()}
+        local e = ev[1]
+        if e ~= "terminate" then
+            if filter == nil or e == filter then
+                return table.unpack(ev)
+            end
+        end
+        -- otherwise, keep waiting
+    end
+end
+
+-- Masked password input that ignores Ctrl+T terminate events
+function readPassword(maxLength)
+    if maxLength == nil then maxLength = 0 end
+    local s = ""
+    term.setCursorBlink(true)
+    while true do
+        local event, a = safePullEvent()
+        if event == "char" then
+            if maxLength == 0 or #s < maxLength then
+                s = s .. a
+                term.write("*")
+            end
+        elseif event == "key" then
+            if a == keys.backspace then
+                if #s > 0 then
+                    s = s:sub(1, #s-1)
+                    local x,y = term.getCursorPos()
+                    term.setCursorPos(x-1, y)
+                    term.write(" ")
+                    term.setCursorPos(x-1, y)
+                end
+            elseif a == keys.enter then
+                term.setCursorBlink(false)
+                return s
+            end
+        end
+    end
+end

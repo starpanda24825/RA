@@ -1,0 +1,378 @@
+-- Fiducia Installer Disk
+os.pullEvent = os.pullEventRaw -- Lock shell
+
+local diskdrive = peripheral.find("drive")
+local function ensureSafeDisk()
+    if not diskdrive or not diskdrive.isDiskPresent() then return true end
+    if not fs.exists("disk") then return true end
+    -- Allow any disk for installer, but still set allow_disk_startup to false when installing programs!
+    return true
+end
+
+function quit()
+    local diskdrive = peripheral.find("drive")
+    if (diskdrive.isDiskPresent()) then
+        diskdrive.ejectDisk()
+    end
+    print("Disk ejected")
+    print("Rebooting...")
+    sleep(1)
+    os.reboot()
+end
+
+function optionsMenu(title, description, options)
+    local selectedOption = 1
+    while true do
+        term.clear()
+        term.setCursorPos(1,1)
+
+        print("=== "..title.." ===")
+        print()
+
+        for k, v in pairs(description) do
+            print(v)
+        end
+        print()
+
+        for k, v in pairs(options) do
+            local text = v
+            if (selectedOption == k) then
+                text = "-> "..v.." <-"
+            else
+                text = "   "..v
+            end
+            print(text)
+        end
+
+        local event, key, is_held = os.pullEvent("key")
+        local keyName = keys.getName(key)
+        if (keyName == "w" or keyName == "up") then
+            selectedOption = selectedOption - 1
+            if (selectedOption <= 0) then
+                selectedOption = #options
+            end
+        elseif (keyName == "s" or keyName == "down") then
+            selectedOption = selectedOption + 1
+            if (selectedOption > #options) then
+                selectedOption = 1
+            end
+        elseif (keyName == "d" or keyName == "right" or keyName == "enter" or keyName == "space") then
+            return selectedOption
+        end
+    end
+end
+
+function installClerkTurtle()
+    print("Installing Fiducia Store Clerk Turtle...")
+    settings.set("shell.allow_disk_startup", false)
+    settings.save()
+    fs.delete("bankapi.lua")
+    shell.run("pastebin get mWQN0120 bankapi.lua") -- Bank API
+    fs.delete("startup.lua")
+    shell.run("pastebin get KD8K55DM startup.lua") 
+    -- For now, copy from disk if available
+    if fs.exists("disk/Clerk Turtle V2.txt") then
+        fs.copy("disk/Clerk Turtle V2.txt", "startup.lua")
+    else
+        print("Error: Clerk Turtle source not found on disk")
+    end
+    quit()
+end
+
+function installClerkTurtleWithAutoSetup()
+    print("Installing Fiducia Clerk Assistant ...")
+    settings.set("shell.allow_disk_startup", false)
+    settings.save()
+    fs.delete("autosetup.lua")
+    shell.run("pastebin get DzDkG1rU autosetup.lua")
+    if fs.exists("disk/Clerk Autosetup V2.txt") then
+        fs.copy("disk/Clerk Autosetup V2.txt", "autosetup.lua")
+    end
+    print("Running autosetup...")
+    sleep(1)
+    shell.run("autosetup")
+end
+
+function installClerkInterface()
+    print("Installing Fiducia Store Clerk terminal...")
+    settings.set("shell.allow_disk_startup", false)
+    settings.save()
+    fs.delete("bankapi.lua")
+    shell.run("pastebin get mWQN0120 bankapi.lua") -- Bank API
+    fs.delete("startup.lua")
+    shell.run("pastebin get gnHMVJE9 startup.lua") -- Clerk Computer
+    if fs.exists("disk/Clerk Computer V2.txt") then
+        fs.copy("disk/Clerk Computer V2.txt", "startup.lua")
+    end
+    quit()
+end
+
+function installATMTurtle()
+    print("Installing Fiducia ATM Assistant ...")
+    settings.set("shell.allow_disk_startup", false)
+    settings.save()
+    fs.delete("bankapi.lua")
+    shell.run("pastebin get mWQN0120 bankapi.lua") -- Bank API
+    fs.delete("startup.lua")
+    shell.run("pastebin get inz5qQ37 startup.lua") -- ATM Assistant
+    if fs.exists("disk/ATM Assistant V2.txt") then
+        fs.copy("disk/ATM Assistant V2.txt", "startup.lua")
+    end
+    quit()
+end
+
+function installATMTurtleWithAutoSetup()
+    print("Installing Fiducia ATM Assistant ...")
+    settings.set("shell.allow_disk_startup", false)
+    settings.save()
+    fs.delete("autosetup.lua")
+    shell.run("pastebin get hc8vX3j6 autosetup.lua") -- ATM Assistant autosetup
+    if fs.exists("disk/ATM Autosetup V2.txt") then
+        fs.copy("disk/ATM Autosetup V2.txt", "autosetup.lua")
+    end
+    print("Running autosetup...")
+    sleep(1)
+    shell.run("autosetup")
+    -- dont quit, need the disk to install ATM Interface
+end
+
+function installBankServer()
+    print("Installing Fiducia Bank Server...")
+    settings.set("shell.allow_disk_startup", false)
+    settings.save()
+    fs.delete("bankapi.lua")
+    shell.run("pastebin get mWQN0120 bankapi.lua") -- Bank API
+    fs.delete("startup.lua")
+    shell.run("pastebin get pXkJwRvb startup.lua") -- Bank Server
+    if fs.exists("disk/Bank Server V2.txt") then
+        fs.copy("disk/Bank Server V2.txt", "startup.lua")
+    end
+    quit()
+end
+
+function installAdminTerminal()
+    print("Installing Fiducia Admin terminal...")
+    settings.set("shell.allow_disk_startup", false)
+    settings.save()
+    fs.delete("bankapi.lua")
+    shell.run("pastebin get mWQN0120 bankapi.lua") -- Bank API
+    fs.delete("startup.lua")
+    shell.run("pastebin get 2RAZwkys startup.lua") -- Admin Terminal
+    if fs.exists("disk/Admin Terminal V2.txt") then
+        fs.copy("disk/Admin Terminal V2.txt", "startup.lua")
+    end
+    quit()
+end
+
+function installATMInterface()
+    print("Installing Fiducia ATM terminal...")
+    settings.set("shell.allow_disk_startup", false)
+    settings.save()
+    fs.delete("bankapi.lua")
+    shell.run("pastebin get mWQN0120 bankapi.lua") -- Bank API
+    fs.delete("startup.lua")
+    shell.run("pastebin get 01Zx7sRf startup.lua") -- ATM Terminal
+    if fs.exists("disk/ATM Terminal V2.txt") then
+        fs.copy("disk/ATM Terminal V2.txt", "startup.lua")
+    end
+    quit()
+end
+
+function installStockExchange()
+    print("Installing Fiducia Stock Exchange terminal...")
+    settings.set("shell.allow_disk_startup", false)
+    settings.save()
+    fs.delete("bankapi.lua")
+    shell.run("pastebin get mWQN0120 bankapi.lua") -- Bank API
+    fs.delete("startup.lua")
+    shell.run("pastebin get p8xjLuj2 startup.lua") -- Stock Exchange
+    if fs.exists("disk/Stock Exchange V1.txt") then
+        fs.copy("disk/Stock Exchange V1.txt", "startup.lua")
+    end
+    quit()
+end
+
+function manuallyInstallATMInterface()
+    local selectedOption = optionsMenu("Manually install program", {"There is a turtle program that will automatically setup an entire ATM machine, including a computer with this program. Are you sure you want to install manually anyways?"}, {
+        "No, go back",
+        "Yes, I know what I'm doing"
+    })
+    if (selectedOption == 1) then
+        mainMenu()
+    elseif (selectedOption == 2) then
+        installATMInterface()
+    end
+end
+
+function manuallyInstallATMTurtle()
+    local selectedOption = optionsMenu("Manually install program", {"There is a turtle program that will automatically setup not only this turtle, but an entire ATM machine, including building the contraption and installing the terminal. Are you sure you want to install manually anyways?"}, {
+        "No, go back",
+        "Yes, I know what I'm doing"
+    })
+    if (selectedOption == 1) then
+        mainMenu()
+    elseif (selectedOption == 2) then
+        installATMTurtle()
+    end
+end
+
+function showHelp()
+    term.clear()
+    term.setCursorPos(1,1)
+    while (true) do
+        local selectedOption = optionsMenu("Help", {"Fiducia Bank needs a few different computers and turtles to run."},
+        {
+            "Bank Server",
+            "Admin Terminal",
+            "ATM",
+            "Store Clerk",
+            "[Go Back]"
+        })
+        term.clear()
+        term.setCursorPos(1,1)
+        if (selectedOption == 1) then
+            print("=== The Bank Server ===")
+            print("")
+            print("This should be a single Advanced Computer, with a disk drive and an Ender Modem")
+            print("It must be placed in a chunk that will remain loaded at all times.")
+            print("This is the brains and database of the bank. Keep it always on! In it you can configure your bank. There should only be one. You may want to put it in a place where only you can access.")
+            print("")
+            print("Press any key to go back...")
+            os.pullEvent("key")
+        elseif (selectedOption == 2) then
+            print("=== Admin Terminals ===")
+            print("")
+            print("They should be an Advanced Computer, with a disk drive and an Ender Modem.")
+            print("These are password protected terminals for bank employees only. It is on these terminals that employees can create and delete accounts, link cards to users, install the mobile app on pocket computers, and other admin-only operations.")
+            print("")
+            print("Press any key to go back...")
+            os.pullEvent("key")
+        elseif (selectedOption == 3) then
+            print("=== ATM ===")
+            print("")
+            print("The ATMs are a multi-block, multi-computer machine. They consist of a regular Turtle that takes care of crafting and moving items, and a terminal that acts as a user interface.")
+            print("There is an automatic setup with instructions to automatically construct and install an ATM. All you have to do is place a regular turtle on top of a disk drive, then using this disk install the 'ATM Turtle w/ auto-setup' program and follow the instructions.")
+            print("")
+            print("Press any key to go back...")
+            os.pullEvent("key")
+        elseif (selectedOption == 4) then
+            print("=== Store Clerk ===")
+            print("")
+            print("The Store Clerk is a two-part system: A Turtle for item movement and a Computer for the UI.")
+            print("The Turtle should be placed behind a wall, with a chest or barrel in front of it. The Computer is placed where the customer can reach it.")
+            print("Both need Ender Modems. The Computer will automatically find and connect to the Turtle.")
+            print("Customers put items in the chest, press 'Deposit' on the computer, and the turtle will suck and count them.")
+            print("")
+            print("Press any key to go back...")
+            os.pullEvent("key")
+        elseif (selectedOption == 5) then
+            mainMenu()
+            break
+        end
+    end
+end
+
+function mainMenu()
+    if (turtle) then
+        local options = {
+            "Help",
+            "Install Clerk w/ auto-setup",
+            "Install ATM turtle w/ auto-setup",
+            "(Manually Install Clerk Turtle)",
+            "(Manually Install ATM turtle)",
+            "Cancel and eject",
+        }
+        if (fs.exists("autosetup.lua")) then
+            table.insert(options, "Run autosetup")
+        end
+        local selectedOption = optionsMenu("Install Fiducia program", {"For Turtles"}, options)
+        if (selectedOption == 1) then
+            showHelp()
+        elseif (selectedOption == 2) then
+            installClerkTurtleWithAutoSetup()
+        elseif (selectedOption == 3) then
+            installATMTurtleWithAutoSetup()
+        elseif (selectedOption == 4) then
+            installClerkTurtle()
+        elseif (selectedOption == 5) then
+            manuallyInstallATMTurtle()
+        elseif (selectedOption == 6) then
+            quit()
+        elseif (selectedOption == 7) then
+            shell.run("autosetup")
+        end
+    else
+        local selectedOption = optionsMenu("Install Fiducia program", {"For Computer"}, {
+            "Help",
+            "Install Bank Server",
+            "Install Admin terminal",
+            "Install Stock Exchange terminal",
+            "Install Store Clerk Computer",
+            "(Manually Install ATM interface)",
+            "(Manually Install Clerk terminal)",
+            "Cancel and eject"
+        })
+        if (selectedOption == 1) then
+            showHelp()
+        elseif (selectedOption == 2) then
+            installBankServer()
+        elseif (selectedOption == 3) then
+            installAdminTerminal()
+        elseif (selectedOption == 4) then
+            installStockExchange()
+        elseif (selectedOption == 5) then
+            installClerkInterface()
+        elseif (selectedOption == 6) then
+            manuallyInstallATMInterface()
+        elseif (selectedOption == 7) then
+            installClerkInterface()
+        else
+            quit()
+        end
+    end
+end
+
+os.pullEvent = os.pullEventRaw -- Lock the shell
+
+local function run()
+    if fs.exists("disk/installATMPlease.txt") then
+        fs.delete("disk/installATMPlease.txt")
+        local modem = peripheral.find("modem")
+        while (modem == nil) do
+            modem = peripheral.find("modem")
+            if (modem == nil) then
+                os.pullEvent("peripheral")
+            end
+        end
+        installATMInterface()
+    elseif fs.exists("disk/installClerkPlease.txt") then
+        fs.delete("disk/installClerkPlease.txt")
+        local modem = peripheral.find("modem")
+        while (modem == nil) do
+            modem = peripheral.find("modem")
+            if (modem == nil) then
+                os.pullEvent("peripheral")
+            end
+        end
+        installClerkInterface()
+    else
+        mainMenu()
+    end
+end
+
+while true do
+    local ok, err = pcall(run)
+    if not ok then
+        term.setBackgroundColor(colors.black)
+        term.setTextColor(colors.red)
+        term.clear()
+        term.setCursorPos(1,1)
+        if err == "Terminated" then
+            print("Termination prohibited.")
+        else
+            print("Installer Error: " .. tostring(err))
+        end
+        print("Restarting in 5 seconds...")
+        sleep(5)
+    end
+end

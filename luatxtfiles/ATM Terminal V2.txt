@@ -1,0 +1,383 @@
+-- ATM Terminal (01Zx7sRf)
+os.pullEvent = os.pullEventRaw -- Lock the shell (No Ctrl+T)
+
+local linkedAssistantID
+
+-------------------- Start
+local modem = peripheral.find("modem")
+
+while (modem == nil) do
+    modem = peripheral.find("modem")
+    if (modem == nil) then
+        term.setBackgroundColor(colors.red)
+        term.setTextColor(colors.white)
+        term.clear()
+        term.setCursorPos(1,1)
+        print("Ender modem required. Please connect a modem to continue...")
+        -- Wait for a peripheral without allowing Ctrl+T to terminate
+        while true do
+            local ev = {os.pullEventRaw()}
+            if ev[1] == "peripheral" then break end
+        end
+    end
+end
+
+peripheral.find("modem", rednet.open)
+
+local diskdrive = peripheral.find("drive")
+os.loadAPI("bankapi.lua")
+local serverData = bankapi.getServerData()
+
+local function ensureSafeDisk()
+    if not diskdrive or not diskdrive.isDiskPresent() then return true end
+    if not fs.exists("disk") then return true end
+    local allowed = { ["fiducia.txt"] = true }
+    for _, name in ipairs(fs.list("disk")) do
+        if not allowed[name] then
+            diskdrive.ejectDisk()
+            bankapi.errorScreen("Unsafe disk detected and ejected")
+            return false
+        end
+    end
+    return true
+end
+
+local f = fs.open("assistant.txt", "r")
+if (f ~= nil) then
+	linkedAssistantID = tonumber(f.readLine())
+	f.close()
+else
+    print("Looking for assistant (place a turtle, install assistant and turn it on)")
+	while (true) do
+		rednet.broadcast("hiring", "fiducia_customer")
+		local sender, message = rednet.receive("fiducia_customer", 1)
+		if (message == "offering") then
+			linkedAssistantID = sender
+			break
+		end
+	end
+    print("Assistant found: #"..linkedAssistantID)
+	local f = fs.open("assistant.txt", "w")
+	f.write(tostring(linkedAssistantID))
+	f.close()
+end
+
+local function main()
+local currentAccount = 0
+
+if (diskdrive.isDiskPresent() and ensureSafeDisk()) then
+    local f = fs.open("disk/fiducia.txt", "r")
+    if (f ~= nil) then
+        local value = f.readLine()
+        f.close()
+        if (value ~= nil) then
+            local key = value
+            local id = nil
+            local pipePos = string.find(value, "|", 1, true)
+            if pipePos ~= nil then
+                local k, i = value:match("([^|]+)|([^|]+)")
+                key = k or value
+                id = i
+            end
+            if id ~= nil and id ~= "" then
+                local ok, resp = bankapi.validateCard(key, id)
+                if ok then
+                    -- Check if account is frozen
+                    local tempClientData = bankapi.getClientData()
+                    if tempClientData[key] and tempClientData[key].frozen then
+                        currentAccount = 0
+                        bankapi.errorScreen("Account is frozen")
+                    else
+                        currentAccount = key
+                    end
+                else
+                    currentAccount = 0
+                    bankapi.errorScreen("Invalid or disabled card")
+                end
+            else
+                local tempClientData = bankapi.getClientData()
+                if tempClientData[key] ~= nil then
+                    if tempClientData[key].frozen then
+                        currentAccount = 0
+                        bankapi.errorScreen("Account is frozen")
+                    else
+                        currentAccount = key
+                    end
+                end
+            end
+        end
+    end
+end
+
+-------------------- Functions
+local function calculateValue()
+	local message = {
+		action = "calculateValue",
+		serverData = serverData
+	}
+    bankapi.waitScreen("Calculating value...")
+	while (true) do
+		rednet.send(linkedAssistantID, message, "fiducia_customer")
+		local sender, message = rednet.receive("fiducia_customer")
+		if (message.success) then
+			return message.response
+		end
+	end
+end
+
+local function deposit()
+	local message = {
+		action = "deposit",
+		serverData = serverData
+	}
+    bankapi.waitScreen("Depositing...")
+	rednet.send(linkedAssistantID, message, "fiducia_customer")
+		local sender, message = rednet.receive("fiducia_customer")
+	local amount = message.response
+	local success, response = bankapi.deposit(currentAccount, amount)
+    bankapi.successScreen("You have deposited $"..amount)
+	return success, response
+end
+
+local function assistantWithdrawItems(amount)
+	if (amount <= 0 or amount == nil) then
+		return false, "Invalid amount"
+	end
+
+	local message = {
+		action = "withdraw",
+		amount = amount,
+		serverData = serverData
+	}
+    bankapi.waitScreen("Withdrawing...")
+	rednet.send(linkedAssistantID, message, "fiducia_customer")
+		local sender, message = rednet.receive("fiducia_customer")
+	return message.success, message.response
+end
+
+local function reduceStorage()
+	local message = {
+		action = "reduce",
+		serverData = serverData
+	}
+	while (true) do
+		rednet.send(linkedAssistantID, message, "fiducia_customer")
+		local sender, message = rednet.receive("fiducia_customer")
+		if (message.success) then
+            bankapi.successScreen("Thank you! Come again!")
+            return
+        end
+    end
+end
+---------------------------
+
+-------------------- Loop
+while true do
+while true do
+	local tempClientData = bankapi.getClientData()
+	local command
+	if (tempClientData[currentAccount] == nil) then -- Guest screen
+	command = bankapi.optionMenu("Welcome!", {
+			{option = "login",
+		text = "Log In"},
+			{option = "info",
+		text = "What is Fiducia"},
+			{option = "createaccount",
+		text = "How do I make an account"},
+			{option = "pricing",
+		text = "Cost"},
+		})
+
+		if (command == "login") then
+			if (diskdrive.isDiskPresent()) then
+				os.reboot()
+			end
+		local accept = bankapi.confirmScreen({"","","","","","Please insert your", "card in the disk drive"})
+			if (accept) then
+				os.reboot()
+			end
+		elseif (command == "info") then
+		bankapi.textScreen({"","","","Welcome to Fiducia!","","With your Fiducia card you won't need to have","money on you ever again. You will be able to","perform remote transactions and have a full","movement log.","","You will be able to install machines at your","stores, with catalogues and automatic checkout.","All payments will end up in your account. No","more shuffling through chests to collect your","payments!"})
+		elseif (command == "createaccount") then
+		bankapi.textScreen({"","","","","","","","To make an account, contact your local Fiducia","employee and arrange a meeting. You will open an","account together in the bank."})
+		elseif (command == "pricing") then
+			bankapi.textScreen({
+				"","","","","",
+			"The Fiducia card is free!",
+				"",
+			"The bank automatically charges",
+			"$"..serverData.cumulativePrice.." per every ".."$"..serverData.cumulativeLimit,
+			"transferred to or from your account.",
+				"",
+			"",
+			"Ask about the Fiducia phone, which acts as a",
+			"card and lets perform transactions anywhere!",
+			})
+		end
+	else
+		local line = string.rep(string.char(140), 3)
+    local onlineLabel = "Make online account"
+    if (tempClientData[currentAccount].password ~= nil and tempClientData[currentAccount].password ~= "") then
+        onlineLabel = "Change Online Password"
+    end
+    command = bankapi.optionMenu(line.." "..tempClientData[currentAccount].name.." "..line, {
+		{option = "balance",
+		text = "Check balance"},
+		{option = "deposit",
+		text =  "Deposit"},
+		{option = "withdraw",
+		text =  "Withdraw"},
+		{option = "transaction",
+		text =  "Perform transaction"},
+        {option = "online",
+        text =  onlineLabel},
+		{option = "log",
+		text =  "Log"},
+		{option = "logout",
+		text =  "Exit"},
+	}, 2)
+
+		if (command == "balance") then
+			bankapi.showBalance(currentAccount)
+
+		elseif (command == "deposit") then
+			local amount = calculateValue()
+			local superbreak = false
+			while (amount <= 0) do
+			local accept = bankapi.confirmScreen({"","","","","","Input money into the container","before continuing."})
+				if (not accept) then 
+					superbreak = true
+					break
+				end
+				amount = calculateValue()
+			end
+			if (superbreak) then break end
+			local accept = bankapi.confirmScreen({"Are you sure you want to deposit?"}, {amount = "$"..amount})
+			if (not accept) then break end
+			if (amount > 0) then
+				deposit()
+			else
+				bankapi.textScreen({"","","","No money detected to deposit."})
+			end
+		elseif (command == "withdraw") then
+			local tempClientData = bankapi.getClientData()
+			local multiplier = tonumber(serverData.valueMultiplier)
+			local steps = {"Amount to withdraw ($)"}
+			local itemMax = math.floor(tempClientData[currentAccount].balance/multiplier)
+			local amount = bankapi.inputNumberScreen(steps, 1, itemMax*multiplier, itemMax*multiplier.." $")
+			if (amount == nil) then break end
+			amount = tonumber(amount)
+			if (amount > itemMax*multiplier) then
+				bankapi.errorScreen("Not enough balance")
+				break
+			end
+			local success, message = assistantWithdrawItems(amount)
+			if (not success) then
+				bankapi.errorScreen(message)
+				break
+			end
+			local success, message = bankapi.withdraw(currentAccount, amount)
+			if (success) then
+				bankapi.textScreen({
+					"",
+					"",
+					"",
+					"Done!",
+					"Please take your money",
+					"",
+					"Amount withdrawn: $"..amount})
+			else
+				bankapi.errorScreen(message)
+			end
+
+		elseif (command == "log") then
+			bankapi.transactionLogScreen(currentAccount)
+
+		elseif (command == "transaction") then
+			local tempClientData = bankapi.getClientData()
+			local steps = {"Select destination account","Select transfer amount","Enter transfer description"}
+			-- Filter destination accounts based on sender type rules
+			local senderType = tostring(tempClientData[currentAccount].type or "personal")
+			local filtered = {}
+			for k,v in pairs(tempClientData) do
+				if k ~= currentAccount then
+					local t = tostring(v.type or "personal")
+					if senderType == "personal" then
+						if t == "personal" then filtered[k] = v end
+					elseif senderType == "company" then
+						if t == "personal" or t == "company" then filtered[k] = v end
+					elseif senderType == "treasury" then
+						if t == "personal" or t == "company" then filtered[k] = v end
+					end
+				end
+			end
+			local to = bankapi.selectAccountScreen(steps, 1, currentAccount, filtered)
+			if (to == nil) then break end
+			local amount = bankapi.inputNumberScreen(steps, 2, tempClientData[currentAccount].balance)
+			if (amount == nil) then break end
+            -- Convert to numeric; inputNumberScreen returns a string
+            local intamount = tonumber(amount)
+            if (intamount == nil) then
+                bankapi.errorScreen("Invalid amount")
+                break
+            end
+			-- Validate intamount is positive and doesn't exceed balance
+            if (intamount <= 0) then
+                bankapi.errorScreen("Invalid amount")
+                break
+            end
+            if (intamount > tempClientData[currentAccount].balance) then
+                bankapi.errorScreen("Not enough balance")
+                break
+            end
+			local description = bankapi.inputTextScreen(steps, 3, 100)
+			if (description == nil) then break end
+
+			local success, message = bankapi.transaction(currentAccount, to, amount, description)
+			bankapi.responseScreen(success, message)
+
+        elseif (command == "online") then
+            if (tempClientData[currentAccount].password == nil or tempClientData[currentAccount].password == "") then
+                local steps = {"Create online account", "Enter a password"}
+                local password = bankapi.inputTextScreen(steps, 2, 64)
+                if (password == nil) then break end
+                local success, message = bankapi.setPassword(currentAccount, password)
+                bankapi.responseScreen(success, message)
+            else
+                local steps = {"Change password", "Enter current password", "Enter new password"}
+                local currentPass = bankapi.inputTextScreen(steps, 2, 64)
+                if (currentPass == nil) then break end
+                local newPass = bankapi.inputTextScreen(steps, 3, 64)
+                if (newPass == nil) then break end
+                local success, message = bankapi.changePassword(currentAccount, currentPass, newPass)
+                bankapi.responseScreen(success, message)
+            end
+
+		elseif (command == "logout") then
+			diskdrive.ejectDisk()
+	bankapi.successScreen("Successful logout")
+	bankapi.waitScreen("Ordering money...")
+			reduceStorage()
+			os.shutdown()
+		end
+	end
+end
+end
+end
+
+while true do
+    local ok, err = pcall(main)
+    if not ok then
+        term.setBackgroundColor(colors.black)
+        term.setTextColor(colors.red)
+        term.clear()
+        term.setCursorPos(1,1)
+        if err == "Terminated" then
+            print("Termination prohibited.")
+        else
+            print("Critical ATM Error: " .. tostring(err))
+        end
+        print("Restarting in 5 seconds...")
+        sleep(5)
+    end
+end

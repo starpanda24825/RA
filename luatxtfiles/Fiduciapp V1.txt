@@ -1,0 +1,197 @@
+-- Fiducia Mobile app
+ 
+os.loadAPI("bankapi.lua")
+ 
+local modemSide = "back"
+ 
+local modem = peripheral.find("modem")
+ 
+if (modem == nil) then
+	while (true) do
+		shell.run("equip")
+		modem = peripheral.find("modem")
+		if (modem == nil) then
+			term.setBackgroundColor(colors.red)
+			term.setTextColor(colors.white)
+			term.clear()
+			term.setCursorPos(1,1)
+			print("This app needs an Ender Modem. This app will auto-equip an Ender Modem from your inventory.")
+			print("")
+			print("Retrying in")
+			for i=1, 5 do
+				term.write(6-i.."...")
+				sleep(1)
+			end
+			print("Attempting auto-equip")
+			sleep(1)
+		else
+			os.reboot()
+		end
+	end
+end
+ 
+peripheral.find("modem", rednet.open)
+local serverData = bankapi.getServerData()
+ 
+local currentAccount = 0
+ 
+-- English-only UI strings
+local STR_WELCOME = "Welcome!"
+local STR_UNREGISTERED = {"Please register","this device with","a Fiducia","employee"}
+local STR_LOGIN = "Log In"
+local STR_INFO = "What is Fiducia"
+local STR_INFO_SCREEN = {
+    "Welcome to Fiducia!",
+    "",
+    "With your Fiducia card",
+    "you won't need to have",
+    "money on you ever again.",
+    "You will be able to make",
+    "remote transactions and",
+    "have a full movement log.",
+    "",
+    "You can also install",
+    "automated store clerks at",
+    "your shops with catalogues",
+    "and automatic checkout.",
+    "",
+    "Payments will end up in",
+    "your account. No more",
+    "shuffling through chests",
+    "to collect your payments!"
+}
+local STR_CREATE_ACCOUNT = "How to make an account"
+local STR_CREATE_ACCOUNT_SCREEN = {
+    "","","","","","","",
+    "To make an account,",
+    "contact your local",
+    "Fiducia employee and",
+    "arrange a meeting.",
+    "You will open an account",
+    "together at the bank."
+}
+local STR_CHECK_BALANCE = "Balance"
+local STR_PERFORM_TRANSACTION = "Transaction"
+local STR_HISTORY = "Log"
+local STR_LOGOUT = "Exit"
+local STR_TRANSACTION_INSTRUCTIONS = {"Recipient account", "Amount to send", "Description"}
+ 
+ 
+if (fs.exists("fiducia.txt")) then
+    local f = fs.open("fiducia.txt", "r")
+    if (f ~= nil) then
+        local value = f.readLine()
+        f.close()
+        if (value ~= nil) then
+            local key = value
+            local id = nil
+            local pipePos = string.find(value, "|", 1, true)
+            if pipePos ~= nil then
+                local k, i = value:match("([^|]+)|([^|]+)")
+                key = k or value
+                id = i
+            end
+            if id ~= nil and id ~= "" then
+                local ok = bankapi.validateCard(key, id)
+                if ok then
+                    currentAccount = key
+                end
+            else
+                local tempClientData = bankapi.getClientData()
+                if (tempClientData[key] ~= nil) then
+                    currentAccount = key
+                end
+            end
+        end
+    end
+end
+ 
+os.pullEvent = os.pullEventRaw -- Lock the shell
+
+local function run()
+while true do
+while true do
+    local tempClientData = bankapi.getClientData()
+    local command
+    if (tempClientData[currentAccount] == nil) then -- Guest screen
+        command = bankapi.optionMenu(STR_WELCOME, {
+            [1] = {option = "login", text = STR_LOGIN},
+            [2] = {option = "info", text = STR_INFO},
+            [3] = {option = "createaccount", text = STR_CREATE_ACCOUNT},
+        })
+ 
+        if (command == "login") then
+            local accept = bankapi.confirmScreen(STR_UNREGISTERED)
+            if (accept) then
+                os.reboot()
+            end
+        elseif (command == "info") then
+            bankapi.textScreen(STR_INFO_SCREEN)
+        elseif (command == "createaccount") then
+            bankapi.textScreen(STR_CREATE_ACCOUNT_SCREEN)
+        end
+    else
+        local line = string.rep(string.char(140), 3)
+        command = bankapi.optionMenu(line.." "..tempClientData[currentAccount].name.." "..line, {
+            [1] = {option = "balance", text = STR_CHECK_BALANCE},
+            [2] = {option = "transaction", text = STR_PERFORM_TRANSACTION},
+            [3] = {option = "log", text = STR_HISTORY},
+            [4] = {option = "quit", text = STR_LOGOUT},
+        }, 2, 24)
+ 
+		if (command == "balance") then
+			bankapi.showBalance(currentAccount)
+ 
+		elseif (command == "log") then
+			bankapi.transactionLogScreen(currentAccount)
+ 
+        elseif (command == "transaction") then
+            local tempClientData = bankapi.getClientData()
+            local steps = STR_TRANSACTION_INSTRUCTIONS
+            -- Filter recipients by sender type to avoid disallowed transfers
+            local recipients = {}
+            local senderType = tostring(tempClientData[currentAccount] and tempClientData[currentAccount].type or "personal")
+            for k, v in pairs(tempClientData) do
+                if tostring(k) ~= tostring(currentAccount) then
+                    local t = tostring(v.type or "personal")
+                    if senderType == "personal" then
+                        if t == "personal" then recipients[k] = v end
+                    elseif senderType == "company" then
+                        if t == "personal" or t == "company" then recipients[k] = v end
+                    elseif senderType == "treasury" then
+                        if t == "personal" or t == "company" then recipients[k] = v end
+                    end
+                end
+            end
+            local to = bankapi.selectAccountScreen(steps, 1, currentAccount, recipients)
+            if (to == nil) then break end
+            local amount = bankapi.inputNumberScreen(steps, 2, tempClientData[currentAccount].balance)
+            if (amount == nil) then break end
+            local description = bankapi.inputTextScreen(steps, 3, 100)
+            if (description == nil) then break end
+ 
+            local success, message = bankapi.transaction(currentAccount, to, amount, description)
+            bankapi.responseScreen(success, message)
+ 
+		elseif (command == "quit") then
+			os.shutdown()
+		end
+	end
+end
+
+while true do
+    local ok, err = pcall(run)
+    if not ok then
+        term.setBackgroundColor(colors.black)
+        term.setTextColor(colors.red)
+        term.clear()
+        term.setCursorPos(1,1)
+        if err == "Terminated" then
+            print("Termination prohibited.")
+        else
+            print("Critical App Error: " .. tostring(err))
+        end
+        print("Restarting in 5 seconds...")
+        sleep(5)
+    end
+end

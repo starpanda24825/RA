@@ -1,0 +1,2454 @@
+-- Bank Server (pXkJwRvb)
+os.pullEvent = os.pullEventRaw -- Lock the shell (No Ctrl+T)
+
+os.loadAPI("bankapi.lua")
+
+-------------------- Params (parameters)
+local currency = {
+    diamond = {
+        [1] = {
+            id="minecraft:diamond",
+            value=1,
+            name="Diamond",
+            plural="Diamonds",
+            short="D",
+            uprecipe={need=9,yield=1,result="minecraft:diamond_block"}
+        },
+        [2] = {
+            id="minecraft:diamond_block",
+            value=9,
+            name="Diamond Block",
+            plural="Diamond Blocks",
+            short="Bl",
+            downrecipe={need=1,yield=9,result="minecraft:diamond"}
+        }
+    },
+    gold = {
+        [1] = {
+            id="minecraft:gold_nugget",
+            value=1,
+            name="Gold Nugget",
+            plural="Gold Nuggets",
+            short="N",
+            uprecipe={need=9,yield=1,result="minecraft:gold_ingot"}
+        },
+        [2] = {
+            id="minecraft:gold_ingot",
+            value=9,
+            name="Gold Ingot",
+            plural="Gold Ingots",
+            short="I",
+            downrecipe={need=1,yield=9,result="minecraft:gold_nugget"},
+            uprecipe={need=9,yield=1,result="minecraft:gold_block"}
+        },
+        [3] = {
+            id="minecraft:gold_block",
+            value=81,
+            name="Gold Block",
+            plural="Gold Blocks",
+            short="B",
+            downrecipe={need=1,yield=9,result="minecraft:gold_ingot"}
+        }
+    },
+    emerald = {
+        [1] = {
+            id="minecraft:emerald",
+            value=1,
+            name="Emerald",
+            plural="Emeralds",
+            short="E",
+            uprecipe={need=9,yield=1,result="minecraft:emerald_block"}
+        },
+        [2] = {
+            id="minecraft:emerald_block",
+            value=9,
+            name="Emerald Block",
+            plural="Emerald Blocks",
+            short="Bl",
+            downrecipe={need=1,yield=9,result="minecraft:emerald"}
+        }
+    },
+    netherite = {
+        [1] = {
+            id="minecraft:netherite_ingot",
+            value=1,
+            name="Netherite Ingot",
+            plural="Netherite Ingots",
+            short="I",
+            uprecipe={need=9,yield=1,result="minecraft:netherite_block"}
+        },
+        [2] = {
+            id="minecraft:netherite_block",
+            value=9,
+            name="Netherite Block",
+            plural="Netherite Blocks",
+            short="B",
+            downrecipe={need=1,yield=9,result="minecraft:netherite_ingot"}
+        }
+    },
+    -- Simple coin is an unpublished coin mod made by me.
+    -- It is compatible with this bank, but the option is hidden.
+    simplecoin = {
+        [1] = {
+            id="simple_coins:copper_coin",
+            value=1,
+            name="Copper piece",
+            short="cp",
+            uprecipe={need=5,yield=1,result="simple_coins:copper_coin_pile"}
+        },
+        [2] = {
+            id="simple_coins:copper_coin_pile",
+            value=5,
+            name="Copper piece pile",
+            short="cpp",
+            downrecipe={need=1,yield=5,result="simple_coins:copper_coin"},
+            uprecipe={need=2,yield=1,result="simple_coins:silver_coin"},
+            ingredient=true
+        },
+        [3] = {
+            id="simple_coins:silver_coin",
+            value=10,
+            name="Silver piece",
+            short="sp",
+            downrecipe={need=1,yield=2,result="simple_coins:copper_coin_pile"},
+            uprecipe={need=5,yield=1,result="simple_coins:silver_coin_pile"}
+        },
+        [4] = {
+            id="simple_coins:silver_coin_pile",
+            value=50,
+            name="Silver piece pile",
+            short="spp",
+            downrecipe={need=1,yield=5,result="simple_coins:silver_coin"},
+            uprecipe={need=2,yield=1,result="simple_coins:gold_coin"},
+            ingredient=true
+        },
+        [5] = {
+            id="simple_coins:gold_coin",
+            value=100,
+            name="Gold Piece",
+            short="gp",
+            downrecipe={need=1,yield=2,result="simple_coins:silver_coin"}
+        }
+    }
+}
+-----------------------------
+
+local cumulativeLimit = 10000 -- Every x money moved, you get charged
+local cumulativePrice = 100 -- How much you pay
+local currencyPrices = {
+    diamond = 100,
+    gold = 100,
+    netherite = 100,
+    emerald = 100
+}
+local terminalPassword = "1234"
+local bankOwnerKey = 0
+-- Treasury and Taxes configuration
+local treasuryKey = 0
+local taxEnabled = false
+-- Legacy aggregate tax rate retained for backward compatibility
+local taxRatePercent = 0
+-- New split tax rates
+local taxRatePercentPersonal = 0
+local taxRatePercentCompany = 0
+local taxThreshold = 0
+local taxPeriodDays = 7 -- 7 (week), 14 (two weeks), 30 (month)
+local taxLastRunEpoch = 0
+-- Secure channel parameters
+local networkSecret = ""
+local sessionNonce = ""
+
+-- English-only UI strings
+local STR_TITLE = "Fiducia Server, DO NOT TURN OFF"
+local STR_ACCOUNT_START = "Welcome to Fiducia!"
+local STR_ERR_INVALID_AMOUNT = "Invalid amount"
+local STR_ERR_FROM = "Invalid origin account"
+local STR_ERR_TO = "Invalid target account"
+local STR_ERR_ACCOUNT = "Non-existent account"
+local STR_ERR_SAME = "Cannot use the same origin and target account"
+local STR_ERR_NOT_ENOUGH = "Insufficient balance"
+local STR_ERR_MIXED_TYPES = "Cannot transfer between personal and company accounts"
+local STR_SUCCESS_TX = "Transaction successful"
+local STR_SUCCESS_UPDATE = "Update successful"
+local STR_SUCCESS_ACCOUNT = "Account created successfully"
+local STR_ACCOUNT_DELETED = "Account deleted successfully"
+local STR_NOT_ASSIGNED = "<unassigned>"
+local STR_DELETED_ACCOUNT = "<deleted>"
+local STR_ADMIN_TITLE = "Fiducia - Server Settings"
+local STR_CURRENCY_TYPE = "Currency type"
+local STR_VALUE_MULTIPLIER = "Value multiplier"
+local STR_CUMULATIVE_LIMIT = "Cumulative limit"
+local STR_LIMIT_REACH_COST = "Limit reach cost"
+local STR_SET_OWNER = "Set bank owner"
+local STR_PASSWORD_EXPLANATION = "Enter a new admin terminal password"
+local STR_VALUE_MULTIPLIER_EXPLANATION = "Set $ per unit of base currency"
+local STR_CUMULATIVE_LIMIT_EXPLANATION = "Set amount threshold for fee to apply"
+local STR_LIMIT_REACH_COST_EXPLANATION = "Set fee charged when threshold reached"
+local STR_SET_OWNER_EXPLANATION = "Select account to set as bank owner"
+local STR_WITHDRAW_DESC = "Withdrawal"
+local STR_DEPOSIT_DESC = "Deposit"
+local STR_EXPENSES = "Fiducia expenses"
+local STR_CURRENCY_TYPE = "Currency item"
+local STR_VALUE_MULTIPLIER = "Item value"
+local STR_VALUE_MULTIPLIER_EXPL = "How much $ a single Currency Item is worth"
+local STR_PASSWORD_EXPL = "Password for the admin terminals"
+local STR_CUMULATIVE_LIMIT = "Cumulative limit"
+local STR_CUMULATIVE_LIMIT_EXPL = "How much a user can exchange before paying expenses"
+local STR_LIMIT_REACH_COST = "Expenses"
+local STR_LIMIT_REACH_COST_EXPL = "How much to charge a user when they reach the cumulative limit"
+local STR_SET_OWNER = "Set owner"
+local STR_SET_OWNER_EXPL = "Set the account that will collect the bank expenses"
+local STR_NOT_ASSIGNED = "- not assigned -"
+local STR_DELETED_ACCOUNT = "- deleted -"
+local STR_TAX_SETTINGS = "Tax Settings"
+local STR_TAX_ENABLED = "Taxes enabled"
+local STR_TAX_RATE = "Tax rate (%)"
+local STR_TAX_RATE_PERSONAL = "Personal tax rate (%)"
+local STR_TAX_RATE_COMPANY = "Company tax rate (%)"
+local STR_TAX_THRESHOLD = "Threshold ($)"
+local STR_TAX_PERIOD = "Period"
+local STR_TAX_RUN_NOW = "Run taxes now"
+local STR_TAX_DESC = "Taxes"
+local STR_CURRENCY_SETTINGS = "Currency"
+--------------------
+
+-------------------- Variables
+local clientData = {}
+local filePath = "bank/"
+--------------------
+
+-------------------- Functions
+-- Forward declarations for hashing helpers used in serverSettings
+local srv_hashPassword
+local srv_verify
+-- Forward declarations for bank functions
+local updateSettingsFile
+local serverSettings
+local loadClients
+local updateClientFile
+local appendTransactionToLog
+local getCurrentTime
+local addCumulative
+local nowEpoch
+local accountNameExists
+local applyTaxes
+local withdraw
+local deposit
+local getTransactionLog
+local transaction
+local newClient
+local newCompany
+-- Hashing helpers for passwords (ASHA-512-like)
+local function srv_safeYield()
+    if type(task) == "table" and type(task.wait) == "function" then
+        task.wait()
+        return
+    end
+    if type(wait) == "function" then
+        wait()
+        return
+    end
+    if type(coroutine) == "table" and type(coroutine.running) == "function" and type(coroutine.yield) == "function" then
+        local running = coroutine.running()
+        if running then pcall(coroutine.yield, 0) end
+    end
+end
+local function srv_rightRotate(n, b)
+    return bit32.band(bit32.bor(bit32.rshift(n, b), bit32.lshift(n, 32 - b)), 0xFFFFFFFF)
+end
+
+local function srv_rightShift(n, b)
+    return bit32.rshift(n, b)
+end
+
+local function srv_toBytes(str)
+    local bytes = {}
+    for i = 1, #str do bytes[#bytes + 1] = string.byte(str:sub(i, i)) end
+    return bytes
+end
+
+local srv_k = {
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+}
+
+local function srv_ASHA512(password, salt, iterations)
+    salt = salt or ""
+    iterations = iterations or 1
+    local function run_once(message)
+        local h = {0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19}
+        local function compress(chunk)
+            local w = {}
+            for i = 1, 16 do
+                local o = (i - 1) * 4 + 1
+                w[i] = bit32.band(bit32.bor(bit32.lshift(chunk[o] or 0, 24), bit32.lshift(chunk[o+1] or 0, 16), bit32.lshift(chunk[o+2] or 0, 8), (chunk[o+3] or 0)), 0xFFFFFFFF)
+            end
+            for i = 17, 64 do
+                local s0 = bit32.bxor(srv_rightRotate(w[i-15],7), srv_rightRotate(w[i-15],18), srv_rightShift(w[i-15],3))
+                local s1 = bit32.bxor(srv_rightRotate(w[i-2],17), srv_rightRotate(w[i-2],19), srv_rightShift(w[i-2],10))
+                w[i] = bit32.band((w[i-16] + s0 + w[i-7] + s1), 0xFFFFFFFF)
+            end
+            local a,b,c,d,e,f,g,hh = h[1],h[2],h[3],h[4],h[5],h[6],h[7],h[8]
+            for i = 1, 64 do
+                local S1 = bit32.bxor(srv_rightRotate(e,6), srv_rightRotate(e,11), srv_rightRotate(e,25))
+                local ch = bit32.bxor(bit32.band(e,f), bit32.band(bit32.bnot(e), g))
+                local temp1 = bit32.band((hh + S1 + ch + srv_k[i] + w[i]), 0xFFFFFFFF)
+                local S0 = bit32.bxor(srv_rightRotate(a,2), srv_rightRotate(a,13), srv_rightRotate(a,22))
+                local maj = bit32.bxor(bit32.band(a,b), bit32.band(a,c), bit32.band(b,c))
+                local temp2 = bit32.band((S0 + maj), 0xFFFFFFFF)
+                hh = g; g = f; f = e; e = bit32.band((d + temp1), 0xFFFFFFFF)
+                d = c; c = b; b = a; a = bit32.band((temp1 + temp2), 0xFFFFFFFF)
+            end
+            h[1] = bit32.band(h[1] + a, 0xFFFFFFFF)
+            h[2] = bit32.band(h[2] + b, 0xFFFFFFFF)
+            h[3] = bit32.band(h[3] + c, 0xFFFFFFFF)
+            h[4] = bit32.band(h[4] + d, 0xFFFFFFFF)
+            h[5] = bit32.band(h[5] + e, 0xFFFFFFFF)
+            h[6] = bit32.band(h[6] + f, 0xFFFFFFFF)
+            h[7] = bit32.band(h[7] + g, 0xFFFFFFFF)
+            h[8] = bit32.band(h[8] + hh, 0xFFFFFFFF)
+            local hash = ""
+            for i = 1, 8 do hash = hash .. string.format("%08x", h[i]) end
+            return hash
+        end
+        local msgBytes = srv_toBytes(message)
+        local originalBitLength = #message * 8
+        msgBytes[#msgBytes + 1] = 0x80
+        while (#msgBytes % 64) ~= 56 do msgBytes[#msgBytes + 1] = 0x00 end
+        for i = 1, 4 do msgBytes[#msgBytes + 1] = 0 end
+        for i = 3, 0, -1 do
+            msgBytes[#msgBytes + 1] = bit32.band(bit32.rshift(originalBitLength, i * 8), 0xFF)
+        end
+        local chunk = {}
+        for j = 1, 64 do chunk[j] = msgBytes[j] or 0 end
+        return compress(chunk)
+    end
+    local current = password
+    for i = 1, iterations do
+        if i % 100 == 0 then srv_safeYield() end
+        current = run_once(current .. salt)
+    end
+    return current
+end
+
+srv_hashPassword = function(password, customSalt, iterations)
+    local salt = customSalt or ""
+    if salt == "" then
+        math.randomseed(os.time())
+        local chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/"
+        for i = 1, 32 do
+            local idx = math.random(1, #chars)
+            salt = salt .. chars:sub(idx, idx)
+        end
+    end
+    local iters = iterations or 1
+    local hash = srv_ASHA512(password, salt, iters)
+    return hash .. ":" .. salt .. ":" .. tostring(iters)
+end
+
+srv_verify = function(password, fullHash)
+    local storedHash, salt, iters = tostring(fullHash or ""):match("([^:]+):([^:]+):(%d+)")
+    if not storedHash or not salt or not iters then return false end
+    local computed = srv_ASHA512(password, salt, tonumber(iters))
+    return computed == storedHash
+end
+updateSettingsFile = function()
+    local f = fs.open(filePath.."settings.txt", "w")
+    f.writeLine("Currency prices:")
+    local priceStr = ""
+    for k, v in pairs(currencyPrices) do
+        priceStr = priceStr .. k .. ":" .. v .. "|"
+    end
+    f.writeLine(priceStr:sub(1, -2))
+    f.writeLine("Admin password:")
+    f.writeLine(terminalPassword)
+    f.writeLine("Cumulative limit:")
+    f.writeLine(cumulativeLimit)
+    f.writeLine("Limit reach cost:")
+    f.writeLine(cumulativePrice)
+    f.writeLine("Bank owner ID:")
+    f.writeLine(bankOwnerKey)
+    f.writeLine("Network Secret:")
+    f.writeLine(networkSecret or "")
+    -- Taxes configuration
+    f.writeLine("Treasury key:")
+    f.writeLine(tostring(treasuryKey or 0))
+    f.writeLine("Taxes enabled:")
+    f.writeLine(tostring(taxEnabled and true or false))
+    -- Write legacy aggregate rate for compatibility (mirror personal rate)
+    f.writeLine("Tax rate percent:")
+    f.writeLine(tostring(taxRatePercentPersonal or taxRatePercent or 0))
+    -- New split rates
+    f.writeLine("Tax rate personal percent:")
+    f.writeLine(tostring(taxRatePercentPersonal or 0))
+    f.writeLine("Tax rate company percent:")
+    f.writeLine(tostring(taxRatePercentCompany or 0))
+    f.writeLine("Tax threshold:")
+    f.writeLine(tostring(taxThreshold or 0))
+    f.writeLine("Tax period days:")
+    f.writeLine(tostring(taxPeriodDays or 7))
+    f.writeLine("Tax last run epoch:")
+    f.writeLine(tostring(taxLastRunEpoch or 0))
+    f.close()
+end
+
+serverSettings = function()
+    if (fs.exists(filePath.."settings.txt")) then
+        local f = fs.open(filePath.."settings.txt", "r")
+        local label = f.readLine()
+        local foundSplitRates = false
+        local oldCurrencyType = nil
+        local oldMultiplier = nil
+
+        while label ~= nil do
+            if label == "Language:" then
+                f.readLine()
+            elseif label == "Currency type:" then
+                oldCurrencyType = f.readLine()
+            elseif label == "Currency value multiplier:" then
+                oldMultiplier = tonumber(f.readLine()) or 100
+            elseif label == "Currency prices:" then
+                local line = f.readLine()
+                if line then
+                    for k, v in line:gmatch("([^:|]+):([^:|]+)") do
+                        if currencyPrices[k] ~= nil then
+                            currencyPrices[k] = tonumber(v) or 0
+                        end
+                    end
+                end
+            elseif label == "Admin password:" then
+                terminalPassword = f.readLine()
+                if terminalPassword ~= nil and not tostring(terminalPassword):match("^[^:]+:[^:]+:%d+$") then
+                    terminalPassword = srv_hashPassword(tostring(terminalPassword))
+                    -- We'll update the file after finishing loading everything
+                end
+            elseif label == "Cumulative limit:" then
+                cumulativeLimit = tonumber(f.readLine()) or 10000
+            elseif label == "Limit reach cost:" then
+                cumulativePrice = tonumber(f.readLine()) or 100
+            elseif label == "Bank owner ID:" then
+                bankOwnerKey = tonumber(f.readLine()) or 0
+            elseif label == "Network Secret:" then
+                networkSecret = tostring(f.readLine() or "")
+            elseif label == "Treasury key:" then
+                treasuryKey = tonumber(f.readLine() or "0") or 0
+            elseif label == "Taxes enabled:" then
+                taxEnabled = (tostring(f.readLine() or "false") == "true")
+            elseif label == "Tax rate percent:" then
+                taxRatePercent = tonumber(f.readLine() or "0") or 0
+                if not foundSplitRates then
+                    taxRatePercentPersonal = taxRatePercent
+                    taxRatePercentCompany = taxRatePercent
+                end
+            elseif label == "Tax rate personal percent:" then
+                taxRatePercentPersonal = tonumber(f.readLine() or "0") or 0
+                foundSplitRates = true
+            elseif label == "Tax rate company percent:" then
+                taxRatePercentCompany = tonumber(f.readLine() or "0") or 0
+                foundSplitRates = true
+            elseif label == "Tax threshold:" then
+                taxThreshold = tonumber(f.readLine() or "0") or 0
+            elseif label == "Tax period days:" then
+                taxPeriodDays = tonumber(f.readLine() or "7") or 7
+            elseif label == "Tax last run epoch:" then
+                taxLastRunEpoch = tonumber(f.readLine() or "0") or 0
+            else
+                -- Unknown label, try to skip its value
+                f.readLine()
+            end
+            label = f.readLine()
+        end
+        f.close()
+
+        -- Migration for old format
+        if oldCurrencyType and oldMultiplier then
+            for k, _ in pairs(currencyPrices) do
+                if k == oldCurrencyType then
+                    currencyPrices[k] = oldMultiplier
+                else
+                    currencyPrices[k] = 0
+                end
+            end
+            updateSettingsFile()
+        end
+    else
+        updateSettingsFile()
+    end
+end
+
+loadClients = function()
+    local f = fs.open(filePath.."clientList.txt", "r")
+    if (f == nil) then return end
+    
+    local newData = {}
+    while true do
+        local line = f.readLine()
+        if line == nil or line == "" then break end
+        local key = tostring(line or "")
+        if key ~= "" then
+            local infoPath = filePath.."clientData/"..key.."/info.txt"
+            local cf = fs.open(infoPath, "r")
+            if cf ~= nil then
+                newData[key] = {
+                    name = "",
+                    balance = 0,
+                    color = 1,
+                    cumulative = 0,
+                    type = "personal",
+                    owner = "",
+                    treasury = "",
+                    password = "",
+                    shares = 0,
+                    tag = "",
+                    frozen = false
+                }
+                local cline = cf.readLine()
+                while cline ~= nil and cline ~= "" do
+                    if (cline == "name") then
+                        cline = cf.readLine(); newData[key].name = tostring(cline or "")
+                    elseif (cline == "balance") then
+                        cline = cf.readLine(); newData[key].balance = tonumber(cline or "0") or 0
+                    elseif (cline == "color") then
+                        cline = cf.readLine(); newData[key].color = tonumber(cline or "1") or 1
+                    elseif (cline == "cumulative") then
+                        cline = cf.readLine(); newData[key].cumulative = tonumber(cline or "0") or 0
+                    elseif (cline == "type") then
+                        cline = cf.readLine(); newData[key].type = tostring(cline or "personal")
+                    elseif (cline == "owner") then
+                        cline = cf.readLine(); newData[key].owner = tostring(cline or "")
+                    elseif (cline == "treasury") then
+                        cline = cf.readLine(); newData[key].treasury = tostring(cline or "")
+                    elseif (cline == "password") then
+                        cline = cf.readLine(); newData[key].password = tostring(cline or "")
+                    elseif (cline == "shares") then
+                        cline = cf.readLine(); newData[key].shares = tonumber(cline or "0") or 0
+                    elseif (cline == "tag") then
+                        cline = cf.readLine(); newData[key].tag = tostring(cline or "")
+                    elseif (cline == "frozen") then
+                        cline = cf.readLine(); newData[key].frozen = (tostring(cline or "false") == "true")
+                    end
+                    cline = cf.readLine()
+                end
+                cf.close()
+            else
+                -- Malformed entry; skip safely
+                newData[key] = nil
+            end
+        end
+    end
+    f.close()
+    -- Atomically update the global clientData
+    clientData = newData
+end
+
+local function getClientData(data)
+	loadClients()
+	return true, clientData
+end
+
+local function getServerData(data)
+    local mergedCurrency = {}
+    -- Base indices for each currency type (which item the user sets the price for)
+    local baseIndices = {
+        diamond = 1,
+        gold = 2,
+        emerald = 1,
+        netherite = 1
+    }
+
+    for cType, price in pairs(currencyPrices) do
+        if price > 0 and currency[cType] then
+            local baseIndex = baseIndices[cType] or 1
+            local baseRelValue = currency[cType][baseIndex].value
+            local multiplier = price / baseRelValue
+            
+            for _, item in ipairs(currency[cType]) do
+                local newItem = {}
+                for k, v in pairs(item) do newItem[k] = v end
+                newItem.value = item.value * multiplier
+                table.insert(mergedCurrency, newItem)
+            end
+        end
+    end
+    -- Sort by value ascending so that ATM withdrawal logic (which iterates backwards)
+    -- picks the most valuable items first across all types.
+    table.sort(mergedCurrency, function(a, b) return a.value < b.value end)
+
+    return true, {
+        lang = lang,
+        currency = mergedCurrency,
+        valueMultiplier = 1,
+        terminalPassword = terminalPassword,
+        cumulativeLimit = cumulativeLimit,
+        cumulativePrice = cumulativePrice,
+        sessionNonce = sessionNonce,
+        secureEnabled = (networkSecret ~= nil and networkSecret ~= ""),
+        taxes = {
+            enabled = taxEnabled,
+            ratePercent = taxRatePercent, -- legacy field retained
+            ratePercentPersonal = taxRatePercentPersonal,
+            ratePercentCompany = taxRatePercentCompany,
+            threshold = taxThreshold,
+            periodDays = taxPeriodDays,
+            lastRunEpoch = taxLastRunEpoch,
+            treasuryKey = treasuryKey
+        }
+    }
+end
+
+updateClientFile = function(key)
+    local f = fs.open(filePath.."clientData/"..key.."/info.txt", "w")
+    if (f == nil) then return false, STR_ERR_ACCOUNT end
+
+    local acct = clientData[key]
+    if not acct then
+        f.close()
+        return false, STR_ERR_ACCOUNT
+    end
+
+    local acctType = tostring(acct.type or "personal")
+    f.writeLine("name")
+    f.writeLine(tostring(acct.name or ""))
+    f.writeLine("balance")
+    f.writeLine(tostring(tonumber(acct.balance) or 0))
+    f.writeLine("color")
+    f.writeLine(tostring(tonumber(acct.color) or 1))
+    f.writeLine("type")
+    f.writeLine(acctType)
+    if acctType ~= "treasury" then
+        f.writeLine("cumulative")
+        f.writeLine(tostring(tonumber(acct.cumulative) or 0))
+        f.writeLine("owner")
+        f.writeLine(tostring(acct.owner or ""))
+        f.writeLine("treasury")
+        f.writeLine(tostring(acct.treasury or ""))
+        f.writeLine("password")
+        f.writeLine(tostring(acct.password or ""))
+        f.writeLine("shares")
+        f.writeLine(tostring(tonumber(acct.shares) or 0))
+    else
+        -- Treasury-specific minimal fields
+        f.writeLine("tag")
+        f.writeLine(tostring(acct.tag or ""))
+        f.writeLine("password")
+        f.writeLine(tostring(acct.password or ""))
+    end
+    f.writeLine("frozen")
+    f.writeLine(tostring(acct.frozen and "true" or "false"))
+    f.close()
+
+	return true, STR_SUCCESS_UPDATE
+end
+
+appendTransactionToLog = function(from, to, amount, balance, time, description)
+	local f = fs.open(filePath.."clientData/"..from.."/log.txt", "a")
+	f.writeLine("other")
+	f.writeLine(to)
+	f.writeLine("amount")
+	f.writeLine(tostring(-amount))
+	f.writeLine("balance")
+	f.writeLine(tostring(balance))
+	f.writeLine("time")
+	f.writeLine(time)
+	f.writeLine("description")
+	f.writeLine(description)
+	f.writeLine("")
+	f.close()
+end
+
+getCurrentTime = function()
+	return os.date("%d/%m/%Y %H:%M")
+end
+
+addCumulative = function(key, amount)
+	if (cumulativeLimit == 0) then return nil end
+	if (cumulativePrice == 0) then return nil end
+	
+	local acct = clientData[key]
+	if not acct then return end
+	
+	-- Treasury accounts do not track cumulative transaction volume for fees
+	if tostring(acct.type or "") == "treasury" then return end
+	
+	-- Ensure cumulative is initialized
+	acct.cumulative = (tonumber(acct.cumulative) or 0) + amount
+	
+	if (bankOwnerKey ~= 0) then
+		if (key ~= bankOwnerKey) then
+			if (clientData[bankOwnerKey] ~= nil and tostring(clientData[bankOwnerKey].type or "") == "treasury") then
+				local tax = 0
+				local cumulative = acct.cumulative
+				while cumulative >= cumulativeLimit do
+					tax = tax+cumulativePrice
+					cumulative = cumulative-cumulativeLimit
+				end
+				if (tax > 0) then
+					if (tonumber(acct.balance) or 0) >= tax then
+						transaction({
+							from = key,
+							to = bankOwnerKey,
+							amount = tax,
+							description = STR_EXPENSES
+						}, false)
+						acct.cumulative = cumulative
+					end
+				end
+			end
+		end
+	end
+end
+
+-- Epoch helper: returns UTC ms if available, otherwise nil
+nowEpoch = function()
+    if type(os.epoch) == "function" then
+        return os.epoch("utc")
+    end
+    return nil
+end
+-- Check if an account name already exists (case-insensitive, trimmed)
+accountNameExists = function(name)
+    local target = tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if target == "" then return false end
+    local lower = string.lower(target)
+    loadClients()
+    for _, v in pairs(clientData) do
+        local vname = tostring(v.name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        if string.lower(vname) == lower then
+            return true
+        end
+    end
+    return false
+end
+
+-- Apply taxes across all accounts meeting threshold; credit to treasury/bank owner if available
+applyTaxes = function()
+    if not taxEnabled then return false, "Taxes disabled" end
+    local now = nowEpoch()
+    loadClients()
+    local appliedCount = 0
+    local sumByTreasury = {}
+    
+    -- Collect keys to avoid mutation issues during iteration
+    local keys = {}
+    for k, _ in pairs(clientData) do
+        table.insert(keys, k)
+    end
+    
+    for _, key in ipairs(keys) do
+        local acct = clientData[key]
+        if acct then
+            local acctType = tostring(acct.type or "personal")
+            -- Skip treasury accounts entirely
+            if acctType ~= "treasury" then
+                if tonumber(acct.balance or 0) >= tonumber(taxThreshold or 0) then
+                    local rate = (acctType == "company") and tonumber(taxRatePercentCompany or 0) or tonumber(taxRatePercentPersonal or 0)
+                    local taxAmount = (tonumber(acct.balance or 0) * (rate / 100))
+                    taxAmount = math.floor(taxAmount * 100) / 100
+                    if taxAmount > 0 then
+                        local linkedTreasury = tostring(acct.treasury or "")
+                        if linkedTreasury ~= "" and clientData[linkedTreasury] ~= nil and tostring(clientData[linkedTreasury].type or "") == "treasury" then
+                            -- Pass true to skip redundant loadClients
+                            local ok = withdraw({ key = key, amount = taxAmount }, true)
+                            if ok then
+                                sumByTreasury[linkedTreasury] = (sumByTreasury[linkedTreasury] or 0) + taxAmount
+                                appliedCount = appliedCount + 1
+                            end
+                        else
+                            -- Fallback: if there is a configured treasury, credit there per-account
+                            if treasuryKey ~= nil and treasuryKey ~= 0 and clientData[treasuryKey] ~= nil then
+                                -- Pass true to skip redundant loadClients
+                                transaction({ from = key, to = treasuryKey, amount = taxAmount, description = STR_TAX_DESC }, false, true)
+                                appliedCount = appliedCount + 1
+                            else
+                                -- No sink available; just withdraw to avoid breaking invariants
+                                -- Pass true to skip redundant loadClients
+                                withdraw({ key = key, amount = taxAmount }, true)
+                                appliedCount = appliedCount + 1
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    -- Credit aggregated taxes to each respective treasury
+    local time = getCurrentTime()
+    for tkey, total in pairs(sumByTreasury) do
+        if total > 0 and clientData[tkey] ~= nil then
+            local newBal = tonumber(clientData[tkey].balance or 0) + total
+            clientData[tkey].balance = newBal
+            updateClientFile(tkey)
+            appendTransactionToLog(tkey, tkey, -total, newBal, time, STR_TAX_DESC)
+        end
+    end
+    if now ~= nil then
+        taxLastRunEpoch = now
+        updateSettingsFile()
+    end
+    return true, "Taxes applied to "..tostring(appliedCount).." account(s)"
+end
+
+-- Move money from one account to another
+transaction = function(data, addToCumulative, skipLoad) --from, to, amount, description
+	if (addToCumulative == nil) then addToCumulative = true end
+	local from = tostring(data.from)
+	local to = tostring(data.to)
+	local amount = tonumber(data.amount)
+	local description = data.description
+
+	amount = math.ceil(amount*100)/100
+
+    if (amount == 0 or amount == nil) then
+        return false, STR_ERR_INVALID_AMOUNT
+    end
+
+	if not skipLoad then loadClients() end
+
+    if (from == to) then
+        return false, STR_ERR_SAME
+    end
+    if (clientData[from] == nil) then
+        return false, STR_ERR_FROM.." ("..from..")"
+    end
+    if (clientData[to] == nil) then
+        return false, STR_ERR_TO.." ("..to..")"
+    end
+
+    -- Enforce transfer rules (only for user-directed transactions):
+    -- - Personal accounts can only send to personal accounts
+    -- - Company accounts can send to personal or company accounts
+    -- - Treasury accounts can send to personal or company accounts
+    -- Note: server-initiated flows (e.g., taxes) pass addToCumulative=false and bypass these restrictions
+    local fromType = tostring(clientData[from].type or "personal")
+    local toType = tostring(clientData[to].type or "personal")
+    if (addToCumulative) then
+        local allowed = false
+        if fromType == "personal" then
+            allowed = (toType == "personal" or toType == "treasury")
+        elseif fromType == "company" then
+            allowed = (toType == "personal" or toType == "company" or toType == "treasury")
+        elseif fromType == "treasury" then
+            allowed = (toType == "personal" or toType == "company")
+        else
+            allowed = false
+        end
+        if not allowed then
+            return false, STR_ERR_MIXED_TYPES
+        end
+    end
+
+	local previousFromBalance = clientData[from].balance
+	local newFromBalance = previousFromBalance-amount
+
+    -- Prevent overdrafts for all user-directed transactions
+    if (newFromBalance < 0) then
+        return false, STR_ERR_NOT_ENOUGH
+    end
+
+	local previousToBalance = clientData[to].balance
+	local newToBalance = previousToBalance+amount
+	local time = getCurrentTime()
+
+	clientData[from].balance = newFromBalance
+	clientData[to].balance = newToBalance
+
+	updateClientFile(from)
+	updateClientFile(to)
+	
+	-- Save value history if companies are involved
+	if clientData[from] and tostring(clientData[from].type or "") == "company" then
+		saveCompanyValueHistory(from)
+	end
+	if clientData[to] and tostring(clientData[to].type or "") == "company" then
+		saveCompanyValueHistory(to)
+	end
+
+	appendTransactionToLog(from, to, amount, newFromBalance, time,description)
+	appendTransactionToLog(to, from, -amount, newToBalance, time, description)
+
+	if (addToCumulative) then
+		if not skipLoad then loadClients() end
+		addCumulative(from, amount)
+		addCumulative(to, amount)
+		updateClientFile(from)
+		updateClientFile(to)
+	end
+
+	return true, STR_SUCCESS_TX
+end
+
+deposit = function(data, skipLoad)
+	local key = data.key
+	local amount = tonumber(data.amount)
+	local description = STR_DEPOSIT_DESC
+
+	--print(textutils.serialise(data))
+	if (amount == 0 or amount == nil) then
+		return false, STR_ERR_INVALID_AMOUNT
+	end
+
+	if not skipLoad then loadClients() end
+
+	if (clientData[key] == nil) then
+		return false, STR_ERR_FROM.." ("..key..")"
+	end
+
+	local previousBalance = clientData[key].balance
+	local newBalance = previousBalance+amount
+
+	local time = getCurrentTime()
+
+	clientData[key].balance = newBalance
+	updateClientFile(key)
+	
+	if clientData[key] and tostring(clientData[key].type or "") == "company" then
+		saveCompanyValueHistory(key)
+	end
+
+	appendTransactionToLog(key, key, -amount, newBalance, time, description)
+
+	return true, STR_SUCCESS_TX
+end
+
+withdraw = function(data, skipLoad)
+	local key = data.key
+	local amount = tonumber(data.amount)
+	local description = STR_WITHDRAW_DESC
+
+	if (amount == 0 or amount == nil) then
+		return false, STR_ERR_INVALID_AMOUNT
+	end
+
+	if not skipLoad then loadClients() end
+
+	if (key == nil or clientData[key] == nil) then
+		return false, STR_ERR_FROM.." ("..tostring(key)..")"
+	end
+
+	local previousBalance = clientData[key].balance
+	local newBalance = previousBalance-amount
+
+	if (newBalance < 0) then
+		return false, STR_ERR_NOT_ENOUGH
+	end
+
+	local time = getCurrentTime()
+	clientData[key].balance = newBalance
+	updateClientFile(key)
+	
+	if clientData[key] and tostring(clientData[key].type or "") == "company" then
+		saveCompanyValueHistory(key)
+	end
+
+	appendTransactionToLog(key, key, amount, newBalance, time, description)
+
+	return true, STR_SUCCESS_TX
+end
+
+getTransactionLog = function(data)
+	local key = data.key
+
+	local log = {}
+	local logCounter = 1
+	local f = fs.open(filePath.."clientData/"..key.."/log.txt", "r")
+	local line = f.readLine()
+	while line ~= nil do
+		local lline = line
+		local other = ""
+		local amount = 0
+		local balance = 0
+		local time = ""
+		local description = ""
+
+		while lline ~= "" and lline ~= nil do
+			if (lline == "other") then
+				other = f.readLine()
+			elseif (lline == "amount") then
+				amount = f.readLine()
+			elseif (lline == "balance") then
+				balance = f.readLine()
+			elseif (lline == "time") then
+				time = f.readLine()
+			elseif (lline == "description") then
+				description = f.readLine()
+			end
+			lline = f.readLine()
+		end
+
+		log[logCounter] = {
+			other = other,
+			amount = amount,
+			balance = balance,
+			time = time,
+			description = description
+		}
+
+		logCounter = logCounter+1
+
+		line = f.readLine()
+	end
+
+	return true, log
+end
+
+-- Create a new client, with its files and folders, given a name, a starting balance and a color
+newClient = function(data)
+    local name = data.name
+    local color = data.color
+
+    -- Enforce global unique account names
+    loadClients()
+    if accountNameExists(name) then
+        return false, "Account name already exists"
+    end
+
+	local bankKey = "1000"
+
+	local firstFreeClientNumber = 0
+	while firstFreeClientNumber < 9999 do
+		firstFreeClientNumber = firstFreeClientNumber+1
+		local free = true
+		for k, v in pairs(clientData) do
+			local clientNumber = tonumber(string.sub(k, 5, 8))
+			if (clientNumber == firstFreeClientNumber) then
+				free = false
+				break
+			end
+		end
+		if (free) then
+			break
+		end
+	end
+
+	local clientNumber = tostring(firstFreeClientNumber)
+	clientNumber = string.rep("0", 4-string.len(clientNumber))..clientNumber
+	local randomKey = ""
+	for i=1, 8 do
+		randomKey = randomKey..tostring(math.random(10)-1)
+	end
+	local key = bankKey..clientNumber..randomKey
+
+	local f = fs.open(filePath.."clientList.txt", "a")
+	f.writeLine(key)
+	f.close()
+
+	fs.makeDir(filePath.."clientData")
+	fs.makeDir(filePath.."clientData/"..key)
+
+	-- Create basic info
+    -- Determine treasury link: prefer provided data.treasury if valid; fallback to configured treasuryKey
+    local treasuryLink = tostring(data.treasury or "")
+    loadClients()
+    if treasuryLink ~= "" then
+        local t = clientData[treasuryLink]
+        if t == nil or tostring(t.type or "") ~= "treasury" then
+            treasuryLink = tostring(treasuryKey or "")
+        end
+    else
+        treasuryLink = tostring(treasuryKey or "")
+    end
+
+    clientData[key] = {
+        name = name,
+        balance = 0,
+        color = color,
+        cumulative = 0,
+        type = "personal",
+        owner = "",
+        treasury = treasuryLink,
+        password = "",
+        shares = 0
+    }
+    updateClientFile(key)
+
+	-- Create transaction log
+	local f = fs.open(filePath.."clientData/"..key.."/log.txt", "w")
+	f.close()
+
+return true, STR_SUCCESS_ACCOUNT
+end
+
+-- Create a new company account with owner and type metadata
+newCompany = function(data)
+    local name = data.name
+    local owner = data.owner
+    local color = data.color
+    local shares = tonumber(data.shares or 0) or 0
+
+    loadClients()
+    -- Enforce global unique account names
+    if accountNameExists(name) then
+        return false, "Account name already exists"
+    end
+    if (owner == nil or clientData[owner] == nil) then
+        return false, "Invalid owner account"
+    end
+
+    local bankKey = "1000"
+
+    local firstFreeClientNumber = 0
+    while firstFreeClientNumber < 9999 do
+        firstFreeClientNumber = firstFreeClientNumber+1
+        local free = true
+        for k, v in pairs(clientData) do
+            local clientNumber = tonumber(string.sub(k, 5, 8))
+            if (clientNumber == firstFreeClientNumber) then
+                free = false
+                break
+            end
+        end
+        if (free) then
+            break
+        end
+    end
+
+    local clientNumber = tostring(firstFreeClientNumber)
+    clientNumber = string.rep("0", 4-string.len(clientNumber))..clientNumber
+    local randomKey = ""
+    for i=1, 8 do
+        randomKey = randomKey..tostring(math.random(10)-1)
+    end
+    local key = bankKey..clientNumber..randomKey
+
+    local f = fs.open(filePath.."clientList.txt", "a")
+    f.writeLine(key)
+    f.close()
+
+    fs.makeDir(filePath.."clientData")
+    fs.makeDir(filePath.."clientData/"..key)
+
+    clientData[key] = {
+        name = name,
+        balance = 0,
+        color = color,
+        cumulative = 0,
+        type = "company",
+        owner = owner,
+        password = "",
+        shares = shares
+    }
+    updateClientFile(key)
+
+    local lf = fs.open(filePath.."clientData/"..key.."/log.txt", "w")
+    lf.close()
+
+    return true, STR_SUCCESS_ACCOUNT
+end
+
+-- Share registry helpers (per-company file: shareholders.txt)
+local function readShareholders(companyKey)
+    local path = filePath.."clientData/"..tostring(companyKey).."/shareholders.txt"
+    local holders = {}
+    if not fs.exists(path) then
+        return holders
+    end
+    local f = fs.open(path, "r")
+    local line = f.readLine()
+    local entry = { key = nil, shares = 0 }
+    while line ~= nil do
+        local l = tostring(line)
+        if l == "key" then
+            entry.key = f.readLine()
+        elseif l == "shares" then
+            entry.shares = tonumber(f.readLine()) or 0
+        end
+        if l == "" then
+            if entry.key ~= nil and entry.key ~= "" then
+                holders[entry.key] = (holders[entry.key] or 0) + (entry.shares or 0)
+            end
+            entry = { key = nil, shares = 0 }
+        end
+        line = f.readLine()
+    end
+    -- flush last entry if no trailing blank
+    if entry.key ~= nil and entry.key ~= "" then
+        holders[entry.key] = (holders[entry.key] or 0) + (entry.shares or 0)
+    end
+    f.close()
+    return holders
+end
+
+local function writeShareholders(companyKey, holders)
+    local path = filePath.."clientData/"..tostring(companyKey).."/shareholders.txt"
+    local f = fs.open(path, "w")
+    for k, count in pairs(holders) do
+        f.writeLine("key")
+        f.writeLine(tostring(k))
+        f.writeLine("shares")
+        f.writeLine(tostring(math.floor(tonumber(count or 0))))
+        f.writeLine("")
+    end
+    f.close()
+end
+
+local function saveCompanyValueHistory(companyKey)
+    local now = nowEpoch()
+    if now == nil then return end
+    loadClients()
+    local acct = clientData[companyKey]
+    if acct == nil or tostring(acct.type or "") ~= "company" then return end
+    local path = filePath.."clientData/"..tostring(companyKey).."/value_history.txt"
+    local history = {}
+    if fs.exists(path) then
+        local f = fs.open(path, "r")
+        if f ~= nil then
+            local line = f.readLine()
+            while line ~= nil do
+                if line ~= "" then
+                    local epoch, value = line:match("([^|]+)|([^|]+)")
+                    if epoch and value then
+                        table.insert(history, { epoch = tonumber(epoch), value = tonumber(value) })
+                    end
+                end
+                line = f.readLine()
+            end
+            f.close()
+        end
+    end
+    -- Remove entries older than 7 days to keep file small
+    local cutoff = now - (7 * 86400000)
+    local trimmed = {}
+    for _, entry in ipairs(history) do
+        if entry.epoch >= cutoff then
+            table.insert(trimmed, entry)
+        end
+    end
+    table.insert(trimmed, { epoch = now, value = tonumber(acct.balance or 0) })
+    -- Write trimmed history
+    local f = fs.open(path, "w")
+    if f ~= nil then
+        for _, entry in ipairs(trimmed) do
+            f.writeLine(tostring(entry.epoch).."|"..tostring(entry.value))
+        end
+        f.close()
+    end
+end
+
+local function getCompanyValueHistory(companyKey)
+    local path = filePath.."clientData/"..tostring(companyKey).."/value_history.txt"
+    local history = {}
+    if fs.exists(path) then
+        local f = fs.open(path, "r")
+        if f ~= nil then
+            local line = f.readLine()
+            while line ~= nil do
+                if line ~= "" then
+                    local epoch, value = line:match("([^|]+)|([^|]+)")
+                    if epoch and value then
+                        table.insert(history, { epoch = tonumber(epoch), value = tonumber(value) })
+                    end
+                end
+                line = f.readLine()
+            end
+            f.close()
+        end
+    end
+    return history
+end
+
+local function getTopCompanies(data) -- data is unused
+    loadClients()
+    local companies = {}
+    for key, acct in pairs(clientData) do
+        if tostring(acct.type or "") == "company" then
+            table.insert(companies, {
+                key = key,
+                name = acct.name,
+                value = tonumber(acct.balance or 0)
+            })
+        end
+    end
+    -- Sort by value descending
+    table.sort(companies, function(a, b) return a.value > b.value end)
+    -- Get top 10
+    local top = {}
+    for i = 1, math.min(10, #companies) do
+        local comp = companies[i]
+        local history = getCompanyValueHistory(comp.key)
+        local now = nowEpoch()
+        local change = nil -- nil means no change
+        if now ~= nil and #history > 1 then
+            -- Find the entry from ~24h ago
+            local dayAgo = now - 86400000
+            local closest = nil
+            local closestDiff = math.huge
+            for _, entry in ipairs(history) do
+                local diff = math.abs(entry.epoch - dayAgo)
+                if diff < closestDiff then
+                    closest = entry
+                    closestDiff = diff
+                end
+            end
+            if closest and closest.epoch < now then
+                local oldValue = closest.value
+                local newValue = comp.value
+                if oldValue > 0 then
+                    change = ((newValue - oldValue) / oldValue) * 100
+                end
+            end
+        end
+        table.insert(top, {
+            key = comp.key,
+            name = comp.name,
+            value = comp.value,
+            change = change
+        })
+    end
+    return true, top
+end
+
+local function getCompanyValue(companyKey)
+    loadClients()
+    local acct = clientData[companyKey]
+    if acct == nil then return 0 end
+    return tonumber(acct.balance or 0) or 0
+end
+
+local function getSharePrice(companyKey)
+    loadClients()
+    local acct = clientData[companyKey]
+    if acct == nil then return 0 end
+    local value = getCompanyValue(companyKey)
+    local shares = tonumber(acct.shares or 0) or 0
+    if shares <= 0 then shares = 1 end
+    return math.floor((value / shares) * 100 + 0.5) / 100
+end
+
+-- List shareholders for a company
+local function listShareholders(data) -- company
+    local company = tostring(data.company or "")
+    loadClients()
+    local acct = clientData[company]
+    if acct == nil or tostring(acct.type or "") ~= "company" then
+        return false, "Invalid company"
+    end
+    local holders = readShareholders(company)
+    local list = {}
+    for key, count in pairs(holders) do
+        local name = (clientData[key] and clientData[key].name) or "- deleted -"
+        list[#list+1] = { key = key, name = name, shares = tonumber(count or 0) or 0 }
+    end
+    table.sort(list, function(a,b)
+        if a.shares == b.shares then return tostring(a.name) < tostring(b.name) end
+        return a.shares > b.shares
+    end)
+    return true, list
+end
+
+-- Issue new shares from company to a buyer at current share price
+local function issueShares(data) -- issuer, company, buyer, count
+    local issuer = tostring(data.issuer or "")
+    local company = tostring(data.company or "")
+    local buyer = tostring(data.buyer or "")
+    local count = tonumber(data.count or 0) or 0
+
+    if count <= 0 or count % 1 ~= 0 then
+        return false, STR_ERR_INVALID_AMOUNT
+    end
+
+    loadClients()
+    local comp = clientData[company]
+    if comp == nil or tostring(comp.type or "") ~= "company" then
+        return false, "Invalid company"
+    end
+    if issuer == "" or clientData[issuer] == nil then
+        return false, "Invalid issuer"
+    end
+    if tostring(comp.owner or "") ~= tostring(issuer or "") then
+        return false, "Only the owner can issue shares"
+    end
+    if buyer == "" or clientData[buyer] == nil then
+        return false, "Invalid buyer"
+    end
+    if tostring(buyer) == tostring(company) then
+        return false, "Company cannot buy its own newly issued shares"
+    end
+    local buyerType = tostring(clientData[buyer].type or "personal")
+    if buyerType ~= "personal" and buyerType ~= "company" then
+        return false, "Buyer must be personal or company"
+    end
+
+    local pricePer = getSharePrice(company)
+    local totalPrice = math.floor(pricePer * count * 100 + 0.5) / 100
+
+    -- Perform payment: buyer -> company
+    local ok, msg = transaction({ from = buyer, to = company, amount = totalPrice, description = "Share issuance" }, false)
+    if not ok then
+        return false, msg
+    end
+
+    -- Update outstanding shares
+    comp.shares = tonumber(comp.shares or 0) + count
+    clientData[company] = comp
+    updateClientFile(company)
+
+    -- Update shareholders registry
+    local holders = readShareholders(company)
+    holders[buyer] = (holders[buyer] or 0) + count
+    writeShareholders(company, holders)
+
+    return true, {
+        message = "Issued "..tostring(count).." share(s) to "..tostring(clientData[buyer].name or buyer),
+        price_per_share = pricePer,
+        total_price = totalPrice
+    }
+end
+
+-- Aggregate portfolio holdings for a given account across all companies
+local function getPortfolio(data) -- account
+    local account = tostring(data.account or "")
+    loadClients()
+    if account == "" or clientData[account] == nil then
+        return false, "Invalid account"
+    end
+    local result = {}
+    for k, v in pairs(clientData) do
+        if tostring(v.type or "") == "company" then
+            local holders = readShareholders(k)
+            local count = tonumber(holders[account] or 0) or 0
+            if count > 0 then
+                local price = getSharePrice(k)
+                local est = math.floor(price * count * 100 + 0.5) / 100
+                result[#result+1] = {
+                    company = k,
+                    name = tostring(v.name or k),
+                    shares = count,
+                    price = price,
+                    estimated_value = est
+                }
+            end
+        end
+    end
+    table.sort(result, function(a,b)
+        if a.estimated_value == b.estimated_value then return tostring(a.name) < tostring(b.name) end
+        return a.estimated_value > b.estimated_value
+    end)
+    return true, result
+end
+
+-- Create a new Treasury account (server-only) with minimal fields
+local function newTreasury(data) -- name, color, tag, password
+    local name = data.name
+    local color = data.color
+    local tag = tostring(data.tag or "")
+    local password = tostring(data.password or "")
+
+    loadClients()
+    -- Enforce global unique account names
+    if accountNameExists(name) then
+        return false, "Account name already exists"
+    end
+
+    local bankKey = "1000"
+
+    local firstFreeClientNumber = 0
+    while firstFreeClientNumber < 9999 do
+        firstFreeClientNumber = firstFreeClientNumber+1
+        local free = true
+        for k, v in pairs(clientData) do
+            local clientNumber = tonumber(string.sub(k, 5, 8))
+            if (clientNumber == firstFreeClientNumber) then
+                free = false
+                break
+            end
+        end
+        if (free) then
+            break
+        end
+    end
+
+    local clientNumber = tostring(firstFreeClientNumber)
+    clientNumber = string.rep("0", 4-string.len(clientNumber))..clientNumber
+    local randomKey = ""
+    for i=1, 8 do
+        randomKey = randomKey..tostring(math.random(10)-1)
+    end
+    local key = bankKey..clientNumber..randomKey
+
+    local f = fs.open(filePath.."clientList.txt", "a")
+    f.writeLine(key)
+    f.close()
+
+    fs.makeDir(filePath.."clientData")
+    fs.makeDir(filePath.."clientData/"..key)
+
+    -- Validate tag; fallback to simple derivation if empty
+    if tag == "" then
+        local words = {}
+        for w in tostring(name or ""):gmatch("%S+") do words[#words+1] = w end
+        if #words >= 2 then
+            tag = (words[1]:sub(1,1) .. words[2]:sub(1,1)):upper()
+        else
+            local compact = tostring(name or ""):gsub("%s+", "")
+            tag = (compact:sub(1,2)):upper()
+        end
+    else
+        tag = tag:upper()
+    end
+
+    clientData[key] = {
+        name = name,
+        balance = 0,
+        color = color,
+        type = "treasury",
+        tag = tag,
+        password = (password ~= "" and srv_hashPassword(password)) or ""
+    }
+    updateClientFile(key)
+
+    local lf = fs.open(filePath.."clientData/"..key.."/log.txt", "w")
+    lf.close()
+
+    return true, STR_SUCCESS_ACCOUNT, key
+end
+-- Set an online password for a client account
+
+local function setPassword(data) -- key, password
+    local key = data.key
+    local password = tostring(data.password or "")
+
+    loadClients()
+
+    if (key == nil or clientData[key] == nil) then
+        return false, STR_ERR_FROM.." ("..tostring(key)..")"
+    end
+
+    -- store password as salted hash string
+    clientData[key].password = srv_hashPassword(password)
+    updateClientFile(key)
+
+    return true, STR_SUCCESS_UPDATE
+end
+
+local function toggleAccountFrozen(data) -- key, frozen
+    local key = data.key
+    local frozen = (data.frozen == true or data.frozen == "true")
+
+    loadClients()
+
+    if (key == nil or clientData[key] == nil) then
+        return false, STR_ERR_ACCOUNT
+    end
+
+    clientData[key].frozen = frozen
+    updateClientFile(key)
+
+    return true, "Account "..(frozen and "frozen" or "unfrozen")
+end
+
+-- Change client password with verification
+local function changePassword(data) -- key, current, new
+    local key = data.key
+    local current = tostring(data.current or "")
+    local new = tostring(data.new or "")
+
+    loadClients()
+    if (key == nil or clientData[key] == nil) then
+        return false, STR_ERR_FROM.." ("..tostring(key)..")"
+    end
+    local stored = clientData[key].password or ""
+    if stored == "" then
+        return false, "No online account set"
+    end
+    local isHashed = tostring(stored):match("^[^:]+:[^:]+:%d+$") ~= nil
+    if isHashed then
+        if not srv_verify(current, stored) then
+            return false, "Incorrect password"
+        end
+    else
+        if tostring(current) ~= tostring(stored) then
+            return false, "Incorrect password"
+        end
+    end
+    clientData[key].password = srv_hashPassword(new)
+    updateClientFile(key)
+    return true, STR_SUCCESS_UPDATE
+end
+
+-- Admin reset client password to '1234'
+local function resetPassword(data) -- key
+    local key = data.key
+    loadClients()
+    if (key == nil or clientData[key] == nil) then
+        return false, STR_ERR_FROM.." ("..tostring(key)..")"
+    end
+    clientData[key].password = srv_hashPassword('1234')
+    updateClientFile(key)
+    return true, STR_SUCCESS_UPDATE
+end
+
+local function deleteAccount(data) --key
+	local key = data.key 
+
+	clientData[key] = nil
+	local f = fs.open(filePath.."clientList.txt", "w")
+	for k, v in pairs(clientData) do
+		f.writeLine(k)
+	end
+	f.close()
+	fs.delete(filePath.."clientData/"..key)
+return true, STR_ACCOUNT_DELETED
+end
+
+-- Card registry helpers: per-account cards tracked in clientData/<key>/cards.txt
+local function ensureCardsFile(key)
+    local path = filePath.."clientData/"..key.."/cards.txt"
+    if not fs.exists(path) then
+        local f = fs.open(path, "w")
+        if f ~= nil then f.close() end
+    end
+    return path
+end
+
+local function readCards(key)
+    local path = ensureCardsFile(key)
+    local f = fs.open(path, "r")
+    local cards = {}
+    if f ~= nil then
+        local line = f.readLine()
+        while line ~= nil do
+            if line ~= "" then
+                local id, date, status = line:match("([^|]*)|([^|]*)|([^|]*)")
+                if id ~= nil then
+                    cards[#cards+1] = { id = id, date = date or "", status = status or "active" }
+                end
+            end
+            line = f.readLine()
+        end
+        f.close()
+    end
+    return cards
+end
+
+local function writeCards(key, cards)
+    local path = ensureCardsFile(key)
+    local f = fs.open(path, "w")
+    if f == nil then return false end
+    for _, c in ipairs(cards) do
+        f.writeLine(tostring(c.id).."|"..tostring(c.date).."|"..tostring(c.status))
+    end
+    f.close()
+    return true
+end
+
+local function listCards(data) -- key
+    local key = tostring(data.key)
+    loadClients()
+    if clientData[key] == nil then return false, STR_ERR_ACCOUNT end
+    -- Treasury is allowed; return all cards
+    local cards = readCards(key)
+    return true, cards
+end
+
+local function registerCard(data) -- key
+    local key = tostring(data.key)
+    loadClients()
+    if clientData[key] == nil then return false, STR_ERR_ACCOUNT end
+    local t = tostring(clientData[key].type or "personal")
+    local cards = readCards(key)
+    -- Enforce active card limits: Treasury=1, Company=2, Personal=unlimited
+    local activeCount = 0
+    for _, c in ipairs(cards) do if tostring(c.status or "") == "active" then activeCount = activeCount + 1 end end
+    if t == "treasury" and activeCount >= 1 then
+        return false, "Only 1 active Treasury card allowed"
+    elseif t == "company" and activeCount >= 2 then
+        return false, "Only 2 active Company cards allowed"
+    end
+    -- generate unique id
+    local id = ""
+    repeat
+        id = "C"..tostring(math.random(10000000, 99999999))
+        local exists = false
+        for _, c in ipairs(cards) do if c.id == id then exists = true break end end
+        if not exists then break end
+    until false
+    local date = getCurrentTime()
+    cards[#cards+1] = { id = id, date = date, status = "active" }
+    writeCards(key, cards)
+    return true, id
+end
+
+local function cancelCard(data) -- key, id
+    local key = tostring(data.key)
+    local id = tostring(data.id)
+    loadClients()
+    if clientData[key] == nil then return false, STR_ERR_ACCOUNT end
+    local cards = readCards(key)
+    local found = false
+    for _, c in ipairs(cards) do
+        if tostring(c.id) == id then
+            c.status = "canceled"
+            found = true
+            break
+        end
+    end
+    if not found then return false, STR_ERR_CARD_NOT_FOUND end
+    writeCards(key, cards)
+    return true, STR_SUCCESS_CARD_CANCELED
+end
+
+local function deleteCardRecord(data) -- key, id
+    local key = tostring(data.key)
+    local id = tostring(data.id)
+    loadClients()
+    if clientData[key] == nil then return false, STR_ERR_ACCOUNT end
+    local cards = readCards(key)
+    local newCards = {}
+    local found = false
+    for _, c in ipairs(cards) do
+        if tostring(c.id) == id then
+            found = true
+        else
+            newCards[#newCards+1] = c
+        end
+    end
+    if not found then return false, STR_ERR_CARD_NOT_FOUND end
+    writeCards(key, newCards)
+    return true, STR_SUCCESS_CARD_DELETED
+end
+
+-- Validate that a card exists for an account and is active
+local function validateCard(data) -- key, id
+    local key = tostring(data.key)
+    local id = tostring(data.id)
+    loadClients()
+    if clientData[key] == nil then return false, STR_ERR_ACCOUNT end
+    local cards = readCards(key)
+    for _, c in ipairs(cards) do
+        if tostring(c.id) == tostring(id) and tostring(c.status or "") == "active" then
+            return true, "Card active"
+        end
+    end
+    return false, "Card disabled or not found"
+end
+
+local function processRequest(func, sender, data)
+    local success, response = func(data)
+    local message = {
+        success = success,
+        response = response
+    }
+    --print("Responding.")
+    rednet.send(sender, message, "fiducia")
+end
+
+local function processSecureRequest(func, sender, data)
+    local success, response = func(data)
+    local message = {
+        success = success,
+        response = response
+    }
+    secure_send(sender, message)
+end
+
+-- Secure channel helpers (AES-256-CTR, Base64, keyed MAC using ASHA-like hash)
+-- GF(2^8) arithmetic for AES
+local function gf_mul(a, b)
+    local res = 0
+    while b > 0 do
+        if bit32.band(b, 1) ~= 0 then res = bit32.bxor(res, a) end
+        local hi = bit32.band(a, 0x80)
+        a = bit32.band(a * 2, 0xFF)
+        if hi ~= 0 then a = bit32.bxor(a, 0x1B) end
+        b = bit32.rshift(b, 1)
+    end
+    return res
+end
+
+local function gf_pow(a, e)
+    local result = 1
+    local base = a
+    while e > 0 do
+        if bit32.band(e, 1) ~= 0 then result = gf_mul(result, base) end
+        base = gf_mul(base, base)
+        e = bit32.rshift(e, 1)
+    end
+    return result
+end
+
+local function gf_inv(a)
+    if a == 0 then return 0 end
+    return gf_pow(a, 254)
+end
+
+local function rotl8(b, n)
+    return bit32.band(bit32.bor(bit32.lshift(b, n), bit32.rshift(b, 8 - n)), 0xFF)
+end
+
+local function sbox_byte(x)
+    local inv = gf_inv(x)
+    return bit32.band(bit32.bxor(0x63, inv, rotl8(inv,1), rotl8(inv,2), rotl8(inv,3), rotl8(inv,4)), 0xFF)
+end
+
+local function rcon(i)
+    local c = 1
+    if i == 0 then return 0 end
+    for _ = 1, i - 1 do
+        c = gf_mul(c, 2)
+    end
+    return c
+end
+
+local function sub_word(w)
+    return {
+        sbox_byte(w[1]), sbox_byte(w[2]), sbox_byte(w[3]), sbox_byte(w[4])
+    }
+end
+
+local function rot_word(w)
+    return { w[2], w[3], w[4], w[1] }
+end
+
+local function key_expansion_256(key_bytes)
+    local Nk = 8
+    local Nb = 4
+    local Nr = 14
+    local w = {}
+    -- first Nk words directly from key
+    for i = 0, Nk - 1 do
+        w[i] = { key_bytes[i*4+1], key_bytes[i*4+2], key_bytes[i*4+3], key_bytes[i*4+4] }
+    end
+    for i = Nk, Nb * (Nr + 1) - 1 do
+        local temp = { w[i-1][1], w[i-1][2], w[i-1][3], w[i-1][4] }
+        if i % Nk == 0 then
+            temp = sub_word(rot_word(temp))
+            temp[1] = bit32.bxor(temp[1], rcon(i / Nk))
+        elseif i % Nk == 4 then
+            temp = sub_word(temp)
+        end
+        w[i] = {
+            bit32.bxor(w[i-Nk][1], temp[1]),
+            bit32.bxor(w[i-Nk][2], temp[2]),
+            bit32.bxor(w[i-Nk][3], temp[3]),
+            bit32.bxor(w[i-Nk][4], temp[4])
+        }
+    end
+    -- Flatten round keys
+    local round_keys = {}
+    for r = 0, Nr do
+        local rk = {}
+        for c = 0, Nb - 1 do
+            local word = w[r*Nb + c]
+            rk[#rk+1] = word[1]; rk[#rk+1] = word[2]; rk[#rk+1] = word[3]; rk[#rk+1] = word[4]
+        end
+        round_keys[r] = rk
+    end
+    return round_keys
+end
+
+local function sub_bytes(state)
+    for i = 1, 16 do state[i] = sbox_byte(state[i]) end
+end
+
+local function shift_rows(state)
+    -- state is column-major: index = r + 4*c
+    local t = {}
+    for i = 1, 16 do t[i] = state[i] end
+    -- row 0 unchanged
+    state[1] = t[1];  state[5] = t[5];  state[9]  = t[9];  state[13] = t[13]
+    -- row 1 shift left by 1
+    state[2] = t[6];  state[6] = t[10]; state[10] = t[14]; state[14] = t[2]
+    -- row 2 shift left by 2
+    state[3] = t[11]; state[7] = t[15]; state[11] = t[3];  state[15] = t[7]
+    -- row 3 shift left by 3
+    state[4] = t[16]; state[8] = t[4];  state[12] = t[8];  state[16] = t[12]
+end
+
+local function xtime(b)
+    local res = bit32.lshift(b, 1)
+    if bit32.band(b, 0x80) ~= 0 then res = bit32.bxor(res, 0x1B) end
+    return bit32.band(res, 0xFF)
+end
+
+local function mix_single_column(s0, s1, s2, s3)
+    local t0 = bit32.bxor(xtime(s0), bit32.bxor(bit32.band(s0, 0xFF), xtime(s1), s2, s3))
+    local t1 = bit32.bxor(xtime(s1), bit32.bxor(bit32.band(s1, 0xFF), xtime(s2), s3, s0))
+    local t2 = bit32.bxor(xtime(s2), bit32.bxor(bit32.band(s2, 0xFF), xtime(s3), s0, s1))
+    local t3 = bit32.bxor(xtime(s3), bit32.bxor(bit32.band(s3, 0xFF), xtime(s0), s1, s2))
+    return t0, t1, t2, t3
+end
+
+local function mix_columns(state)
+    for c = 0, 3 do
+        local s0 = state[1 + 4*c]
+        local s1 = state[2 + 4*c]
+        local s2 = state[3 + 4*c]
+        local s3 = state[4 + 4*c]
+        local t0, t1, t2, t3 = mix_single_column(s0, s1, s2, s3)
+        state[1 + 4*c] = bit32.band(t0, 0xFF)
+        state[2 + 4*c] = bit32.band(t1, 0xFF)
+        state[3 + 4*c] = bit32.band(t2, 0xFF)
+        state[4 + 4*c] = bit32.band(t3, 0xFF)
+    end
+end
+
+local function add_round_key(state, round_key)
+    for i = 1, 16 do state[i] = bit32.band(bit32.bxor(state[i], round_key[i]), 0xFF) end
+end
+
+local function aes_encrypt_block(input_bytes, round_keys)
+    local state = {}
+    for i = 1, 16 do state[i] = input_bytes[i] or 0 end
+    add_round_key(state, round_keys[0])
+    for round = 1, 13 do
+        sub_bytes(state)
+        shift_rows(state)
+        mix_columns(state)
+        add_round_key(state, round_keys[round])
+    end
+    sub_bytes(state)
+    shift_rows(state)
+    add_round_key(state, round_keys[14])
+    return state
+end
+
+local function to_bytes(str)
+    local t = {}
+    for i = 1, #str do t[#t+1] = string.byte(str, i) end
+    return t
+end
+
+local function from_bytes(t)
+    local s = {}
+    for i = 1, #t do s[#s+1] = string.char(bit32.band(t[i], 0xFF)) end
+    return table.concat(s)
+end
+
+local function hex_to_bytes(hex)
+    local out = {}
+    for i = 1, #hex, 2 do
+        local byte = tonumber(hex:sub(i, i+1), 16) or 0
+        out[#out+1] = byte
+    end
+    return out
+end
+
+local b64chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+local function b64encode(data)
+    local bytes = to_bytes(data)
+    local out = {}
+    local i = 1
+    while i <= #bytes do
+        local b1 = bytes[i] or 0; i = i + 1
+        local b2 = bytes[i] or 0; i = i + 1
+        local b3 = bytes[i] or 0; i = i + 1
+        local n = bit32.bor(bit32.lshift(b1,16), bit32.lshift(b2,8), b3)
+        local c1 = bit32.band(bit32.rshift(n,18),0x3F)
+        local c2 = bit32.band(bit32.rshift(n,12),0x3F)
+        local c3 = bit32.band(bit32.rshift(n,6),0x3F)
+        local c4 = bit32.band(n,0x3F)
+        local remain = #bytes - (i-1)
+        if remain == 1 then
+            out[#out+1] = b64chars:sub(c1+1,c1+1)
+            out[#out+1] = b64chars:sub(c2+1,c2+1)
+            out[#out+1] = '=='
+            break
+        elseif remain == 2 then
+            out[#out+1] = b64chars:sub(c1+1,c1+1)
+            out[#out+1] = b64chars:sub(c2+1,c2+1)
+            out[#out+1] = b64chars:sub(c3+1,c3+1)
+            out[#out+1] = '='
+            break
+        else
+            out[#out+1] = b64chars:sub(c1+1,c1+1)
+            out[#out+1] = b64chars:sub(c2+1,c2+1)
+            out[#out+1] = b64chars:sub(c3+1,c3+1)
+            out[#out+1] = b64chars:sub(c4+1,c4+1)
+        end
+    end
+    return table.concat(out)
+end
+
+local function b64decode(data)
+    data = data:gsub('%s','')
+    local out = {}
+    local i = 1
+    while i <= #data do
+        local c1 = data:sub(i,i); i=i+1
+        local c2 = data:sub(i,i); i=i+1
+        local c3 = data:sub(i,i); i=i+1
+        local c4 = data:sub(i,i); i=i+1
+        local n1 = b64chars:find(c1,1,true); local n2 = b64chars:find(c2,1,true)
+        local n3 = (c3=='=') and nil or b64chars:find(c3,1,true)
+        local n4 = (c4=='=') and nil or b64chars:find(c4,1,true)
+        if n1 and n2 then
+            local n = bit32.bor(bit32.lshift(n1-1,18), bit32.lshift(n2-1,12), (n3 and bit32.lshift(n3-1,6) or 0), (n4 and (n4-1) or 0))
+            out[#out+1] = bit32.band(bit32.rshift(n,16),0xFF)
+            if n3 then out[#out+1] = bit32.band(bit32.rshift(n,8),0xFF) end
+            if n4 then out[#out+1] = bit32.band(n,0xFF) end
+        end
+    end
+    return from_bytes(out)
+end
+
+local function derive_keys()
+    -- Derive encryption and MAC material from networkSecret and sessionNonce
+    local encHex = srv_ASHA512(networkSecret.."|enc|"..sessionNonce, "", 1)
+    local macHex = srv_ASHA512(networkSecret.."|mac|"..sessionNonce, "", 1)
+    local encBytes = hex_to_bytes(encHex)
+    local aesKey = {}
+    for i=1,32 do aesKey[i] = encBytes[i] or 0 end
+    local roundKeys = key_expansion_256(aesKey)
+    return roundKeys, macHex
+end
+
+local function ctr_inc(counter_bytes)
+    for i = #counter_bytes, 1, -1 do
+        local v = (counter_bytes[i] or 0) + 1
+        counter_bytes[i] = bit32.band(v, 0xFF)
+        if v <= 0xFF then break end
+    end
+end
+
+local function aes_ctr_crypt(round_keys, iv_bytes, data)
+    local input = to_bytes(data)
+    local out = {}
+    local counter = {}
+    for i=1,16 do counter[i] = iv_bytes[i] or 0 end
+    for i = 1, #input, 16 do
+        local block = {}
+        for j=1,16 do block[j] = input[i+j-1] or 0 end
+        local keystream = aes_encrypt_block(counter, round_keys)
+        for j=1,16 do out[#out+1] = bit32.band(bit32.bxor(block[j], keystream[j]), 0xFF) end
+        ctr_inc(counter)
+    end
+    return from_bytes(out)
+end
+
+local function random_bytes(n)
+    local s = {}
+    for i=1,n do s[#s+1] = string.char(math.random(0,255)) end
+    return table.concat(s)
+end
+
+local function keyed_mac(macHex, role, iv_b64, ctr_str, ct_b64)
+    local material = role.."|"..iv_b64.."|"..ctr_str.."|"..ct_b64
+    return srv_ASHA512(macHex.."|"..material, "", 1)
+end
+
+local server_out_ctr = 0
+local api_in_ctr = 0
+
+local roundKeys_cached, macHex_cached
+
+local function ensure_keys()
+    if (roundKeys_cached == nil or macHex_cached == nil) then
+        roundKeys_cached, macHex_cached = derive_keys()
+    end
+end
+
+local function secure_decrypt(message)
+    ensure_keys()
+    local iv = b64decode(message.iv or "")
+    local ct = b64decode(message.ct or "")
+    local mac = tostring(message.mac or "")
+    local ctr_str = tostring(message.ctr or "0")
+    local expect = keyed_mac(macHex_cached, "api", message.iv, ctr_str, message.ct)
+    if expect ~= mac then return false, "Invalid MAC" end
+    local iv_bytes = to_bytes(iv)
+    local pt = aes_ctr_crypt(roundKeys_cached, iv_bytes, ct)
+    if tonumber(ctr_str) <= api_in_ctr then return false, "Replay" end
+    api_in_ctr = tonumber(ctr_str)
+    return true, pt
+end
+
+local function secure_send(sender, payload_table)
+    ensure_keys()
+    server_out_ctr = server_out_ctr + 1
+    local iv = random_bytes(16)
+    local iv_b64 = b64encode(iv)
+    local payload_str = textutils.serialize(payload_table)
+    local ct = aes_ctr_crypt(roundKeys_cached, to_bytes(iv), payload_str)
+    local ct_b64 = b64encode(ct)
+    local mac = keyed_mac(macHex_cached, "server", iv_b64, tostring(server_out_ctr), ct_b64)
+    local envelope = { role = "server", secure = true, iv = iv_b64, ctr = server_out_ctr, ct = ct_b64, mac = mac }
+    rednet.send(sender, envelope, "fiducia")
+end
+
+---------------- Start
+serverSettings()
+-- Initialize session nonce if secure channel is enabled
+if (networkSecret ~= nil and networkSecret ~= "") then
+    if (sessionNonce == nil or sessionNonce == "") then
+        local chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/"
+        sessionNonce = ""
+        math.randomseed(os.time())
+        for i = 1, 32 do
+            local idx = math.random(1, #chars)
+            sessionNonce = sessionNonce .. chars:sub(idx, idx)
+        end
+    end
+end
+loadClients()
+
+-- Ensure configured owner is a treasury; otherwise unset
+if (tonumber(bankOwnerKey) ~= 0) then
+    local owner = clientData[bankOwnerKey]
+    if owner == nil or tostring(owner.type or "") ~= "treasury" then
+        bankOwnerKey = 0
+        updateSettingsFile()
+    end
+end
+
+local modem = peripheral.find("modem")
+while (modem == nil) do
+	modem = peripheral.find("modem")
+	if (modem == nil) then
+		term.setBackgroundColor(colors.red)
+		term.setTextColor(colors.white)
+		term.clear()
+		term.setCursorPos(1,1)
+		print("Ender modem required. Please connect a modem to continue...")
+		-- Harden against Ctrl+T while waiting for a modem
+		while true do
+			local ev = os.pullEventRaw()
+			if ev == "peripheral" then break end
+			-- ignore terminate events
+		end
+	end
+end
+peripheral.find("modem", rednet.open)
+
+function listen()
+    while true do
+        local ev, p1, p2, p3 = os.pullEventRaw()
+        if ev == "terminate" then
+            -- ignore Ctrl+T
+        elseif ev == "rednet_message" then
+            local sender, message, protocol = p1, p2, p3
+            if protocol == "fiducia" then
+                local isSecure = (networkSecret ~= nil and networkSecret ~= "") and (type(message) == "table" and message.secure == true)
+                if isSecure then
+                    local ok, pt = secure_decrypt(message)
+                    if not ok then
+                        secure_send(sender, { success = false, response = pt })
+                    else
+                        local data = textutils.unserialize(pt) or {}
+                        local action = data.action
+                        if action == "getClientData" then
+                            processSecureRequest(getClientData, sender, data)
+                        elseif action == "getServerData" then
+                            processSecureRequest(getServerData, sender, data)
+                        elseif action == "getTransactionLog" then
+                            processSecureRequest(getTransactionLog, sender, data)
+                        elseif action == "listCards" then
+                            processSecureRequest(listCards, sender, data)
+                        elseif action == "registerCard" then
+                            processSecureRequest(registerCard, sender, data)
+                        elseif action == "cancelCard" then
+                            processSecureRequest(cancelCard, sender, data)
+                        elseif action == "deleteCardRecord" then
+                            processSecureRequest(deleteCardRecord, sender, data)
+                        elseif action == "validateCard" then
+                            processSecureRequest(validateCard, sender, data)
+                        elseif action == "transaction" then
+                            processSecureRequest(transaction, sender, data)
+                        elseif action == "deposit" then
+                            processSecureRequest(deposit, sender, data)
+                        elseif action == "withdraw" then
+                            processSecureRequest(withdraw, sender, data)
+                        elseif action == "new" then
+                            processSecureRequest(newClient, sender, data)
+                        elseif action == "newCompany" then
+                            processSecureRequest(newCompany, sender, data)
+                        elseif action == "newTreasury" then
+                            processSecureRequest(newTreasury, sender, data)
+                        elseif action == "delete" then
+                            processSecureRequest(deleteAccount, sender, data)
+                        elseif action == "setPassword" then
+                            processSecureRequest(setPassword, sender, data)
+                        elseif action == "changePassword" then
+                            processSecureRequest(changePassword, sender, data)
+                        elseif action == "resetPassword" then
+                            processSecureRequest(resetPassword, sender, data)
+                        elseif action == "applyTaxes" then
+                            processSecureRequest(applyTaxes, sender, data)
+                        elseif action == "listShareholders" then
+                            processSecureRequest(listShareholders, sender, data)
+                        elseif action == "issueShares" then
+                            processSecureRequest(issueShares, sender, data)
+                        elseif action == "getPortfolio" then
+                            processSecureRequest(getPortfolio, sender, data)
+                        elseif action == "toggleAccountFrozen" then
+                            processSecureRequest(toggleAccountFrozen, sender, data)
+                        elseif action == "getTopCompanies" then
+                            processSecureRequest(getTopCompanies, sender, data)
+                        else
+                            secure_send(sender, { success = false, response = "Invalid request" })
+                        end
+                    end
+                else
+                    if (message.action == "getClientData") then
+                        processRequest(getClientData, sender, message)
+                    elseif (message.action == "getServerData") then
+                        processRequest(getServerData, sender, message)
+                    elseif (message.action == "getTransactionLog") then
+                        processRequest(getTransactionLog, sender, message)
+                    elseif (message.action == "listCards") then
+                        processRequest(listCards, sender, message)
+                    elseif (message.action == "registerCard") then
+                        processRequest(registerCard, sender, message)
+                    elseif (message.action == "cancelCard") then
+                        processRequest(cancelCard, sender, message)
+                    elseif (message.action == "deleteCardRecord") then
+                        processRequest(deleteCardRecord, sender, message)
+                    elseif (message.action == "validateCard") then
+                        processRequest(validateCard, sender, message)
+                    elseif (message.action == "transaction") then
+                        processRequest(transaction, sender, message)
+                    elseif (message.action == "deposit") then
+                        processRequest(deposit, sender, message)
+                    elseif (message.action == "withdraw") then
+                        processRequest(withdraw, sender, message)
+                    elseif (message.action == "new") then
+                        processRequest(newClient, sender, message)
+                    elseif (message.action == "newCompany") then
+                        processRequest(newCompany, sender, message)
+                    elseif (message.action == "newTreasury") then
+                        processRequest(newTreasury, sender, message)
+                    elseif (message.action == "delete") then
+                        processRequest(deleteAccount, sender, message)
+                    elseif (message.action == "setPassword") then
+                        processRequest(setPassword, sender, message)
+                    elseif (message.action == "changePassword") then
+                        processRequest(changePassword, sender, message)
+                    elseif (message.action == "resetPassword") then
+                        processRequest(resetPassword, sender, message)
+                    elseif (message.action == "applyTaxes") then
+                        processRequest(applyTaxes, sender, message)
+                    elseif (message.action == "listShareholders") then
+                        processRequest(listShareholders, sender, message)
+                    elseif (message.action == "issueShares") then
+                        processRequest(issueShares, sender, message)
+                    elseif (message.action == "getPortfolio") then
+                        processRequest(getPortfolio, sender, message)
+                    elseif (message.action == "toggleAccountFrozen") then
+                        processRequest(toggleAccountFrozen, sender, message)
+                    elseif (message.action == "getTopCompanies") then
+                        processRequest(getTopCompanies, sender, message)
+                    else
+                        local msg = { success = false, response = "Invalid request" }
+                        rednet.send(sender, msg, "fiducia")
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- Background scheduler to run taxes based on real-world epoch
+local function taxScheduler()
+    while true do
+        local now = nowEpoch()
+        if taxEnabled and now ~= nil and taxPeriodDays ~= nil and taxPeriodDays > 0 then
+            local periodMs = taxPeriodDays * 86400000
+            local last = tonumber(taxLastRunEpoch or 0) or 0
+            if last == 0 then
+                -- initialize schedule without running immediately
+                taxLastRunEpoch = now
+                updateSettingsFile()
+            elseif now - last >= periodMs then
+                applyTaxes()
+            end
+        end
+        sleep(10)
+    end
+end
+
+-- Background scheduler to save company value history periodically
+local function companyValueScheduler()
+    while true do
+        loadClients()
+        for key, acct in pairs(clientData) do
+            if tostring(acct.type or "") == "company" then
+                saveCompanyValueHistory(key)
+            end
+        end
+        sleep(60) -- Save every 60 seconds
+    end
+end
+
+function main()
+	while true do
+		while true do
+			local ownerName = STR_NOT_ASSIGNED
+			if (tonumber(bankOwnerKey) > 0) then
+				if (clientData[bankOwnerKey] == nil) then
+					ownerName = STR_DELETED_ACCOUNT
+				else
+					ownerName = clientData[bankOwnerKey].name
+				end
+			end
+            local command = bankapi.optionMenu(STR_TITLE, {
+                {option = "currency_settings",
+                text =  STR_CURRENCY_SETTINGS},
+                {option = "cumulative_limit",
+                text =  STR_CUMULATIVE_LIMIT..": "..cumulativeLimit.."$"},
+                {option = "limit_reach_cost",
+                text =  STR_LIMIT_REACH_COST..": "..cumulativePrice.."$"},
+                {option = "set_owner",
+                text =  STR_SET_OWNER..": "..ownerName},
+                {option = "establish_treasury",
+                text =  "Establish a Treasury"},
+                {option = "tax_rates",
+                text =  STR_TAX_SETTINGS},
+            }, 2, 40)
+
+            if (command == "currency_settings") then
+                while true do
+                    local currencyMenu = {
+                        {option = "diamond", text = "Diamond: "..currencyPrices.diamond.."$"},
+                        {option = "gold", text = "Gold: "..currencyPrices.gold.."$"},
+                        {option = "netherite", text = "Netherite: "..currencyPrices.netherite.."$"},
+                        {option = "emerald", text = "Emerald: "..currencyPrices.emerald.."$"},
+                        {option = "back", text = "Back"}
+                    }
+                    local subcommand = bankapi.optionMenu(STR_CURRENCY_SETTINGS, currencyMenu, 2)
+                    if subcommand == "back" or subcommand == nil then
+                        break
+                    else
+                        local name = subcommand:gsub("^%l", string.upper)
+                        local amount = bankapi.inputNumberScreen({"Set price for "..name, "Set to 0 to disable"}, 1)
+                        amount = tonumber(amount)
+                        if amount ~= nil and amount >= 0 then
+                            currencyPrices[subcommand] = amount
+                            updateSettingsFile()
+                        end
+                    end
+                end
+			elseif (command == "cumulative_limit") then
+				local amount = bankapi.inputNumberScreen({STR_CUMULATIVE_LIMIT_EXPLANATION}, 1)
+				amount = tonumber(amount)
+				if (amount == nil) then break end
+				if (amount <= 0) then bankapi.errorScreen(STR_ERR_INVALID_AMOUNT) end
+				cumulativeLimit = amount
+				updateSettingsFile()
+				break
+			elseif (command == "limit_reach_cost") then
+				local amount = bankapi.inputNumberScreen({STR_LIMIT_REACH_COST_EXPLANATION}, 1)
+				amount = tonumber(amount)
+				if (amount == nil) then break end
+				if (amount <= 0) then bankapi.errorScreen(STR_ERR_INVALID_AMOUNT) end
+				cumulativePrice = amount
+				updateSettingsFile()
+				break
+            elseif (command == "set_owner") then
+                -- Limit owner selection to treasury accounts only
+                local treasuries = {}
+                for k, v in pairs(clientData) do
+                    if tostring(v.type or "") == "treasury" then treasuries[k] = v end
+                end
+                local account = bankapi.selectAccountScreen({STR_SET_OWNER_EXPLANATION}, 1, 0, treasuries)
+                if (account == nil) then break end
+                if (tonumber(account) > 0) then
+                    if clientData[account] ~= nil and tostring(clientData[account].type or "") == "treasury" then
+                        bankOwnerKey = account
+                        updateSettingsFile()
+                    else
+                        bankapi.errorScreen("Only treasury accounts can be set as the bank owner")
+                    end
+                end
+            elseif (command == "establish_treasury") then
+                local steps = {"Treasury name", "Representative color", "Tag (2-4 letters)", "Treasury password"}
+                local name = bankapi.inputTextScreen(steps, 1, 32)
+                if (name == nil or name == "") then break end
+                local color = bankapi.selectColorScreen(steps, 2)
+                if (color == nil) then break end
+                local tag = bankapi.inputTextScreen(steps, 3, 4)
+                if (tag == nil or tag == "") then break end
+                local tpass = bankapi.inputTextScreen(steps, 4, 64)
+                if (tpass == nil or tpass == "") then break end
+                local ok, msg, key = newTreasury({ name = name, color = color, tag = tag, password = tpass })
+                if ok then
+                    treasuryKey = key
+                    updateSettingsFile()
+                    bankapi.successScreen("Treasury established: "..name.." ("..string.upper(tag)..")")
+                else
+                    bankapi.errorScreen(tostring(msg or "Failed to establish treasury"))
+                end
+            elseif (command == "tax_rates") then
+                while true do
+                    local periodText = (taxPeriodDays == 7 and "Week") or (taxPeriodDays == 14 and "Two Weeks") or (taxPeriodDays == 30 and "Month") or (tostring(taxPeriodDays).." days")
+                    local enabledText = taxEnabled and "On" or "Off"
+                    local taxMenuCmd = bankapi.optionMenu(STR_TAX_SETTINGS, {
+                        {option = "toggle_enabled", text = STR_TAX_ENABLED..": "..enabledText},
+                        {option = "set_rate_personal", text = STR_TAX_RATE_PERSONAL..": "..tostring(taxRatePercentPersonal).."%"},
+                        {option = "set_rate_company", text = STR_TAX_RATE_COMPANY..": "..tostring(taxRatePercentCompany).."%"},
+                        {option = "set_threshold", text = STR_TAX_THRESHOLD..": "..tostring(taxThreshold).."$"},
+                        {option = "set_period", text = STR_TAX_PERIOD..": "..periodText},
+                        {option = "run_now", text = STR_TAX_RUN_NOW},
+                        {option = "back", text = "Back"}
+                    }, 2, 40)
+                    if taxMenuCmd == "toggle_enabled" then
+                        taxEnabled = not taxEnabled
+                        updateSettingsFile()
+                    elseif taxMenuCmd == "set_rate_personal" then
+                        local v = bankapi.inputNumberScreen({"Enter personal tax rate percent"}, 1)
+                        v = tonumber(v)
+                        if v ~= nil and v >= 0 then
+                            taxRatePercentPersonal = v
+                            -- keep legacy aggregate aligned for compatibility
+                            taxRatePercent = v
+                            updateSettingsFile()
+                        end
+                    elseif taxMenuCmd == "set_rate_company" then
+                        local v = bankapi.inputNumberScreen({"Enter company tax rate percent"}, 1)
+                        v = tonumber(v)
+                        if v ~= nil and v >= 0 then
+                            taxRatePercentCompany = v
+                            updateSettingsFile()
+                        end
+                    elseif taxMenuCmd == "set_threshold" then
+                        local v = bankapi.inputNumberScreen({"Enter minimum balance to tax ($)"}, 1)
+                        v = tonumber(v)
+                        if v ~= nil and v >= 0 then
+                            taxThreshold = v
+                            updateSettingsFile()
+                        end
+                    elseif taxMenuCmd == "set_period" then
+                        local p = bankapi.optionMenu("Select period", {
+                            {option = "week", text = "Week (real life)"},
+                            {option = "twoweeks", text = "Two Weeks (real life)"},
+                            {option = "month", text = "Month (real life ~30d)"},
+                            {option = "back", text = "Back"}
+                        }, 2, 36)
+                        if p == "week" then taxPeriodDays = 7
+                        elseif p == "twoweeks" then taxPeriodDays = 14
+                        elseif p == "month" then taxPeriodDays = 30 end
+                        updateSettingsFile()
+                    elseif taxMenuCmd == "run_now" then
+                        local ok, msg = applyTaxes()
+                        if ok then bankapi.successScreen(msg) else bankapi.errorScreen(msg) end
+                    elseif taxMenuCmd == "back" or taxMenuCmd == nil then
+                        break
+                    end
+                end
+            end
+		end
+	end
+end
+
+while true do
+    local ok, err = pcall(function()
+        parallel.waitForAll(listen, main, taxScheduler, companyValueScheduler)
+    end)
+    if not ok then
+        term.setBackgroundColor(colors.black)
+        term.setTextColor(colors.red)
+        term.clear()
+        term.setCursorPos(1,1)
+        if err == "Terminated" then
+            print("Termination prohibited.")
+        else
+            print("Critical Server Error: " .. tostring(err))
+        end
+        print("Restarting in 5 seconds...")
+        sleep(5)
+    end
+end

@@ -1,0 +1,131 @@
+-- Clerk Turtle (Slave)
+-- Handles item movement for the Store Clerk system.
+
+local protocol = "fiducia_clerk"
+local linkedComputerID = nil
+
+print("Clerk Turtle Starting...")
+
+-- Open modem
+local modem = peripheral.find("modem")
+if modem then
+    rednet.open(peripheral.getName(modem))
+    print("Modem opened.")
+else
+    print("No modem found! Please attach one.")
+end
+
+-- Discovery logic (similar to ATM Assistant)
+local function discover()
+    local f = fs.open("computer_id.txt", "r")
+    if f then
+        linkedComputerID = tonumber(f.readLine())
+        f.close()
+        print("Linked to Computer #" .. tostring(linkedComputerID))
+    else
+        print("Waiting for discovery from Computer...")
+        while true do
+            local sender, message, prot = rednet.receive(protocol)
+            if message == "hiring" then
+                rednet.send(sender, "offering", protocol)
+                linkedComputerID = sender
+                local f = fs.open("computer_id.txt", "w")
+                f.write(tostring(linkedComputerID))
+                f.close()
+                print("Hired by Computer #" .. tostring(linkedComputerID))
+                break
+            end
+        end
+    end
+end
+
+discover()
+
+local function main()
+-- Main loop
+while true do
+    local sender, message, prot = rednet.receive(protocol)
+    if sender == linkedComputerID then
+        if type(message) == "table" then
+            local action = message.action
+            
+            if action == "scan" then
+                print("Scanning inventory...")
+                local items = {}
+                for i = 1, 16 do
+                    items[i] = turtle.getItemDetail(i)
+                end
+                rednet.send(sender, {success = true, items = items}, protocol)
+                
+            elseif action == "drop" then
+                print("Dropping purchased items forward...")
+                local slotsToDrop = message.slots or {}
+                local lookup = {}
+                for _, slot in ipairs(slotsToDrop) do lookup[slot] = true end
+                
+                -- Drop purchased items forward
+                for i = 1, 16 do
+                    if lookup[i] then
+                        turtle.select(i)
+                        turtle.drop()
+                    end
+                end
+                
+                -- Reject everything else to the right
+                print("Rejecting leftovers to the right...")
+                turtle.turnRight()
+                for i = 1, 16 do
+                    if turtle.getItemCount(i) > 0 then
+                        turtle.select(i)
+                        turtle.drop()
+                    end
+                end
+                turtle.turnLeft()
+                rednet.send(sender, {success = true}, protocol)
+                
+            elseif action == "reject" then
+                print("Rejecting all items to the right...")
+                turtle.turnRight()
+                for i = 1, 16 do
+                    if turtle.getItemCount(i) > 0 then
+                        turtle.select(i)
+                        turtle.drop()
+                    end
+                end
+                turtle.turnLeft()
+                rednet.send(sender, {success = true}, protocol)
+                
+            elseif action == "suck" then
+                print("Sucking items...")
+                local count = 0
+                while turtle.suck() do
+                    count = count + 1
+                end
+                rednet.send(sender, {success = true, count = count}, protocol)
+            
+            elseif action == "ping" then
+                rednet.send(sender, "pong", protocol)
+            end
+        end
+    elseif message == "hiring" then
+        -- Handle re-hiring if the computer reset
+        rednet.send(sender, "offering", protocol)
+        linkedComputerID = sender
+        local f = fs.open("computer_id.txt", "w")
+        f.write(tostring(linkedComputerID))
+        f.close()
+        print("Re-hired by Computer #" .. tostring(linkedComputerID))
+    end
+end
+
+while true do
+    local ok, err = pcall(main)
+    if not ok then
+        if err == "Terminated" then
+            print("Termination prohibited.")
+        else
+            print("Critical Turtle Error: " .. tostring(err))
+        end
+        sleep(5)
+    end
+end
