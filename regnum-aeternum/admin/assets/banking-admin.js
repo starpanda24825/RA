@@ -161,19 +161,21 @@
     var editing = key ? allAccountsCache.find(function (a) { return a.key === key; }) : null;
     var formHtml = '<div style="display:flex;flex-direction:column;gap:12px;">';
     if (!editing) {
-      formHtml += '<div class="a-field"><label>Account Name</label><input class="a-input" id="bae-name" style="width:100%;"/></div>';
+      // Type selector (personal / company only; treasury handled in Treasuries tab)
       formHtml += '<div class="a-field"><label>Type</label><select class="a-select" id="bae-type" style="width:100%;">' +
         '<option value="personal">Personal</option><option value="company">Company</option>' +
-        (isAdmin ? '<option value="treasury">Treasury</option>' : '') +
         '</select></div>';
+      // Personal: web user search dropdown (name + password come from web account)
+      formHtml += '<div class="a-field" id="bae-personal-fields"><label>Linked Web User</label>' +
+        '<input class="a-input" id="bae-user-search" placeholder="Search registered users…" autocomplete="off" style="width:100%;margin-bottom:4px;"/>' +
+        '<select class="a-select" id="bae-user-id" size="5" style="width:100%;font-family:var(--font-mono);font-size:12px;"></select>' +
+        '</div>';
+      // Company: manual name field
+      formHtml += '<div class="a-field" id="bae-company-fields" style="display:none;"><label>Account Name</label><input class="a-input" id="bae-name" style="width:100%;"/></div>';
       formHtml += '<div class="a-field"><label>Color</label><input class="a-input" id="bae-color" type="number" value="16384" style="width:100px;"/></div>';
-      formHtml += '<div class="a-form" id="bae-company-fields" style="gap:10px;display:none;">' +
+      formHtml += '<div class="a-form" id="bae-co-extra" style="gap:10px;display:none;">' +
         '<div class="a-field"><label>Owner Key</label><input class="a-input" id="bae-ownerkey" style="width:220px;"/></div>' +
         '<div class="a-field"><label>Shares</label><input class="a-input" id="bae-shares" type="number" value="0" style="width:100px;"/></div>' +
-        '</div>';
-      formHtml += '<div class="a-form" id="bae-treasury-fields" style="gap:10px;display:none;">' +
-        '<div class="a-field"><label>Tag (2-4 letters)</label><input class="a-input" id="bae-tag" style="width:80px;" maxlength="4"/></div>' +
-        '<div class="a-field"><label>Password</label><input class="a-input" id="bae-password" type="password" style="width:200px;"/></div>' +
         '</div>';
     } else {
       formHtml += '<div class="a-field"><label>Name</label><input class="a-input" id="bae-name" style="width:100%;" value="' + esc(editing.name) + '"/></div>';
@@ -195,27 +197,70 @@
     var modal = showModal(editing ? 'Edit Account — ' + editing.key : 'New Account', formHtml);
 
     var typeSel = document.getElementById('bae-type');
-    var companyF = document.getElementById('bae-company-fields');
-    var treasuryF = document.getElementById('bae-treasury-fields');
+    var personalF = document.getElementById('bae-personal-fields');
+    var companyF  = document.getElementById('bae-company-fields');
+    var coExtra   = document.getElementById('bae-co-extra');
+    var userSearchEl = document.getElementById('bae-user-search');
+    var userIdEl = document.getElementById('bae-user-id');
+    var allUsers = [];
+
     if (typeSel) {
-      function toggleCompanyFields() {
-        if (companyF) companyF.style.display = typeSel.value === 'company' ? 'flex' : 'none';
-        if (treasuryF) treasuryF.style.display = typeSel.value === 'treasury' ? 'flex' : 'none';
+      function toggleTypeFields() {
+        var isCo = typeSel.value === 'company';
+        if (personalF) personalF.style.display = isCo ? 'none' : '';
+        if (companyF)  companyF.style.display  = isCo ? '' : 'none';
+        if (coExtra)   coExtra.style.display   = isCo ? 'flex' : 'none';
       }
-      typeSel.addEventListener('change', toggleCompanyFields);
-      toggleCompanyFields();
+      typeSel.addEventListener('change', toggleTypeFields);
+      toggleTypeFields();
+    }
+
+    // Load web users for the personal account dropdown
+    if (!editing) {
+      api('/api/admin/users').then(function (res) {
+        if (!res.ok) return;
+        allUsers = res.data || [];
+        renderUserOptions('');
+      });
+
+      function renderUserOptions(filter) {
+        var f = (filter || '').toLowerCase();
+        var filtered = allUsers.filter(function (u) {
+          return !f || u.username.toLowerCase().indexOf(f) !== -1;
+        });
+        if (userIdEl) {
+          userIdEl.innerHTML = filtered.map(function (u) {
+            return '<option value="' + u.id + '">' + esc(u.username) + ' (' + esc(u.role || '') + ')</option>';
+          }).join('');
+        }
+      }
+
+      if (userSearchEl) {
+        userSearchEl.addEventListener('input', function () {
+          renderUserOptions(userSearchEl.value);
+        });
+      }
     }
 
     document.getElementById('bae-cancel-btn').addEventListener('click', function () { modal.remove(); });
     document.getElementById('bae-save-btn').addEventListener('click', function () {
       var msg = msgEl('bae-msg');
-      var body = { name: document.getElementById('bae-name').value, color: Number(document.getElementById('bae-color').value) || 16384 };
+      var body = { color: Number(document.getElementById('bae-color').value) || 16384 };
       if (!editing) {
         body.type = typeSel.value;
-        if (body.type === 'company') { body.ownerKey = document.getElementById('bae-ownerkey').value; body.shares = Number(document.getElementById('bae-shares').value) || 0; }
-        if (body.type === 'treasury') { body.tag = document.getElementById('bae-tag').value; body.password = document.getElementById('bae-password').value; }
-        if (body.type === 'treasury' && !body.tag) { msg.show('error', 'Tag is required for treasury accounts.'); return; }
+        if (body.type === 'personal') {
+          var selUserId = userIdEl ? userIdEl.value : '';
+          if (!selUserId) { msg.show('error', 'Please select a web user for the personal account.'); return; }
+          body.userId = Number(selUserId);
+          // Backend uses web username as account name and copies password hash
+        } else {
+          body.name = document.getElementById('bae-name').value;
+          body.ownerKey = document.getElementById('bae-ownerkey').value;
+          body.shares = Number(document.getElementById('bae-shares').value) || 0;
+          if (!body.name) { msg.show('error', 'Account name is required.'); return; }
+        }
       } else {
+        body.name = document.getElementById('bae-name').value;
         body.frozen = document.getElementById('bae-frozen') ? document.getElementById('bae-frozen').checked : false;
         if (editing.type === 'company') body.shares = Number(document.getElementById('bae-shares').value) || 0;
         if (editing.type === 'treasury') body.tag = document.getElementById('bae-tag').value;
@@ -436,8 +481,12 @@
       });
       tbody.querySelectorAll('[data-bt-del]').forEach(function (btn) {
         btn.addEventListener('click', function () {
-          if (!confirm('Delete treasury ' + btn.dataset.btDel + '?')) return;
-          alert('Treasury deletion is managed through the accounts system. Use the Accounts tab.');
+          if (!confirm('Delete treasury ' + btn.dataset.btDel + '? This cannot be undone.')) return;
+          api('/api/banking/admin/treasuries/' + encodeURIComponent(btn.dataset.btDel) + '?force=true', { method: 'DELETE' })
+            .then(function (res) {
+              if (!res.ok) { alert(res.data.error || 'Could not delete treasury.'); return; }
+              loadTreasuries();
+            });
         });
       });
     });

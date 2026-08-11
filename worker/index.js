@@ -152,6 +152,7 @@ export default {
 
         m = pathname.match(/^\/api\/banking\/admin\/treasuries\/([^/]+)$/);
         if (m && method === 'PUT') return await bankingAdmin.updateTreasury(request, env, m[1]);
+        if (m && method === 'DELETE') return await bankingAdmin.deleteTreasury(request, env, m[1]);
 
         m = pathname.match(/^\/api\/banking\/admin\/banker-assignments\/(\d+)$/);
         if (m && method === 'PUT') return await bankingAdmin.upsertBankerAssignmentRoute(request, env, m[1]);

@@ -238,11 +238,24 @@ export async function deleteAccount(request, env, key) {
   }
 
   const url = new URL(request.url);
-  if (url.searchParams.get('force') !== 'true' && account.balance > 0) {
+  const force = url.searchParams.get('force') === 'true';
+
+  if (!force && account.balance > 0) {
     return json(
       { error: `Account has a non-zero balance ($${account.balance}). Pass ?force=true to confirm.` },
       { status: 409 }
     );
+  }
+
+  // Company accounts: must have no outstanding shareholders (or use force)
+  if (account.type === 'company') {
+    const shareholders = await store.listShareholders(env, key);
+    if (shareholders.length > 0 && !force) {
+      return json(
+        { error: `Company has ${shareholders.length} outstanding shareholder(s). Pass ?force=true to confirm deletion.` },
+        { status: 409 }
+      );
+    }
   }
 
   await store.deleteBankingAccount(env, key);
@@ -644,6 +657,48 @@ export async function updateTreasury(request, env, key) {
   if (body.password)               fields.password_hash = await hash(String(body.password));
 
   return json(await store.updateBankingAccount(env, key, fields));
+}
+
+// DELETE /api/banking/admin/treasuries/:key?force=true
+export async function deleteTreasury(request, env, key) {
+  const auth = await requireBankerOrAdmin(request, env);
+  if (auth.error) return auth.error;
+  const deny = requireAdminOnly(auth);
+  if (deny) return deny;
+
+  const account = await store.findBankingAccountByKey(env, key);
+  if (!account || account.type !== 'treasury') {
+    return json({ error: 'Treasury account not found.' }, { status: 404 });
+  }
+
+  // Cannot delete the bank_owner_key treasury unless a new one is set
+  const settings = await store.getBankingSettings(env);
+  if (settings.bank_owner_key === key) {
+    return json({ error: 'This treasury is the bank owner. Set a different bank_owner_key in settings before deleting.' }, { status: 409 });
+  }
+
+  const url = new URL(request.url);
+  const force = url.searchParams.get('force') === 'true';
+
+  // Must have zero balance (or force)
+  if (!force && account.balance > 0) {
+    return json(
+      { error: `Treasury has a non-zero balance ($${account.balance}). Pass ?force=true to confirm.` },
+      { status: 409 }
+    );
+  }
+
+  // Must have no sub-accounts (or force)
+  const subAccounts = await store.findBankingAccountsByTreasury(env, key);
+  if (subAccounts.length > 0 && !force) {
+    return json(
+      { error: `Treasury has ${subAccounts.length} sub-account(s). Reassign or delete them first, or pass ?force=true.` },
+      { status: 409 }
+    );
+  }
+
+  await store.deleteBankingAccount(env, key);
+  return json({ ok: true });
 }
 
 // ════════════════════════════════════════════════════════════
