@@ -634,7 +634,7 @@
 </div>
 
 <script src="assets/legal-builder.js"></script>
-<script src="assets/banking-admin.js" defer></script>
+<script src="assets/banking-admin.js"></script>
 <script>
 (async function () {
   'use strict';
@@ -686,7 +686,7 @@
     loadActs();
     loadCaseLaw();
     loadPlots();
-    if (typeof BankingAdmin !== 'undefined') BankingAdmin.init(me);
+    loadBankingAccounts();
   }
 
   document.getElementById('login-form').addEventListener('submit', async (e) => {
@@ -1384,7 +1384,110 @@
   });
 
   // ── Banking System (banker & admin) ────────────────────────────
-  // Managed entirely by banking-admin.js (lazy-loaded module)
+
+  var allBankingAccounts = [];
+
+  function bankingTypePill(t) {
+    var map = { personal: 'citizen', company: 'editor', treasury: 'admin' };
+    var label = t.charAt(0).toUpperCase() + t.slice(1);
+    return '<span class="a-pill a-pill--' + (map[t] || 'citizen') + '">' + escapeHtml(label) + '</span>';
+  }
+
+  async function loadBankingAccounts() {
+    if (!me || !(userHasRole(me, 'admin') || userHasRole(me, 'banker'))) return;
+    var r = await fetch('/api/banking/admin/accounts');
+    if (!r.ok) return;
+    allBankingAccounts = await r.json();
+    renderBankingAccountsTable();
+  }
+
+  function renderBankingAccountsTable() {
+    var f = (document.getElementById('banking-accounts-filter').value || '').trim().toLowerCase();
+    var filtered = !f ? allBankingAccounts : allBankingAccounts.filter(function (a) {
+      return (a.key + ' ' + a.name + ' ' + a.type).toLowerCase().indexOf(f) !== -1;
+    });
+    var tbody = document.getElementById('banking-accounts-tbody');
+    tbody.innerHTML = filtered.map(function (a) {
+      return '<tr>' +
+        '<td style="font-family:var(--font-mono);font-size:12px;">' + escapeHtml(a.key) + '</td>' +
+        '<td>' + escapeHtml(a.name) + '</td>' +
+        '<td>' + bankingTypePill(a.type) + '</td>' +
+        '<td style="font-family:var(--font-mono);">$' + Number(a.balance).toLocaleString() + '</td>' +
+        '<td>' +
+          (a.frozen ? '<span class="a-pill a-pill--admin" style="margin-right:6px;">FROZEN</span>' : '') +
+          '<button class="a-btn" data-bank-freeze="' + escapeHtml(a.key) + '">' + (a.frozen ? 'Unfreeze' : 'Freeze') + '</button>' +
+          (userHasRole(me, 'admin') ? '<button class="a-btn danger" data-bank-del="' + escapeHtml(a.key) + '">Delete</button>' : '') +
+        '</td>' +
+      '</tr>';
+    }).join('');
+
+    tbody.querySelectorAll('[data-bank-freeze]').forEach(function (btn) {
+      btn.addEventListener('click', async function () {
+        var acc = allBankingAccounts.find(function (a) { return a.key === btn.dataset.bankFreeze; });
+        await fetch('/api/banking/admin/accounts/' + encodeURIComponent(btn.dataset.bankFreeze) + '/freeze', {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ frozen: !(acc && acc.frozen) })
+        });
+        loadBankingAccounts();
+      });
+    });
+    tbody.querySelectorAll('[data-bank-del]').forEach(function (btn) {
+      btn.addEventListener('click', async function () {
+        if (!confirm('Delete this account permanently?')) return;
+        await fetch('/api/banking/admin/accounts/' + encodeURIComponent(btn.dataset.bankDel) + '?force=true', { method: 'DELETE' });
+        loadBankingAccounts();
+      });
+    });
+  }
+
+  document.getElementById('banking-accounts-filter').addEventListener('input', renderBankingAccountsTable);
+
+  document.getElementById('bacc-type').addEventListener('change', function () {
+    document.getElementById('bacc-company-fields').style.display = this.value === 'company' ? 'flex' : 'none';
+  });
+
+  document.getElementById('new-banking-account-btn').addEventListener('click', function () {
+    document.getElementById('banking-account-editor').classList.add('active');
+    document.getElementById('banking-editor-heading').textContent = 'New Account';
+    document.getElementById('bacc-name').value = '';
+    document.getElementById('bacc-type').value = 'personal';
+    document.getElementById('bacc-color').value = '16384';
+    document.getElementById('bacc-ownerkey').value = '';
+    document.getElementById('bacc-shares').value = '0';
+    document.getElementById('bacc-company-fields').style.display = 'none';
+    document.getElementById('banking-editor-msg').style.display = 'none';
+    document.getElementById('banking-account-editor').scrollIntoView({ behavior: 'smooth' });
+  });
+
+  document.getElementById('bacc-cancel-btn').addEventListener('click', function () {
+    document.getElementById('banking-account-editor').classList.remove('active');
+  });
+
+  document.getElementById('bacc-save-btn').addEventListener('click', async function () {
+    var msg = document.getElementById('banking-editor-msg');
+    msg.style.display = 'none';
+    var type = document.getElementById('bacc-type').value;
+    var body = {
+      name: document.getElementById('bacc-name').value,
+      type: type,
+      color: Number(document.getElementById('bacc-color').value) || 16384
+    };
+    if (type === 'company') {
+      body.ownerKey = document.getElementById('bacc-ownerkey').value;
+      body.shares = Number(document.getElementById('bacc-shares').value) || 0;
+    }
+    var r = await fetch('/api/banking/admin/accounts', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    var data = await r.json();
+    msg.style.display = 'block';
+    if (!r.ok) { msg.className = 'a-msg error'; msg.textContent = data.error || 'Could not create account.'; return; }
+    msg.className = 'a-msg success'; msg.textContent = 'Account created. Key: ' + data.key;
+    document.getElementById('banking-account-editor').classList.remove('active');
+    loadBankingAccounts();
+  });
+
   // ── Boot ──────────────────────────────────────────────────────
   const user = await checkAuth();
   if (user && (userHasRole(user, 'admin') || userHasRole(user, 'editor') || userHasRole(user, 'banker'))) showApp(user);
