@@ -26,6 +26,11 @@
     '.ra-auth-user__name { color: var(--parchment); max-width: 140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }',
     '.ra-auth-user__role { color: var(--teal-bright); text-transform: uppercase; letter-spacing: .06em; font-size: 10px; border: 1px solid rgba(46,142,150,.4); border-radius: 100px; padding: 2px 9px; white-space:nowrap; }',
     '.ra-auth-link { color: var(--gold-bright); border-bottom: 1px dotted var(--gold-dim); font-size: 11px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: .06em; white-space:nowrap; }',
+    '.ra-auth-settings-btn { color: var(--parchment-faint); background: none; border: none; cursor: pointer; font-size: 14px; line-height: 1; padding: 2px 4px; transition: color .15s; }',
+    '.ra-auth-settings-btn:hover { color: var(--gold-bright); }',
+    '.ra-settings-modal { max-width: 420px; }',
+    '.ra-settings-modal .ra-modal__panel { gap: 10px; }',
+    '.ra-settings-modal .ra-modal__success { color: var(--teal-bright); font-family: var(--font-mono); font-size: 12px; margin: 0; display: none; }',
     '.ra-modal-backdrop { position: fixed; inset: 0; background: rgba(10,9,10,0.72); backdrop-filter: blur(3px); display:flex; align-items:center; justify-content:center; z-index: 1000; padding: 20px; }',
     '.ra-modal { background: var(--ink-elevated); border: 1px solid var(--slate-line); border-radius: 14px; width: 100%; max-width: 380px; padding: 28px 26px; position: relative; }',
     '.ra-modal__close { position: absolute; top: 14px; right: 16px; background:none; border:none; color: var(--parchment-faint); font-size: 18px; cursor:pointer; line-height:1; }',
@@ -41,6 +46,7 @@
     '.ra-modal button[type="submit"]:hover { background: var(--crimson-bright); }',
     '.ra-modal button[type="submit"]:disabled { opacity: .5; cursor: not-allowed; }',
     '.ra-modal__err { color: #e3a3a3; font-family: var(--font-mono); font-size: 12px; margin: 0; display:none; }',
+    '.ra-modal__success { color: var(--teal-bright); font-family: var(--font-mono); font-size: 12px; margin: 0; display:none; }',
     '.ra-modal__hint { color: var(--slate-soft); font-family: var(--font-mono); font-size: 10.5px; margin: -4px 0 0; }'
   ].join('\n');
 
@@ -178,12 +184,134 @@
     document.body.appendChild(buildModal());
   }
 
+  function buildSettingsModal() {
+    var backdrop = el('div', { class: 'ra-modal-backdrop' });
+    var modal = el('div', { class: 'ra-modal ra-settings-modal' });
+    var close = el('button', { class: 'ra-modal__close', type: 'button', 'aria-label': 'Close' }, '\u2715');
+
+    var tabs = el('div', { class: 'ra-modal__tabs' });
+    var tabUser = el('button', { class: 'ra-modal__tab active', type: 'button' }, 'Change Username');
+    var tabPass = el('button', { class: 'ra-modal__tab', type: 'button' }, 'Change Password');
+    tabs.appendChild(tabUser);
+    tabs.appendChild(tabPass);
+
+    // ---- Change username panel ----
+    var userPanel = el('form', { class: 'ra-modal__panel active' });
+    userPanel.appendChild(el('h3', { class: 'ra-modal__title' }, 'Change Username'));
+    var uNew = el('input', { type: 'text', placeholder: 'New username', autocomplete: 'username', required: 'required' });
+    var uHint = el('p', { class: 'ra-modal__hint' }, '3\u201332 characters: letters, numbers, _ - .');
+    var uErr = el('p', { class: 'ra-modal__err' });
+    var uOk  = el('p', { class: 'ra-modal__success' });
+    var uBtn = el('button', { type: 'submit' }, 'Save Username');
+    [uNew, uHint, uErr, uOk, uBtn].forEach(function (n) { userPanel.appendChild(n); });
+
+    // ---- Change password panel ----
+    var passPanel = el('form', { class: 'ra-modal__panel' });
+    passPanel.appendChild(el('h3', { class: 'ra-modal__title' }, 'Change Password'));
+    var pCurr = el('input', { type: 'password', placeholder: 'Current password', autocomplete: 'current-password', required: 'required' });
+    var pNew  = el('input', { type: 'password', placeholder: 'New password (8+ characters)', autocomplete: 'new-password', required: 'required' });
+    var pNew2 = el('input', { type: 'password', placeholder: 'Confirm new password', autocomplete: 'new-password', required: 'required' });
+    var pErr = el('p', { class: 'ra-modal__err' });
+    var pOk  = el('p', { class: 'ra-modal__success' });
+    var pBtn = el('button', { type: 'submit' }, 'Save Password');
+    [pCurr, pNew, pNew2, pErr, pOk, pBtn].forEach(function (n) { passPanel.appendChild(n); });
+
+    function showTab(which) {
+      tabUser.classList.toggle('active', which === 'user');
+      tabPass.classList.toggle('active', which === 'pass');
+      userPanel.classList.toggle('active', which === 'user');
+      passPanel.classList.toggle('active', which === 'pass');
+    }
+    tabUser.addEventListener('click', function () { showTab('user'); });
+    tabPass.addEventListener('click', function () { showTab('pass'); });
+
+    function closeModal() {
+      document.removeEventListener('keydown', onKeydown);
+      backdrop.remove();
+    }
+    function onKeydown(e) { if (e.key === 'Escape') closeModal(); }
+    document.addEventListener('keydown', onKeydown);
+    close.addEventListener('click', closeModal);
+    backdrop.addEventListener('click', function (e) { if (e.target === backdrop) closeModal(); });
+
+    // Submit: change username
+    userPanel.addEventListener('submit', function (e) {
+      e.preventDefault();
+      uErr.style.display = 'none';
+      uOk.style.display = 'none';
+      uBtn.disabled = true;
+      api('/api/auth/username', { method: 'PUT', body: JSON.stringify({ username: uNew.value }) })
+        .then(function (res) {
+          uBtn.disabled = false;
+          if (!res.ok) {
+            uErr.textContent = res.data.error || 'Could not change username.';
+            uErr.style.display = 'block';
+            return;
+          }
+          state.user.username = res.data.username;
+          uOk.textContent = 'Username changed to ' + res.data.username + '.';
+          uOk.style.display = 'block';
+          uNew.value = '';
+          renderWidget();
+        });
+    });
+
+    // Submit: change password
+    passPanel.addEventListener('submit', function (e) {
+      e.preventDefault();
+      pErr.style.display = 'none';
+      pOk.style.display = 'none';
+      if (pNew.value !== pNew2.value) {
+        pErr.textContent = 'Passwords do not match.';
+        pErr.style.display = 'block';
+        return;
+      }
+      if (pNew.value.length < 8) {
+        pErr.textContent = 'Password must be at least 8 characters.';
+        pErr.style.display = 'block';
+        return;
+      }
+      pBtn.disabled = true;
+      api('/api/auth/password', { method: 'PUT', body: JSON.stringify({ currentPassword: pCurr.value, newPassword: pNew.value }) })
+        .then(function (res) {
+          pBtn.disabled = false;
+          if (!res.ok) {
+            pErr.textContent = res.data.error || 'Could not change password.';
+            pErr.style.display = 'block';
+            return;
+          }
+          pOk.textContent = 'Password changed successfully.';
+          pOk.style.display = 'block';
+          pCurr.value = '';
+          pNew.value = '';
+          pNew2.value = '';
+        });
+    });
+
+    modal.appendChild(close);
+    modal.appendChild(tabs);
+    modal.appendChild(userPanel);
+    modal.appendChild(passPanel);
+    backdrop.appendChild(modal);
+    return backdrop;
+  }
+
+  function openSettingsModal() {
+    document.body.appendChild(buildSettingsModal());
+  }
+
   function renderWidget() {
     if (!slotEl) return;
     slotEl.innerHTML = '';
 
     if (state.user) {
       var wrap = el('div', { class: 'ra-auth-user' });
+
+      // Settings gear button — opens username/password change modal
+      var gearBtn = el('button', { class: 'ra-auth-settings-btn', type: 'button', title: 'Account Settings' }, '\u2699');
+      gearBtn.addEventListener('click', openSettingsModal);
+      wrap.appendChild(gearBtn);
+
       wrap.appendChild(el('span', { class: 'ra-auth-user__name' }, state.user.username));
       var roleDisplay = (state.user.role || '').split(',').map(function(r){return r.trim();}).filter(Boolean).join(', ');
       wrap.appendChild(el('span', { class: 'ra-auth-user__role' }, roleDisplay));

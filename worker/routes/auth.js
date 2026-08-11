@@ -111,3 +111,74 @@ export async function handleMe(request, env) {
   if (!user) return json({ error: 'Not authenticated.' }, { status: 401 });
   return json(user);
 }
+
+// ── PUT /api/auth/username ────────────────────────────────────────
+export async function handleChangeUsername(request, env) {
+  const user = await getCurrentUser(request, env);
+  if (!user) return json({ error: 'Not authenticated.' }, { status: 401 });
+
+  let body;
+  try { body = await request.json(); }
+  catch { return json({ error: 'Invalid request body.' }, { status: 400 }); }
+
+  const newUsername = String(body.username || '').trim();
+  if (!USERNAME_RE.test(newUsername)) {
+    return json({ error: 'Username must be 3-32 characters: letters, numbers, underscore, hyphen, or period.' }, { status: 400 });
+  }
+
+  try {
+    const updated = await store.updateUserUsername(env, user.id, newUsername);
+
+    // Patch 8: Also update the linked banking account name so it stays
+    // in sync with the web username (universal username).
+    const linkedAccount = await store.findBankingAccountByUserId(env, user.id);
+    if (linkedAccount && linkedAccount.type === 'personal') {
+      await store.updateBankingAccount(env, linkedAccount.key, { name: newUsername });
+    }
+
+    return json({ ok: true, username: newUsername });
+  } catch (err) {
+    if (err.code === 'DUPLICATE') return json({ error: 'That username is already taken.' }, { status: 409 });
+    console.error(err);
+    return json({ error: 'Server error.' }, { status: 500 });
+  }
+}
+
+// ── PUT /api/auth/password ────────────────────────────────────────
+export async function handleChangePassword(request, env) {
+  const user = await getCurrentUser(request, env);
+  if (!user) return json({ error: 'Not authenticated.' }, { status: 401 });
+
+  let body;
+  try { body = await request.json(); }
+  catch { return json({ error: 'Invalid request body.' }, { status: 400 }); }
+
+  const { currentPassword, newPassword } = body;
+  if (!currentPassword || !newPassword) {
+    return json({ error: 'currentPassword and newPassword are required.' }, { status: 400 });
+  }
+  if (String(newPassword).length < 8) {
+    return json({ error: 'Password must be at least 8 characters.' }, { status: 400 });
+  }
+
+  // Verify current password against the web user record
+  const fullUser = await store.findUserById(env, user.id);
+  if (!fullUser) return json({ error: 'User not found.' }, { status: 404 });
+
+  const ok = await compare(String(currentPassword), fullUser.password_hash);
+  if (!ok) return json({ error: 'Current password is incorrect.' }, { status: 401 });
+
+  const newHash = await hash(String(newPassword));
+
+  // Update the web user's password
+  await store.updateUser(env, user.id, { passwordHash: newHash });
+
+  // Also sync the password to any linked banking account so terminal
+  // login uses the same credential (Patch 8 — universal password).
+  const linkedAccount = await store.findBankingAccountByUserId(env, user.id);
+  if (linkedAccount) {
+    await store.updateBankingAccount(env, linkedAccount.key, { password_hash: newHash });
+  }
+
+  return json({ ok: true });
+}

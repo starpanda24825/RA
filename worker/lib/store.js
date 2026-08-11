@@ -69,6 +69,34 @@ export async function deleteUserById(env, id) {
   await env.DB.prepare('DELETE FROM users WHERE id = ?').bind(Number(id)).run();
 }
 
+export async function updateUserUsername(env, id, newUsername) {
+  const lower = newUsername.toLowerCase();
+  try {
+    await env.DB.prepare(
+      'UPDATE users SET username = ?, username_lower = ? WHERE id = ?'
+    ).bind(newUsername, lower, Number(id)).run();
+    return findUserById(env, id);
+  } catch (err) {
+    if (String(err && err.message || '').toUpperCase().includes('UNIQUE')) {
+      const e = new Error('Username already exists.');
+      e.code = 'DUPLICATE';
+      throw e;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Finds a personal banking account linked to a user, excluding the given key.
+ * Returns null if no such account exists — meaning the user is free to link.
+ */
+export async function findPersonalAccountByUserIdExcluding(env, userId, excludeKey) {
+  const row = await env.DB.prepare(
+    "SELECT key FROM banking_accounts WHERE user_id = ? AND type = 'personal' AND key != ?"
+  ).bind(Number(userId), excludeKey).first();
+  return row || null;
+}
+
 // ---------- sessions ----------
 // Sessions are real rows, not a stateless signed token — this means
 // "Sign out" actually revokes the session server-side (the old

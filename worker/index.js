@@ -8,7 +8,7 @@
         just explicit now instead of being the *only* thing that ran.
    ============================================================ */
 
-import { handleRegister, handleLogin, handleLogout, handleMe } from './routes/auth.js';
+import { handleRegister, handleLogin, handleLogout, handleMe, handleChangeUsername, handleChangePassword } from './routes/auth.js';
 import { listUsersRoute, createUserRoute, updateUserRoute, deleteUserRoute } from './routes/admin.js';
 import * as news from './routes/news.js';
 import * as legal from './routes/legal.js';
@@ -38,6 +38,8 @@ export default {
         if (pathname === '/api/auth/login' && method === 'POST') return await handleLogin(request, env);
         if (pathname === '/api/auth/logout' && method === 'POST') return await handleLogout(request, env);
         if (pathname === '/api/auth/me' && method === 'GET') return await handleMe(request, env);
+        if (pathname === '/api/auth/username' && method === 'PUT') return await handleChangeUsername(request, env);
+        if (pathname === '/api/auth/password' && method === 'PUT') return await handleChangePassword(request, env);
 
         // ---- admin: account management ----
         if (pathname === '/api/admin/users' && method === 'GET') return await listUsersRoute(request, env);

@@ -99,9 +99,11 @@ export async function createAccount(request, env) {
   try { body = await request.json(); }
   catch { return json({ error: 'Invalid request body.' }, { status: 400 }); }
 
-  const { name, color = 16384, type = 'personal', ownerKey = '', shares = 0, tag = '', password } = body;
+  const { name, color = 16384, type = 'personal', ownerKey = '', shares = 0, tag = '', password, userId } = body;
 
-  if (!name || !String(name).trim()) {
+  // Patch 8: For personal accounts with a linked web user, the name
+  // comes from the web user's username — don't require a separate name.
+  if (!(type === 'personal' && userId) && (!name || !String(name).trim())) {
     return json({ error: 'Account name is required.' }, { status: 400 });
   }
   if (!['personal', 'company', 'treasury'].includes(type)) {
@@ -117,6 +119,36 @@ export async function createAccount(request, env) {
     return json({ error: 'password is required for treasury accounts.' }, { status: 400 });
   }
 
+  let linkedUserId = null;
+  let passwordHash = '';
+
+  // Patch 8: Personal accounts are created from existing web users.
+  // The web user's username becomes the account name, and their
+  // password hash is copied so terminal login uses the same credential.
+  if (type === 'personal' && userId) {
+    const webUser = await store.findUserById(env, Number(userId));
+    if (!webUser) {
+      return json({ error: 'Web user not found.' }, { status: 404 });
+    }
+    // Check the user isn't already linked to a different personal account
+    const existingLinked = await store.findPersonalAccountByUserIdExcluding(env, Number(userId), '');
+    if (existingLinked) {
+      return json({ error: 'This user is already linked to a personal banking account.' }, { status: 409 });
+    }
+    // Use web username as the account name (overrides any passed-in name)
+    body.name = webUser.username;
+    // Copy the web password hash for universal terminal login
+    passwordHash = webUser.password_hash;
+    linkedUserId = webUser.id;
+  } else if (type === 'personal' && !userId) {
+    // Personal account WITHOUT a web user — name is required and provided
+    body.name = String(name).trim();
+  }
+
+  if (password) {
+    passwordHash = await hash(String(password));
+  }
+
   if (type === 'company') {
     const owner = await store.findBankingAccountByKey(env, ownerKey);
     if (!owner) return json({ error: 'Owner account not found.' }, { status: 404 });
@@ -126,16 +158,11 @@ export async function createAccount(request, env) {
     ? ''
     : (auth.isBanker ? auth.treasuryKey : (body.treasuryKey || ''));
 
-  let passwordHash = '';
-  if (password) {
-    passwordHash = await hash(String(password));
-  }
-
   try {
     const key     = await store.generateAccountKey(env);
     const account = await store.insertBankingAccount(env, {
       key,
-      name:        String(name).trim(),
+      name:        String(body.name).trim(),
       balance:     0,
       color:       Number(color) || 16384,
       type,
@@ -145,6 +172,12 @@ export async function createAccount(request, env) {
       shares:      type === 'company' ? (Number(shares) || 0) : 0,
       tag:         type === 'treasury' ? String(tag).toUpperCase().slice(0, 4) : '',
     });
+
+    // Link the web user to the new personal account
+    if (linkedUserId) {
+      await store.linkBankingAccountToUser(env, key, linkedUserId);
+    }
+
     return json(account, { status: 201 });
   } catch (err) {
     console.error(err);
@@ -277,7 +310,26 @@ export async function linkUser(request, env, key) {
   try { body = await request.json(); }
   catch { return json({ error: 'Invalid request body.' }, { status: 400 }); }
 
-  await store.linkBankingAccountToUser(env, key, body.userId || null);
+  const targetUserId = body.userId ? Number(body.userId) : null;
+
+  // Patch 8: Prevent linking a user to multiple personal accounts
+  if (targetUserId && account.type === 'personal') {
+    const existingLinked = await store.findPersonalAccountByUserIdExcluding(env, targetUserId, key);
+    if (existingLinked) {
+      return json({ error: 'This user is already linked to a different personal banking account.' }, { status: 409 });
+    }
+  }
+
+  await store.linkBankingAccountToUser(env, key, targetUserId);
+
+  // Patch 8: Sync web password to banking account for universal terminal login
+  if (targetUserId) {
+    const webUser = await store.findUserById(env, targetUserId);
+    if (webUser) {
+      await store.updateBankingAccount(env, key, { password_hash: webUser.password_hash });
+    }
+  }
+
   return json({ ok: true });
 }
 
