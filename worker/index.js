@@ -17,6 +17,7 @@ import * as dynmap from './routes/dynmap.js';
 import * as banking from './routes/banking.js';
 import * as bankingAdmin from './routes/banking-admin.js';
 import * as bankingCC from './routes/banking-cc.js';
+import * as store from './lib/store.js';
 
 function json(data, init = {}) {
   const headers = new Headers(init.headers || {});
@@ -196,5 +197,25 @@ export default {
     }
 
     return env.ASSETS.fetch(request);
+  },
+
+  async scheduled(event, env, ctx) {
+    // Check if taxes are due; apply if so
+    const settings = await store.getBankingSettings(env);
+    if (!settings.tax_enabled) return;
+
+    const lastRun = settings.tax_last_run_at ? new Date(settings.tax_last_run_at) : new Date(0);
+    const msPerDay = 86400000;
+    const dueAt = new Date(lastRun.getTime() + settings.tax_period_days * msPerDay);
+
+    if (new Date() >= dueAt) {
+      await store.applyTaxes(env, 'system:cron');
+    }
+
+    // Insert value history snapshots for all companies
+    const companies = await store.listBankingAccounts(env, { type: 'company' });
+    for (const co of companies) {
+      await store.insertCompanyValueSnapshot(env, co.key, co.balance);
+    }
   },
 };

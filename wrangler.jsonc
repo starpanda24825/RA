@@ -22,5 +22,8 @@
 			"database_name": "regnum-aeternum-db",
 			"database_id": "26aa5fb2-a699-4b3c-abbc-32d35cf70c72"
 		}
-	]
+	],
+	"triggers": {
+		"crons": ["0 3 * * *"]
+	}
 }
