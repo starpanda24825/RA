@@ -1369,6 +1369,8 @@ body.is-resizing-panel { cursor: row-resize; }
   // ════════════════════════════════════════════════════════════
   // 9. AUTH — last, because showApp() needs `map` to already exist
   // ════════════════════════════════════════════════════════════
+  function userHasRole(user, r) { return (user && user.role ? user.role.split(',') : []).map(function(x){return x.trim();}).indexOf(r) !== -1; }
+
   async function checkAuth() {
     try {
       const r = await fetch('/api/auth/me');
@@ -1400,7 +1402,7 @@ body.is-resizing-panel { cursor: row-resize; }
     });
     const data = await r.json();
     if (!r.ok) { lgErr.textContent = data.error || 'Login failed.'; lgErr.style.display = 'block'; return; }
-    if (!['ballistics', 'admin'].includes(data.role)) {
+    if (!(userHasRole(data, 'ballistics') || userHasRole(data, 'admin'))) {
       lgErr.textContent = 'Your account does not have Crown clearance for this system.';
       lgErr.style.display = 'block';
       await fetch('/api/auth/logout', { method: 'POST' });
@@ -1416,7 +1418,7 @@ body.is-resizing-panel { cursor: row-resize; }
   });
 
   const me = await checkAuth();
-  if (me && ['ballistics', 'admin'].includes(me.role)) showApp(me);
+  if (me && (userHasRole(me, 'ballistics') || userHasRole(me, 'admin'))) showApp(me);
   else showGate(me ? 'Your account does not have Crown clearance for this system.' : undefined);
 
 })();

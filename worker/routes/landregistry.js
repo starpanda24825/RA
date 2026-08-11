@@ -19,7 +19,7 @@
    ============================================================ */
 
 import * as store from '../lib/store.js';
-import { getCurrentUser } from './auth.js';
+import { getCurrentUser, hasRole } from './auth.js';
 
 export const DIVISIONS = [
   { code: 'RA1M', name: 'Ardoritha' },
@@ -39,7 +39,7 @@ function json(data, init = {}) {
 
 async function requireAdmin(request, env) {
   const user = await getCurrentUser(request, env);
-  if (!user || user.role !== 'admin') return null;
+  if (!user || !hasRole(user, 'admin')) return null;
   return user;
 }
 

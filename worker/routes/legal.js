@@ -15,7 +15,7 @@
    ============================================================ */
 
 import * as store from '../lib/store.js';
-import { getCurrentUser } from './auth.js';
+import { getCurrentUser, hasRole } from './auth.js';
 
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 const ACT_CATEGORIES = ['constitution', 'code', 'act', 'regulation'];
@@ -29,7 +29,7 @@ function json(data, init = {}) {
 
 async function requireAdmin(request, env) {
   const user = await getCurrentUser(request, env);
-  if (!user || user.role !== 'admin') return null;
+  if (!user || !hasRole(user, 'admin')) return null;
   return user;
 }
 

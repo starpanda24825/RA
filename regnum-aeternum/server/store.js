@@ -59,7 +59,9 @@ function listUsers() {
     .sort((a, b) => a.id - b.id);
 }
 function anyAdminExists() {
-  return readUsers().some(u => u.role === 'admin');
+  return readUsers().some(function(u) {
+    return (u.role || '').split(',').map(function(r) { return r.trim(); }).indexOf('admin') !== -1;
+  });
 }
 function insertUser({ username, password_h, role }) {
   const users = readUsers();

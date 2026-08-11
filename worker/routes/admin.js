@@ -6,7 +6,7 @@
    ============================================================ */
 
 import * as store from '../lib/store.js';
-import { getCurrentUser, USERNAME_RE } from './auth.js';
+import { getCurrentUser, USERNAME_RE, hasRole } from './auth.js';
 import { hash } from '../lib/passwords.js';
 
 const VALID_ROLES = ['citizen', 'ballistics', 'editor', 'banker', 'admin'];
@@ -19,7 +19,7 @@ function json(data, init = {}) {
 
 async function requireAdmin(request, env) {
   const user = await getCurrentUser(request, env);
-  if (!user || user.role !== 'admin') return null;
+  if (!user || !hasRole(user, 'admin')) return null;
   return user;
 }
 
@@ -38,13 +38,17 @@ export async function createUserRoute(request, env) {
 
   const username = String(body.username || '').trim();
   const password = String(body.password || '');
-  const role = body.role || 'citizen';
+  const roleInput = body.role || 'citizen';
+  const roles = String(roleInput).split(',').map(r => r.trim()).filter(Boolean);
+  for (const r of roles) {
+    if (!VALID_ROLES.includes(r)) return json({ error: 'Invalid role: ' + r }, { status: 400 });
+  }
+  const role = roles.join(',');
 
   if (!USERNAME_RE.test(username)) {
     return json({ error: 'Username must be 3-32 characters: letters, numbers, underscore, hyphen, or period.' }, { status: 400 });
   }
   if (password.length < 8) return json({ error: 'Password must be at least 8 characters.' }, { status: 400 });
-  if (!VALID_ROLES.includes(role)) return json({ error: 'Invalid role.' }, { status: 400 });
 
   try {
     const passwordHash = await hash(password);
@@ -69,8 +73,11 @@ export async function updateUserRoute(request, env, id) {
 
   const fields = {};
   if (body.role) {
-    if (!VALID_ROLES.includes(body.role)) return json({ error: 'Invalid role.' }, { status: 400 });
-    fields.role = body.role;
+    const roles = String(body.role).split(',').map(r => r.trim()).filter(Boolean);
+    for (const r of roles) {
+      if (!VALID_ROLES.includes(r)) return json({ error: 'Invalid role: ' + r }, { status: 400 });
+    }
+    fields.role = roles.join(',');
   }
   if (body.password) {
     if (String(body.password).length < 8) return json({ error: 'Password must be at least 8 characters.' }, { status: 400 });

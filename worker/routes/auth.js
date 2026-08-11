@@ -15,6 +15,13 @@ const USERNAME_RE = /^[a-zA-Z0-9_.-]{3,32}$/;
 
 export { USERNAME_RE };
 
+/** Check whether a user object (with a .role string) has a specific role.
+ *  Roles are stored as a comma-separated string, e.g. "admin,banker". */
+export function hasRole(user, role) {
+  if (!user || !user.role) return false;
+  return user.role.split(',').map(r => r.trim()).includes(role);
+}
+
 function json(data, init = {}) {
   const headers = new Headers(init.headers || {});
   headers.set('Content-Type', 'application/json');

@@ -21,7 +21,10 @@ export async function findUserById(env, id) {
 }
 
 export async function anyAdminExists(env) {
-  const row = await env.DB.prepare("SELECT COUNT(*) AS c FROM users WHERE role = 'admin'").first();
+  // Role is now comma-separated, e.g. "admin,banker"
+  const row = await env.DB.prepare(
+    "SELECT COUNT(*) AS c FROM users WHERE ',' || role || ',' LIKE '%,admin,%'"
+  ).first();
   return !!(row && row.c > 0);
 }
 

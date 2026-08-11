@@ -111,6 +111,16 @@
 .a-pill--ballistics { color: var(--gold-bright); }
 .a-pill--citizen { color: var(--slate-soft); }
 .a-pill--banker  { color: var(--gold-bright); }
+
+.role-pill-wrap { display:inline-flex; align-items:center; gap:2px; margin-right:3px; }
+.role-pill-remove {
+  display:inline-flex; align-items:center; justify-content:center;
+  width:14px; height:14px; border-radius:50%;
+  background: transparent; border: none; color: inherit; opacity:0.45;
+  cursor: pointer; font-size: 11px; line-height: 1; padding: 0; margin: 0;
+  transition: opacity .15s, background .15s;
+}
+.role-pill-remove:hover { opacity:1; background: rgba(176,64,64,0.2); }
 .a-pill--published { color: var(--teal-bright); }
 .a-pill--draft { color: var(--slate-soft); }
 
@@ -187,14 +197,14 @@
         <div class="a-field"><label>Username</label><input class="a-input" id="nu-username" required/></div>
         <div class="a-field"><label>Password</label><input class="a-input" id="nu-password" type="password" required/></div>
         <div class="a-field">
-          <label>Role</label>
-          <select class="a-select" id="nu-role">
-            <option value="citizen">Citizen</option>
-            <option value="ballistics">Ballistics Clearance</option>
-            <option value="editor">Editor (Times of Regnum)</option>
-            <option value="banker">Banker</option>
-            <option value="admin">Admin</option>
-          </select>
+          <label>Roles</label>
+          <div id="nu-roles-checkboxes" style="display:flex;flex-wrap:wrap;gap:6px 14px;padding-top:3px;">
+            <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;color:var(--parchment-dim);text-transform:none;font-family:var(--font-body);cursor:pointer;"><input type="checkbox" value="citizen" checked /> Citizen</label>
+            <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;color:var(--parchment-dim);text-transform:none;font-family:var(--font-body);cursor:pointer;"><input type="checkbox" value="ballistics" /> Ballistics Clearance</label>
+            <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;color:var(--parchment-dim);text-transform:none;font-family:var(--font-body);cursor:pointer;"><input type="checkbox" value="editor" /> Editor</label>
+            <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;color:var(--parchment-dim);text-transform:none;font-family:var(--font-body);cursor:pointer;"><input type="checkbox" value="banker" /> Banker</label>
+            <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;color:var(--parchment-dim);text-transform:none;font-family:var(--font-body);cursor:pointer;"><input type="checkbox" value="admin" /> Admin</label>
+          </div>
         </div>
         <button type="submit" class="a-btn primary">Create</button>
       </form>
@@ -515,8 +525,8 @@
     me = user;
     gate.style.display = 'none'; app.style.display = 'block';
     userBadge.textContent = user.username + ' · ' + user.role;
-    var isAdmin = user.role === 'admin';
-    var isBanker = user.role === 'banker';
+    var isAdmin = userHasRole(user, 'admin');
+    var isBanker = userHasRole(user, 'banker');
     document.getElementById('tab-btn-users').style.display = isAdmin ? '' : 'none';
     document.getElementById('tab-btn-legal').style.display = isAdmin ? '' : 'none';
     document.getElementById('tab-btn-land').style.display = isAdmin ? '' : 'none';
@@ -548,7 +558,7 @@
     });
     const data = await r.json();
     if (!r.ok) { errEl.textContent = data.error || 'Login failed.'; errEl.style.display = 'block'; return; }
-    if (!['admin', 'editor', 'banker'].includes(data.role)) {
+    if (!(userHasRole(data, 'admin') || userHasRole(data, 'editor') || userHasRole(data, 'banker'))) {
       errEl.textContent = 'This account does not have administrative access.';
       errEl.style.display = 'block';
       await fetch('/api/auth/logout', { method: 'POST' });
@@ -572,11 +582,25 @@
     });
   });
 
+  // ── Helpers ─────────────────────────────────────────────────
+  function userRoles(user) { return (user && user.role ? user.role.split(',') : []).map(function(r){return r.trim();}).filter(Boolean); }
+  function userHasRole(user, r) { return userRoles(user).indexOf(r) !== -1; }
+  function rolesPills(roleStr, userId) {
+    return (roleStr || '').split(',').map(function(r) {
+      r = r.trim();
+      if (!r) return '';
+      return '<span class="role-pill-wrap">' +
+        '<span class="a-pill a-pill--' + r + '">' + roleLabel(r) + '</span>' +
+        '<button class="role-pill-remove" data-remove-role="' + r + '" data-remove-user="' + userId + '" title="Remove ' + roleLabel(r) + '">&times;</button>' +
+      '</span>';
+    }).join('');
+  }
+
   // ── Users management (admin only) ──────────────────────────────
   function roleLabel(r) { return r.charAt(0).toUpperCase() + r.slice(1); }
 
   async function loadUsers() {
-    if (!me || me.role !== 'admin') return;
+    if (!me || !userHasRole(me, 'admin')) return;
     const r = await fetch('/api/admin/users');
     if (!r.ok) return;
     const users = await r.json();
@@ -584,26 +608,49 @@
     tbody.innerHTML = users.map(u => `
       <tr>
         <td>${escapeHtml(u.username)}</td>
-        <td><span class="a-pill a-pill--${u.role}">${roleLabel(u.role)}</span></td>
+        <td>${rolesPills(u.role, u.id)}</td>
         <td>${u.created_at}</td>
         <td>
-          <select class="a-select role-select" data-id="${u.id}" style="font-size:11px;padding:4px 8px;">
-            ${['citizen','ballistics','editor','banker','admin'].map(r => `<option value="${r}" ${r===u.role?'selected':''}>${roleLabel(r)}</option>`).join('')}
+          <select class="a-select role-select" data-id="${u.id}" data-roles="${escapeHtml(u.role)}" style="font-size:11px;padding:4px 8px;">
+            <option value="">+ Add role…</option>
+            ${['citizen','ballistics','editor','banker','admin'].map(function(r) { return '<option value="' + r + '">' + roleLabel(r) + '</option>'; }).join('')}
           </select>
           <button class="a-btn danger" data-del="${u.id}">Delete</button>
         </td>
       </tr>
     `).join('');
 
-    tbody.querySelectorAll('.role-select').forEach(sel => {
-      sel.addEventListener('change', async () => {
+    tbody.querySelectorAll('.role-select').forEach(function(sel) {
+      sel.addEventListener('change', async function() {
+        if (!sel.value) { sel.value = ''; return; }
+        var currentRoles = (sel.dataset.roles || '').split(',').map(function(r){return r.trim();}).filter(Boolean);
+        if (currentRoles.indexOf(sel.value) !== -1) { sel.value = ''; return; }
+        currentRoles.push(sel.value);
         await fetch('/api/admin/users/' + sel.dataset.id, {
           method: 'PUT', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ role: sel.value })
+          body: JSON.stringify({ role: currentRoles.join(',') })
         });
         loadUsers();
       });
     });
+    // Per-role × remove buttons
+    tbody.querySelectorAll('.role-pill-remove').forEach(function(btn) {
+      btn.addEventListener('click', async function() {
+        var userId = btn.dataset.removeUser;
+        var roleToRemove = btn.dataset.removeRole;
+        // Re-fetch current roles from the select's data-roles attr
+        var sel = tbody.querySelector('.role-select[data-id="' + userId + '"]');
+        var currentRoles = (sel ? (sel.dataset.roles || '') : '').split(',').map(function(r){return r.trim();}).filter(Boolean);
+        var updated = currentRoles.filter(function(r) { return r !== roleToRemove; });
+        if (!updated.length) { alert('Cannot remove the last role. A user must have at least one role.'); return; }
+        await fetch('/api/admin/users/' + userId, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role: updated.join(',') })
+        });
+        loadUsers();
+      });
+    });
+
     tbody.querySelectorAll('[data-del]').forEach(btn => {
       btn.addEventListener('click', async () => {
         if (!confirm('Delete this account?')) return;
@@ -621,7 +668,7 @@
       body: JSON.stringify({
         username: document.getElementById('nu-username').value,
         password: document.getElementById('nu-password').value,
-        role: document.getElementById('nu-role').value
+        role: Array.from(document.querySelectorAll('#nu-roles-checkboxes input[type=checkbox]:checked')).map(function(cb){return cb.value;}).join(',')
       })
     });
     const data = await r.json();
@@ -652,7 +699,7 @@
           ${a.status === 'published'
             ? `<button class="a-btn" data-unpub="${a.id}">Unpublish</button>`
             : `<button class="a-btn primary" data-pub="${a.id}">Publish</button>`}
-          ${me.role === 'admin' ? `<button class="a-btn danger" data-del="${a.id}">Delete</button>` : ''}
+          ${userHasRole(me, 'admin') ? `<button class="a-btn danger" data-del="${a.id}">Delete</button>` : ''}
         </td>
       </tr>
     `).join('');
@@ -738,7 +785,7 @@
   }
 
   async function loadActs() {
-    if (!me || me.role !== 'admin') return;
+    if (!me || !userHasRole(me, 'admin')) return;
     const r = await fetch('/api/legal/acts');
     if (!r.ok) return;
     const acts = await r.json();
@@ -851,7 +898,7 @@
   });
 
   async function loadCaseLaw() {
-    if (!me || me.role !== 'admin') return;
+    if (!me || !userHasRole(me, 'admin')) return;
     const r = await fetch('/api/legal/case-law');
     if (!r.ok) return;
     const cases = await r.json();
@@ -1072,7 +1119,7 @@
   }
 
   async function loadPlots() {
-    if (!me || me.role !== 'admin') return;
+    if (!me || !userHasRole(me, 'admin')) return;
     const r = await fetch('/api/landregistry/plots');
     if (!r.ok) return;
     allPlots = await r.json();
@@ -1206,7 +1253,7 @@
   }
 
   async function loadBankingAccounts() {
-    if (!me || (me.role !== 'admin' && me.role !== 'banker')) return;
+    if (!me || !(userHasRole(me, 'admin') || userHasRole(me, 'banker'))) return;
     var r = await fetch('/api/banking/admin/accounts');
     if (!r.ok) return;
     allBankingAccounts = await r.json();
@@ -1228,7 +1275,7 @@
         '<td>' +
           (a.frozen ? '<span class="a-pill a-pill--admin" style="margin-right:6px;">FROZEN</span>' : '') +
           '<button class="a-btn" data-bank-freeze="' + escapeHtml(a.key) + '">' + (a.frozen ? 'Unfreeze' : 'Freeze') + '</button>' +
-          (me.role === 'admin' ? '<button class="a-btn danger" data-bank-del="' + escapeHtml(a.key) + '">Delete</button>' : '') +
+          (userHasRole(me, 'admin') ? '<button class="a-btn danger" data-bank-del="' + escapeHtml(a.key) + '">Delete</button>' : '') +
         '</td>' +
       '</tr>';
     }).join('');
@@ -1302,7 +1349,7 @@
 
   // ── Boot ──────────────────────────────────────────────────────
   const user = await checkAuth();
-  if (user && ['admin', 'editor', 'banker'].includes(user.role)) showApp(user);
+  if (user && (userHasRole(user, 'admin') || userHasRole(user, 'editor') || userHasRole(user, 'banker'))) showApp(user);
   else showGate(user ? 'This account does not have administrative access.' : undefined);
 
 })();

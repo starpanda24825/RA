@@ -7,8 +7,12 @@ const router = express.Router();
 
 const VALID_ROLES = ['citizen', 'ballistics', 'editor', 'banker', 'admin'];
 
+function hasRole(session, role) {
+  return (session.role || '').split(',').map(function(r) { return r.trim(); }).indexOf(role) !== -1;
+}
+
 function requireAdmin(req, res, next) {
-  if (!req.session.userId || req.session.role !== 'admin')
+  if (!req.session.userId || !hasRole(req.session, 'admin'))
     return res.status(403).json({ error: 'Admin access required.' });
   next();
 }
@@ -23,12 +27,18 @@ router.post('/users', requireAdmin, async (req, res) => {
   const { username, password, role } = req.body || {};
   if (!username || !password)
     return res.status(400).json({ error: 'Username and password required.' });
-  if (role && !VALID_ROLES.includes(role))
-    return res.status(400).json({ error: 'Invalid role.' });
+  var finalRole = 'citizen';
+  if (role) {
+    var roles = String(role).split(',').map(function(r) { return r.trim(); }).filter(Boolean);
+    for (var i = 0; i < roles.length; i++) {
+      if (!VALID_ROLES.includes(roles[i])) return res.status(400).json({ error: 'Invalid role: ' + roles[i] });
+    }
+    finalRole = roles.join(',');
+  }
 
   try {
     const hash = await bcrypt.hash(password, 12);
-    const user = store.insertUser({ username, password_h: hash, role: role || 'citizen' });
+    const user = store.insertUser({ username, password_h: hash, role: finalRole });
     res.status(201).json({ id: user.id, username: user.username, role: user.role });
   } catch (err) {
     if (err.code === 'UNIQUE') return res.status(409).json({ error: 'Username already exists.' });
@@ -40,7 +50,13 @@ router.post('/users', requireAdmin, async (req, res) => {
 // PUT /api/admin/users/:id — update role and/or password
 router.put('/users/:id', requireAdmin, async (req, res) => {
   const { role, password } = req.body || {};
-  if (role && !VALID_ROLES.includes(role)) return res.status(400).json({ error: 'Invalid role.' });
+  if (role) {
+    var roles = String(role).split(',').map(function(r) { return r.trim(); }).filter(Boolean);
+    for (var i = 0; i < roles.length; i++) {
+      if (!VALID_ROLES.includes(roles[i])) return res.status(400).json({ error: 'Invalid role: ' + roles[i] });
+    }
+    role = roles.join(',');
+  }
 
   const fields = {};
   if (role) fields.role = role;

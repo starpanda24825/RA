@@ -7,7 +7,7 @@
    ============================================================ */
 
 import * as store from '../lib/store.js';
-import { getCurrentUser } from './auth.js';
+import { getCurrentUser, hasRole } from './auth.js';
 import { hash } from '../lib/passwords.js';
 
 function json(data, init = {}) {
@@ -27,11 +27,11 @@ async function requireBankerOrAdmin(request, env) {
   if (!user) {
     return { error: json({ error: 'Authentication required.' }, { status: 401 }) };
   }
-  if (user.role !== 'admin' && user.role !== 'banker') {
+  if (!hasRole(user, 'admin') && !hasRole(user, 'banker')) {
     return { error: json({ error: 'Banker or admin access required.' }, { status: 403 }) };
   }
-  const isAdmin  = user.role === 'admin';
-  const isBanker = user.role === 'banker';
+  const isAdmin  = hasRole(user, 'admin');
+  const isBanker = hasRole(user, 'banker');
   let treasuryKey = null;
   if (isBanker) {
     const assignment = await store.getBankerAssignment(env, user.id);

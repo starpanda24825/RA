@@ -185,9 +185,11 @@
     if (state.user) {
       var wrap = el('div', { class: 'ra-auth-user' });
       wrap.appendChild(el('span', { class: 'ra-auth-user__name' }, state.user.username));
-      wrap.appendChild(el('span', { class: 'ra-auth-user__role' }, state.user.role));
+      var roleDisplay = (state.user.role || '').split(',').map(function(r){return r.trim();}).filter(Boolean).join(', ');
+      wrap.appendChild(el('span', { class: 'ra-auth-user__role' }, roleDisplay));
 
-      if (state.user.role === 'admin' || state.user.role === 'editor') {
+      var roles = (state.user.role || '').split(',').map(function(r) { return r.trim(); });
+      if (roles.indexOf('admin') !== -1 || roles.indexOf('editor') !== -1) {
         wrap.appendChild(el('a', { class: 'ra-auth-link', href: widgetDepth + 'admin/' }, 'Admin Panel'));
       }
 

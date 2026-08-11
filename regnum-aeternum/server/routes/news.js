@@ -4,14 +4,17 @@ const store   = require('../store');
 
 const router = express.Router();
 
+function hasRole(session, role) {
+  return (session.role || '').split(',').map(function(r) { return r.trim(); }).indexOf(role) !== -1;
+}
 function requireStaff(req, res, next) {
   if (!req.session.userId) return res.status(401).json({ error: 'Authentication required.' });
-  if (!['admin', 'editor'].includes(req.session.role))
+  if (!hasRole(req.session, 'admin') && !hasRole(req.session, 'editor'))
     return res.status(403).json({ error: 'Editor or admin access required.' });
   next();
 }
 function requireAdmin(req, res, next) {
-  if (!req.session.userId || req.session.role !== 'admin')
+  if (!req.session.userId || !hasRole(req.session, 'admin'))
     return res.status(403).json({ error: 'Admin access required.' });
   next();
 }
@@ -31,7 +34,7 @@ router.get('/articles/:id', (req, res) => {
   const article = store.findArticleById(req.params.id);
   if (!article) return res.status(404).json({ error: 'Not found.' });
   if (article.status !== 'published') {
-    if (!req.session.userId || !['admin', 'editor'].includes(req.session.role))
+    if (!req.session.userId || !(hasRole(req.session, 'admin') || hasRole(req.session, 'editor')))
       return res.status(403).json({ error: 'Not published.' });
   }
   res.json(article);

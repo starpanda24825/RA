@@ -5,7 +5,7 @@
    ============================================================ */
 
 import * as store from '../lib/store.js';
-import { getCurrentUser } from './auth.js';
+import { getCurrentUser, hasRole } from './auth.js';
 
 function json(data, init = {}) {
   const headers = new Headers(init.headers || {});
@@ -15,13 +15,13 @@ function json(data, init = {}) {
 
 async function requireStaff(request, env) {
   const user = await getCurrentUser(request, env);
-  if (!user || !['admin', 'editor'].includes(user.role)) return null;
+  if (!user || !(hasRole(user, 'admin') || hasRole(user, 'editor'))) return null;
   return user;
 }
 
 async function requireAdmin(request, env) {
   const user = await getCurrentUser(request, env);
-  if (!user || user.role !== 'admin') return null;
+  if (!user || !hasRole(user, 'admin')) return null;
   return user;
 }
 
@@ -40,7 +40,7 @@ export async function getOne(request, env, id) {
   if (!article) return json({ error: 'Not found.' }, { status: 404 });
   if (article.status !== 'published') {
     const user = await getCurrentUser(request, env);
-    if (!user || !['admin', 'editor'].includes(user.role)) {
+    if (!user || !(hasRole(user, 'admin') || hasRole(user, 'editor'))) {
       return json({ error: 'Not published.' }, { status: 403 });
     }
   }
