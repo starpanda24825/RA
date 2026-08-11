@@ -152,7 +152,7 @@
     </div>
     <p class="subpage__eyebrow">Crown Authority</p>
     <h1 class="subpage__title">Administration</h1>
-    <p class="subpage__body" id="gate-msg">This area is reserved for the Crown's administrators and editors. Sign in to continue.</p>
+    <p class="subpage__body" id="gate-msg">This area is reserved for the Crown's administrators, editors, and treasury bankers. Sign in to continue.</p>
 
     <form id="login-form" style="margin:24px 0 0;display:flex;flex-direction:column;gap:12px;max-width:320px;margin-left:auto;margin-right:auto;">
       <input id="lg-user" class="a-input" type="text"     placeholder="Username" autocomplete="username"  required/>
@@ -661,7 +661,11 @@
     userBadge.textContent = user.username + ' · ' + user.role;
     var isAdmin = userHasRole(user, 'admin');
     var isBanker = userHasRole(user, 'banker');
+    var isEditor = userHasRole(user, 'editor');
+    var hasStaffAccess = isAdmin || isEditor;
+
     document.getElementById('tab-btn-users').style.display = isAdmin ? '' : 'none';
+    document.getElementById('tab-btn-news').style.display = hasStaffAccess ? '' : 'none';
     document.getElementById('tab-btn-legal').style.display = isAdmin ? '' : 'none';
     document.getElementById('tab-btn-land').style.display = isAdmin ? '' : 'none';
     document.getElementById('tab-btn-banking').style.display = (isAdmin || isBanker) ? '' : 'none';

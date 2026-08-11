@@ -189,7 +189,7 @@
       wrap.appendChild(el('span', { class: 'ra-auth-user__role' }, roleDisplay));
 
       var roles = (state.user.role || '').split(',').map(function(r) { return r.trim(); });
-      if (roles.indexOf('admin') !== -1 || roles.indexOf('editor') !== -1) {
+      if (roles.indexOf('admin') !== -1 || roles.indexOf('editor') !== -1 || roles.indexOf('banker') !== -1) {
         wrap.appendChild(el('a', { class: 'ra-auth-link', href: widgetDepth + 'admin/' }, 'Admin Panel'));
       }
 
