@@ -110,6 +110,7 @@
 .a-pill--editor { color: var(--teal-bright); }
 .a-pill--ballistics { color: var(--gold-bright); }
 .a-pill--citizen { color: var(--slate-soft); }
+.a-pill--banker  { color: var(--gold-bright); }
 .a-pill--published { color: var(--teal-bright); }
 .a-pill--draft { color: var(--slate-soft); }
 
@@ -175,6 +176,7 @@
     <button class="admin-tab" data-tab="news" id="tab-btn-news">Times of Regnum</button>
     <button class="admin-tab" data-tab="legal" id="tab-btn-legal">Legal Information System</button>
     <button class="admin-tab" data-tab="land" id="tab-btn-land">Land Registry</button>
+    <button class="admin-tab" data-tab="banking" id="tab-btn-banking">Fiducia Banking System</button>
   </div>
 
   <!-- USERS PANEL -->
@@ -190,6 +192,7 @@
             <option value="citizen">Citizen</option>
             <option value="ballistics">Ballistics Clearance</option>
             <option value="editor">Editor (Times of Regnum)</option>
+            <option value="banker">Banker</option>
             <option value="admin">Admin</option>
           </select>
         </div>
@@ -443,6 +446,47 @@
       </div>
     </div>
   </div>
+
+  <!-- BANKING PANEL -->
+  <div class="admin-panel" id="panel-banking">
+    <div class="admin-card" id="banking-list-card">
+      <h2>Banking Accounts</h2>
+      <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+        <button class="a-btn primary" id="new-banking-account-btn">+ New Account</button>
+        <input class="a-input" id="banking-accounts-filter" placeholder="Search accounts…" style="width:220px;"/>
+      </div>
+      <table class="a-table">
+        <thead><tr><th>Key</th><th>Name</th><th>Type</th><th>Balance</th><th>Actions</th></tr></thead>
+        <tbody id="banking-accounts-tbody"></tbody>
+      </table>
+    </div>
+
+    <div class="admin-card legal-editor" id="banking-account-editor">
+      <h2 id="banking-editor-heading">New Account</h2>
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <div class="a-form" style="gap:14px;">
+          <div class="a-field"><label>Account Name</label><input class="a-input" id="bacc-name" style="width:260px;"/></div>
+          <div class="a-field">
+            <label>Type</label>
+            <select class="a-select" id="bacc-type">
+              <option value="personal">Personal</option>
+              <option value="company">Company</option>
+            </select>
+          </div>
+          <div class="a-field"><label>Color</label><input class="a-input" id="bacc-color" type="number" style="width:100px;" value="16384"/></div>
+        </div>
+        <div class="a-form" id="bacc-company-fields" style="gap:14px;display:none;">
+          <div class="a-field"><label>Owner Key</label><input class="a-input" id="bacc-ownerkey" style="width:260px;"/></div>
+          <div class="a-field"><label>Shares</label><input class="a-input" id="bacc-shares" type="number" value="0" style="width:100px;"/></div>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <button class="a-btn primary" id="bacc-save-btn">Save</button>
+          <button class="a-btn" id="bacc-cancel-btn">Cancel</button>
+        </div>
+        <p id="banking-editor-msg" class="a-msg" style="display:none;"></p>
+      </div>
+    </div>
+  </div>
 </main>
 </div>
 
@@ -471,14 +515,27 @@
     me = user;
     gate.style.display = 'none'; app.style.display = 'block';
     userBadge.textContent = user.username + ' · ' + user.role;
-    document.getElementById('tab-btn-users').style.display = user.role === 'admin' ? '' : 'none';
-    document.getElementById('tab-btn-legal').style.display = user.role === 'admin' ? '' : 'none';
-    document.getElementById('tab-btn-land').style.display = user.role === 'admin' ? '' : 'none';
+    var isAdmin = user.role === 'admin';
+    var isBanker = user.role === 'banker';
+    document.getElementById('tab-btn-users').style.display = isAdmin ? '' : 'none';
+    document.getElementById('tab-btn-legal').style.display = isAdmin ? '' : 'none';
+    document.getElementById('tab-btn-land').style.display = isAdmin ? '' : 'none';
+    document.getElementById('tab-btn-banking').style.display = (isAdmin || isBanker) ? '' : 'none';
+
+    // Banker defaults to banking tab; everyone else to users
+    if (isBanker) {
+      document.querySelector('.admin-tab.active').classList.remove('active');
+      document.querySelector('.admin-panel.active').classList.remove('active');
+      document.getElementById('tab-btn-banking').classList.add('active');
+      document.getElementById('panel-banking').classList.add('active');
+    }
+
     loadUsers();
     loadArticles();
     loadActs();
     loadCaseLaw();
     loadPlots();
+    loadBankingAccounts();
   }
 
   document.getElementById('login-form').addEventListener('submit', async (e) => {
@@ -491,7 +548,7 @@
     });
     const data = await r.json();
     if (!r.ok) { errEl.textContent = data.error || 'Login failed.'; errEl.style.display = 'block'; return; }
-    if (!['admin', 'editor'].includes(data.role)) {
+    if (!['admin', 'editor', 'banker'].includes(data.role)) {
       errEl.textContent = 'This account does not have administrative access.';
       errEl.style.display = 'block';
       await fetch('/api/auth/logout', { method: 'POST' });
@@ -531,7 +588,7 @@
         <td>${u.created_at}</td>
         <td>
           <select class="a-select role-select" data-id="${u.id}" style="font-size:11px;padding:4px 8px;">
-            ${['citizen','ballistics','editor','admin'].map(r => `<option value="${r}" ${r===u.role?'selected':''}>${roleLabel(r)}</option>`).join('')}
+            ${['citizen','ballistics','editor','banker','admin'].map(r => `<option value="${r}" ${r===u.role?'selected':''}>${roleLabel(r)}</option>`).join('')}
           </select>
           <button class="a-btn danger" data-del="${u.id}">Delete</button>
         </td>
@@ -1138,9 +1195,114 @@
     loadPlots();
   });
 
+  // ── Banking System (banker & admin) ────────────────────────────
+
+  var allBankingAccounts = [];
+
+  function bankingTypePill(t) {
+    var map = { personal: 'citizen', company: 'editor', treasury: 'admin' };
+    var label = t.charAt(0).toUpperCase() + t.slice(1);
+    return '<span class="a-pill a-pill--' + (map[t] || 'citizen') + '">' + escapeHtml(label) + '</span>';
+  }
+
+  async function loadBankingAccounts() {
+    if (!me || (me.role !== 'admin' && me.role !== 'banker')) return;
+    var r = await fetch('/api/banking/admin/accounts');
+    if (!r.ok) return;
+    allBankingAccounts = await r.json();
+    renderBankingAccountsTable();
+  }
+
+  function renderBankingAccountsTable() {
+    var f = (document.getElementById('banking-accounts-filter').value || '').trim().toLowerCase();
+    var filtered = !f ? allBankingAccounts : allBankingAccounts.filter(function (a) {
+      return (a.key + ' ' + a.name + ' ' + a.type).toLowerCase().indexOf(f) !== -1;
+    });
+    var tbody = document.getElementById('banking-accounts-tbody');
+    tbody.innerHTML = filtered.map(function (a) {
+      return '<tr>' +
+        '<td style="font-family:var(--font-mono);font-size:12px;">' + escapeHtml(a.key) + '</td>' +
+        '<td>' + escapeHtml(a.name) + '</td>' +
+        '<td>' + bankingTypePill(a.type) + '</td>' +
+        '<td style="font-family:var(--font-mono);">$' + Number(a.balance).toLocaleString() + '</td>' +
+        '<td>' +
+          (a.frozen ? '<span class="a-pill a-pill--admin" style="margin-right:6px;">FROZEN</span>' : '') +
+          '<button class="a-btn" data-bank-freeze="' + escapeHtml(a.key) + '">' + (a.frozen ? 'Unfreeze' : 'Freeze') + '</button>' +
+          (me.role === 'admin' ? '<button class="a-btn danger" data-bank-del="' + escapeHtml(a.key) + '">Delete</button>' : '') +
+        '</td>' +
+      '</tr>';
+    }).join('');
+
+    tbody.querySelectorAll('[data-bank-freeze]').forEach(function (btn) {
+      btn.addEventListener('click', async function () {
+        var acc = allBankingAccounts.find(function (a) { return a.key === btn.dataset.bankFreeze; });
+        await fetch('/api/banking/admin/accounts/' + encodeURIComponent(btn.dataset.bankFreeze) + '/freeze', {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ frozen: !(acc && acc.frozen) })
+        });
+        loadBankingAccounts();
+      });
+    });
+    tbody.querySelectorAll('[data-bank-del]').forEach(function (btn) {
+      btn.addEventListener('click', async function () {
+        if (!confirm('Delete this account permanently?')) return;
+        await fetch('/api/banking/admin/accounts/' + encodeURIComponent(btn.dataset.bankDel) + '?force=true', { method: 'DELETE' });
+        loadBankingAccounts();
+      });
+    });
+  }
+
+  document.getElementById('banking-accounts-filter').addEventListener('input', renderBankingAccountsTable);
+
+  document.getElementById('bacc-type').addEventListener('change', function () {
+    document.getElementById('bacc-company-fields').style.display = this.value === 'company' ? 'flex' : 'none';
+  });
+
+  document.getElementById('new-banking-account-btn').addEventListener('click', function () {
+    document.getElementById('banking-account-editor').classList.add('active');
+    document.getElementById('banking-editor-heading').textContent = 'New Account';
+    document.getElementById('bacc-name').value = '';
+    document.getElementById('bacc-type').value = 'personal';
+    document.getElementById('bacc-color').value = '16384';
+    document.getElementById('bacc-ownerkey').value = '';
+    document.getElementById('bacc-shares').value = '0';
+    document.getElementById('bacc-company-fields').style.display = 'none';
+    document.getElementById('banking-editor-msg').style.display = 'none';
+    document.getElementById('banking-account-editor').scrollIntoView({ behavior: 'smooth' });
+  });
+
+  document.getElementById('bacc-cancel-btn').addEventListener('click', function () {
+    document.getElementById('banking-account-editor').classList.remove('active');
+  });
+
+  document.getElementById('bacc-save-btn').addEventListener('click', async function () {
+    var msg = document.getElementById('banking-editor-msg');
+    msg.style.display = 'none';
+    var type = document.getElementById('bacc-type').value;
+    var body = {
+      name: document.getElementById('bacc-name').value,
+      type: type,
+      color: Number(document.getElementById('bacc-color').value) || 16384
+    };
+    if (type === 'company') {
+      body.ownerKey = document.getElementById('bacc-ownerkey').value;
+      body.shares = Number(document.getElementById('bacc-shares').value) || 0;
+    }
+    var r = await fetch('/api/banking/admin/accounts', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    var data = await r.json();
+    msg.style.display = 'block';
+    if (!r.ok) { msg.className = 'a-msg error'; msg.textContent = data.error || 'Could not create account.'; return; }
+    msg.className = 'a-msg success'; msg.textContent = 'Account created. Key: ' + data.key;
+    document.getElementById('banking-account-editor').classList.remove('active');
+    loadBankingAccounts();
+  });
+
   // ── Boot ──────────────────────────────────────────────────────
   const user = await checkAuth();
-  if (user && ['admin', 'editor'].includes(user.role)) showApp(user);
+  if (user && ['admin', 'editor', 'banker'].includes(user.role)) showApp(user);
   else showGate(user ? 'This account does not have administrative access.' : undefined);
 
 })();

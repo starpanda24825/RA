@@ -5,7 +5,7 @@ const store   = require('../store');
 
 const router = express.Router();
 
-const VALID_ROLES = ['citizen', 'ballistics', 'editor', 'admin'];
+const VALID_ROLES = ['citizen', 'ballistics', 'editor', 'banker', 'admin'];
 
 function requireAdmin(req, res, next) {
   if (!req.session.userId || req.session.role !== 'admin')
