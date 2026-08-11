@@ -438,7 +438,7 @@ export async function insertBankingAccount(env, {
 }
 
 export async function updateBankingAccount(env, key, fields) {
-  const allowed = ['name', 'color', 'frozen', 'shares', 'tag', 'cumulative', 'password_hash'];
+  const allowed = ['name', 'color', 'frozen', 'shares', 'tag', 'cumulative', 'password_hash', 'treasury_key'];
   const sets = [];
   const binds = [];
   for (const [k, v] of Object.entries(fields)) {

@@ -219,6 +219,15 @@ export async function updateAccount(request, env, key) {
   if (body.tag !== undefined && account.type === 'treasury') {
     fields.tag = String(body.tag).toUpperCase().slice(0, 4);
   }
+  if (body.treasuryKey !== undefined && account.type !== 'treasury') {
+    // Admin-only: reassign account to a different treasury
+    if (!auth.isAdmin) return json({ error: 'Only admins can reassign treasury.' }, { status: 403 });
+    if (body.treasuryKey) {
+      const tre = await store.findBankingAccountByKey(env, body.treasuryKey);
+      if (!tre || tre.type !== 'treasury') return json({ error: 'Invalid treasury key.' }, { status: 400 });
+    }
+    fields.treasury_key = body.treasuryKey || '';
+  }
 
   const updated = await store.updateBankingAccount(env, key, fields);
   return json(updated);

@@ -1,22 +1,8 @@
 -- Stock Exchange Terminal
 os.pullEvent = os.pullEventRaw -- Lock the shell
 
-local modem = peripheral.find("modem")
-while (modem == nil) do
-    modem = peripheral.find("modem")
-    if (modem == nil) then
-        term.setBackgroundColor(colors.red)
-        term.setTextColor(colors.white)
-        term.clear()
-        term.setCursorPos(1,1)
-        print("Ender modem required. Please connect a modem to continue...")
-while true do
-    local ev = {os.pullEventRaw()}
-    if ev[1] == "peripheral" then break end
-end
-    end
-end
-peripheral.find("modem", rednet.open)
+-- All bank operations now go through HTTP (see bankapi.lua).
+-- No modem required for the Stock Exchange anymore.
 
 os.loadAPI("bankapi.lua")
 local serverData = bankapi.getServerData()
@@ -24,11 +10,12 @@ local serverData = bankapi.getServerData()
 local diskdrive = peripheral.find("drive")
 local currentAccount = nil
 
--- Find left monitor
-local monitor = peripheral.wrap("left")
-if monitor and type(monitor.setTextScale) == "function" then
-    monitor.setTextScale(0.5)
-end
+-- Monitor dependency removed — the web dashboard handles real-time display now.
+-- To re-enable the monitor, uncomment the block below and restore monitorLoop.
+-- local monitor = peripheral.wrap("left")
+-- if monitor and type(monitor.setTextScale) == "function" then
+--     monitor.setTextScale(0.5)
+-- end
 
 local function ensureSafeDisk()
     if not diskdrive or not diskdrive.isDiskPresent() then return true end
@@ -88,89 +75,6 @@ local function loadAccountFromCard()
 end
 
 -- Monitor update function
-local function drawMonitor()
-    if not monitor then return end
-    
-    local backgroundColor = colors.gray -- same as Bank API
-    if type(monitor.setBackgroundColor) == "function" then
-        monitor.setBackgroundColor(backgroundColor)
-    end
-    if type(monitor.clear) == "function" then
-        monitor.clear()
-    end
-    
-    local ok, companies
-    if type(bankapi.getTopCompanies) == "function" then
-        ok, companies = bankapi.getTopCompanies()
-    else
-        ok = false
-        companies = "API function not available"
-    end
-    if not ok then
-        if type(monitor.setTextColor) == "function" then monitor.setTextColor(colors.red) end
-        if type(monitor.setCursorPos) == "function" then monitor.setCursorPos(2, 2) end
-        if type(monitor.write) == "function" then monitor.write("Error loading data") end
-        return
-    end
-    
-    -- Title
-    if type(monitor.setTextColor) == "function" then monitor.setTextColor(colors.yellow) end
-    local w, h = 10, 10 -- default size
-    if type(monitor.getSize) == "function" then
-        w, h = monitor.getSize()
-    end
-    local title = "TOP COMPANIES"
-    if type(monitor.setCursorPos) == "function" then monitor.setCursorPos(math.floor(w/2 - #title/2) + 1, 2) end
-    if type(monitor.write) == "function" then monitor.write(title) end
-    
-    -- Companies
-    local y = 4
-    for i, comp in ipairs(companies) do
-        if y > h - 2 then break end
-        
-        -- Rank
-        if type(monitor.setTextColor) == "function" then monitor.setTextColor(colors.white) end
-        if type(monitor.setCursorPos) == "function" then monitor.setCursorPos(2, y) end
-        if type(monitor.write) == "function" then monitor.write(tostring(i)..".") end
-        
-        -- Name
-        local name = comp.name or "Unknown"
-        if #name > 15 then name = name:sub(1,12).."..." end
-        if type(monitor.setCursorPos) == "function" then monitor.setCursorPos(6, y) end
-        if type(monitor.write) == "function" then monitor.write(name) end
-        
-        -- Value
-        local valueStr = "$"..tostring(math.floor(comp.value))
-        if type(monitor.setCursorPos) == "function" then monitor.setCursorPos(24, y) end
-        if type(monitor.write) == "function" then monitor.write(valueStr) end
-        
-        -- Change
-        if type(monitor.setCursorPos) == "function" then monitor.setCursorPos(36, y) end
-        if comp.change == nil then
-            if type(monitor.setTextColor) == "function" then monitor.setTextColor(colors.lightGray) end
-            if type(monitor.write) == "function" then monitor.write("---") end
-        elseif comp.change > 0 then
-            if type(monitor.setTextColor) == "function" then monitor.setTextColor(colors.green) end
-            if type(monitor.write) == "function" then monitor.write(string.format("+%.1f%%", comp.change)) end
-        elseif comp.change < 0 then
-            if type(monitor.setTextColor) == "function" then monitor.setTextColor(colors.red) end
-            if type(monitor.write) == "function" then monitor.write(string.format("%.1f%%", comp.change)) end
-        else
-            if type(monitor.setTextColor) == "function" then monitor.setTextColor(colors.lightGray) end
-            if type(monitor.write) == "function" then monitor.write("---") end
-        end
-        
-        y = y + 1
-    end
-end
-
-local function monitorLoop()
-    while true do
-        drawMonitor()
-        sleep(5)
-    end
-end
-
 local function drawMainMenu()
     bankapi.waitScreen("") -- clears/paints base background
     local scrW, scrH = term.getSize()
@@ -373,7 +277,7 @@ local function run()
 end
 
 local function main()
-    parallel.waitForAll(run, monitorLoop)
+    run()
 end
 
 while true do

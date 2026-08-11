@@ -34,7 +34,80 @@ end
 
 applyRedButtonPalette()
 
-local bankServerID = 0
+local text_error_noconnection = "Can't connect to server"
+
+-- ============================================================
+-- HTTP Configuration
+-- Edit BASE_URL to point to your Regnum Aeternum web server.
+-- The token in cc_token.txt is issued by the admin panel.
+-- ============================================================
+local BASE_URL = "https://regnumaeternum.starpanda24825.workers.dev"
+
+local cc_token = ""
+if fs.exists("cc_token.txt") then
+    local tf = fs.open("cc_token.txt", "r")
+    if tf then
+        cc_token = tf.readAll():gsub("^%s+", ""):gsub("%s+$", "")
+        tf.close()
+    end
+end
+
+local function httpPost(path, body)
+    local url = BASE_URL .. path
+    local headers = {
+        ["Content-Type"] = "application/json",
+    }
+    if cc_token ~= "" then
+        headers["Authorization"] = "Bearer " .. cc_token
+    end
+    local bodyStr = textutils.serializeJSON(body)
+    local ok, result = pcall(function()
+        local req = http.post(url, bodyStr, headers)
+        if req then
+            local raw = req.readAll()
+            req.close()
+            return raw
+        end
+        return nil
+    end)
+    if not ok then
+        return nil
+    end
+    if result == nil then
+        return nil
+    end
+    local ok2, decoded = pcall(textutils.unserializeJSON, result)
+    if ok2 and decoded then
+        return decoded
+    end
+    return nil
+end
+
+local function httpGet(path)
+    local url = BASE_URL .. path
+    local headers = {}
+    if cc_token ~= "" then
+        headers["Authorization"] = "Bearer " .. cc_token
+    end
+    local ok, err = pcall(function()
+        local req = http.get(url, headers)
+        if req then
+            local raw = req.readAll()
+            req.close()
+            return raw
+        end
+        return nil
+    end)
+    if not ok or err == nil then
+        return nil
+    end
+    local ok2, decoded = pcall(textutils.unserializeJSON, err)
+    if ok2 and decoded then
+        return decoded
+    end
+    return nil
+end
+
 local readingPosX = 0
 local readingPosY = 0
 local readingString = ""
@@ -63,305 +136,72 @@ end
 
 local serverData = nil
 
--- Secure channel configuration on client (ATM/API)
--- Set `networkSecret` to the same secret configured on the server to enable encryption.
-local networkSecret = ""
-local api_sessionNonce = ""
-local api_secureEnabledServer = false
-local api_secure_enabled = false
+-- Action-to-endpoint mapping for sendRequest
+local ACTION_ENDPOINTS = {
+    getClientData      = "/api/banking/cc/client-data",
+    transaction        = "/api/banking/cc/transaction",
+    deposit            = "/api/banking/cc/deposit",
+    withdraw           = "/api/banking/cc/withdraw",
+    getTransactionLog  = "/api/banking/cc/transaction-log",
+    ["new"]            = "/api/banking/cc/new-account",
+    newCompany         = "/api/banking/cc/new-company",
+    ["delete"]         = "/api/banking/cc/delete-account",
+    setPassword        = "/api/banking/cc/set-password",
+    changePassword     = "/api/banking/cc/change-password",
+    resetPassword      = "/api/banking/cc/reset-password",
+    validateCard       = "/api/banking/cc/validate-card",
+    registerCard       = "/api/banking/cc/register-card",
+    listCards          = "/api/banking/cc/list-cards",
+    cancelCard         = "/api/banking/cc/cancel-card",
+    freezeAccount      = "/api/banking/cc/freeze-account",
+    listShareholders   = "/api/banking/cc/list-shareholders",
+    issueShares        = "/api/banking/cc/issue-shares",
+    getPortfolio       = "/api/banking/cc/get-portfolio",
+    topCompanies       = "/api/banking/cc/top-companies",
+}
 
--- Secure channel helpers (AES-256-CTR, Base64, keyed MAC using ASHA-like hash)
--- Byte helpers
-local function to_bytes(str)
-    local t = {}
-    for i=1,#str do t[#t+1] = string.byte(str,i) end
-    return t
-end
-local function from_bytes(t)
-    local s = {}
-    for i=1,#t do s[#s+1] = string.char(t[i]) end
-    return table.concat(s)
-end
-
--- Base64
-local b64chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-local function b64encode(data)
-    local bytes = to_bytes(data)
-    local out = {}
-    for i=1,#bytes,3 do
-        local b1 = bytes[i] or 0
-        local b2 = bytes[i+1] or 0
-        local b3 = bytes[i+2] or 0
-        local n = bit32.bor(bit32.lshift(b1,16), bit32.lshift(b2,8), b3)
-        local c1 = bit32.band(bit32.rshift(n,18),0x3F)+1
-        local c2 = bit32.band(bit32.rshift(n,12),0x3F)+1
-        local c3 = bit32.band(bit32.rshift(n,6),0x3F)+1
-        local c4 = bit32.band(n,0x3F)+1
-        out[#out+1] = b64chars:sub(c1,c1)
-        out[#out+1] = b64chars:sub(c2,c2)
-        if (i+1) <= #bytes then out[#out+1] = b64chars:sub(c3,c3) else out[#out+1] = '=' end
-        if (i+2) <= #bytes then out[#out+1] = b64chars:sub(c4,c4) else out[#out+1] = '=' end
+function sendRequest(message)
+    local action = message.action
+    local endpoint = ACTION_ENDPOINTS[action]
+    if endpoint == nil then
+        return { success = false, response = "Unknown action: " .. tostring(action) }
     end
-    return table.concat(out)
-end
-local function b64decode(data)
-    local out = {}
-    local i = 1
-    while i <= #data do
-        local c1 = data:sub(i,i); i=i+1
-        local c2 = data:sub(i,i); i=i+1
-        local c3 = data:sub(i,i); i=i+1
-        local c4 = data:sub(i,i); i=i+1
-        local n1 = b64chars:find(c1,1,true); local n2 = b64chars:find(c2,1,true)
-        local n3 = (c3=='=') and nil or b64chars:find(c3,1,true)
-        local n4 = (c4=='=') and nil or b64chars:find(c4,1,true)
-        if n1 and n2 then
-            local n = bit32.bor(bit32.lshift(n1-1,18), bit32.lshift(n2-1,12), (n3 and bit32.lshift(n3-1,6) or 0), (n4 and (n4-1) or 0))
-            out[#out+1] = bit32.band(bit32.rshift(n,16),0xFF)
-            if n3 then out[#out+1] = bit32.band(bit32.rshift(n,8),0xFF) end
-            if n4 then out[#out+1] = bit32.band(n,0xFF) end
-        end
+    local body = {}
+    for k, v in pairs(message) do
+        if k ~= "action" then body[k] = v end
     end
-    return from_bytes(out)
-end
-
--- Minimal AES-256-CTR (structure aligned with server)
-local function xtime(a)
-    local r = bit32.lshift(a,1)
-    if bit32.band(a,0x80) ~= 0 then r = bit32.bxor(r,0x1B) end
-    return bit32.band(r,0xFF)
-end
-local function sub_byte(b)
-    local s = {
-        99,124,119,123,242,107,111,197,48,1,103,43,254,215,171,118,
-        202,130,201,125,250,89,71,240,173,212,162,175,156,164,114,192,
-        183,253,147,38,54,63,247,204,52,165,229,241,113,216,49,21,
-        4,199,35,195,24,150,5,154,7,18,128,226,235,39,178,117,
-        9,131,44,26,27,110,90,160,82,59,214,179,41,227,47,132,
-        83,209,0,237,32,252,177,91,106,203,190,57,74,76,88,207,
-        208,239,170,251,67,77,51,133,69,249,2,127,80,60,159,168,
-        81,163,64,143,146,157,56,245,188,182,218,33,16,255,243,210,
-        205,12,19,236,95,151,68,23,196,167,126,61,100,93,25,115,
-        96,129,79,220,34,42,144,136,70,238,184,20,222,94,11,219,
-        224,50,58,10,73,6,36,92,194,211,172,98,145,149,228,121,
-        231,200,55,109,141,213,78,169,108,86,244,234,101,122,174,8,
-        186,120,37,46,28,166,180,198,232,221,116,31,75,189,139,138,
-        112,62,181,102,72,3,246,14,97,53,87,185,134,193,29,158,
-        225,248,152,17,105,217,142,148,155,30,135,233,206,85,40,223,
-        140,161,137,13,191,230,66,104,65,153,45,15,176,84,187,22
-    }
-    return s[(b or 0)+1] or 0
-end
-local function sub_bytes(s)
-    for i=1,16 do s[i] = sub_byte(s[i]) end
-end
-local function shift_rows(s)
-    local r = {}
-    for i=1,16 do r[i] = s[i] end
-    s[2],s[6],s[10],s[14] = r[6],r[10],r[14],r[2]
-    s[3],s[7],s[11],s[15] = r[11],r[15],r[3],r[7]
-    s[4],s[8],s[12],s[16] = r[16],r[4],r[8],r[12]
-end
-local function mix_columns(s)
-    for c=0,3 do
-        local i = 1 + c*4
-        local a0,a1,a2,a3 = s[i],s[i+1],s[i+2],s[i+3]
-        local r0 = bit32.bxor(bit32.bxor(xtime(a0), a1), bit32.bxor(a2, a3))
-        local r1 = bit32.bxor(bit32.bxor(xtime(a1), a2), bit32.bxor(a3, a0))
-        local r2 = bit32.bxor(bit32.bxor(xtime(a2), a3), bit32.bxor(a0, a1))
-        local r3 = bit32.bxor(bit32.bxor(xtime(a3), a0), bit32.bxor(a1, a2))
-        s[i],s[i+1],s[i+2],s[i+3] = bit32.band(r0,0xFF),bit32.band(r1,0xFF),bit32.band(r2,0xFF),bit32.band(r3,0xFF)
+    local result = httpPost(endpoint, body)
+    if result == nil then
+        return { success = false, response = "Connection failed" }
     end
-end
-local function add_round_key(s, rk, round)
-    local off = round*16
-    for i=1,16 do s[i] = bit32.band(bit32.bxor(s[i], rk[off+i]), 0xFF) end
-end
-local function rot_word(w)
-    return {w[2],w[3],w[4],w[1]}
-end
-local function sub_word(w)
-    return {sub_byte(w[1]),sub_byte(w[2]),sub_byte(w[3]),sub_byte(w[4])}
-end
-local rcon = {1,2,4,8,16,32,64,128,27,54}
-local function key_expansion_256(key)
-    local w = {}
-    for i=1,32,4 do w[#w+1]={key[i] or 0,key[i+1] or 0,key[i+2] or 0,key[i+3] or 0} end
-    local i = 9
-    while #w < 60 do
-        local temp = w[#w]
-        local t = rot_word(temp)
-        t = sub_word(t)
-        t[1] = bit32.band(bit32.bxor(t[1], rcon[i-8]), 0xFF)
-        local nw = {}
-        for j=1,4 do nw[j] = bit32.band(bit32.bxor(w[#w-8][j], t[j]),0xFF) end
-        w[#w+1] = nw
-        for k=1,3 do
-            local prev = w[#w]
-            local nww = {}
-            for j=1,4 do nww[j] = bit32.band(bit32.bxor(w[#w-8][j], prev[j]),0xFF) end
-            w[#w+1] = nww
-        end
-        local temp2 = sub_word(w[#w])
-        local nww2 = {}
-        for j=1,4 do nww2[j] = bit32.band(bit32.bxor(w[#w-8][j], temp2[j]),0xFF) end
-        w[#w+1] = nww2
-        for k=1,3 do
-            local prev = w[#w]
-            local nww = {}
-            for j=1,4 do nww[j] = bit32.band(bit32.bxor(w[#w-8][j], prev[j]),0xFF) end
-            w[#w+1] = nww
-        end
-        i=i+1
+    -- Log unknown actions to help debugging
+    if result.success == false and result.response and string.find(tostring(result.response), "Unknown") then
+        print("Warning: " .. tostring(result.response))
     end
-    local rk = {}
-    for r=0,14 do for c=1,4 do for j=1,4 do rk[#rk+1]=w[r*4+c][j] end end end
-    return rk
-end
-local function aes_encrypt_block(state, round_keys)
-    local s = {}
-    for i=1,16 do s[i] = state[i] or 0 end
-    add_round_key(s, round_keys, 0)
-    for r=1,13 do
-        sub_bytes(s); shift_rows(s); mix_columns(s); add_round_key(s, round_keys, r)
-    end
-    sub_bytes(s); shift_rows(s); add_round_key(s, round_keys, 14)
-    return s
-end
-local function ctr_inc(counter_bytes)
-    for i = #counter_bytes, 1, -1 do
-        local v = (counter_bytes[i] or 0) + 1
-        counter_bytes[i] = bit32.band(v, 0xFF)
-        if v <= 0xFF then break end
-    end
-end
-local function aes_ctr_crypt(round_keys, iv_bytes, data)
-    local input = to_bytes(data)
-    local out = {}
-    local counter = {}
-    for i=1,16 do counter[i] = iv_bytes[i] or 0 end
-    for i=1,#input,16 do
-        local block = {}
-        for j=1,16 do block[j] = input[i+j-1] or 0 end
-        local ks = aes_encrypt_block(counter, round_keys)
-        for j=1,16 do out[#out+1] = bit32.band(bit32.bxor(block[j], ks[j]), 0xFF) end
-        ctr_inc(counter)
-    end
-    return from_bytes(out)
-end
-
-local function hex_to_bytes(hex)
-    local t = {}
-    for i=1,#hex,2 do t[#t+1] = tonumber(hex:sub(i,i+1),16) or 0 end
-    return t
-end
-
-local function derive_keys()
-    local encHex = api_ASHA512(networkSecret.."|enc|"..api_sessionNonce, "", 1)
-    local macHex = api_ASHA512(networkSecret.."|mac|"..api_sessionNonce, "", 1)
-    local encBytes = hex_to_bytes(encHex)
-    local aesKey = {}
-    for i=1,32 do aesKey[i] = encBytes[i] or 0 end
-    local roundKeys = key_expansion_256(aesKey)
-    return roundKeys, macHex
-end
-
-local api_out_ctr = 0
-local server_in_ctr = 0
-local roundKeys_cached, macHex_cached
-local function ensure_keys()
-    if (roundKeys_cached == nil or macHex_cached == nil) then
-        roundKeys_cached, macHex_cached = derive_keys()
-    end
-end
-
-local function keyed_mac(macHex, role, iv_b64, ctr_str, ct_b64)
-    local material = role.."|"..iv_b64.."|"..ctr_str.."|"..ct_b64
-    return api_ASHA512(macHex.."|"..material, "", 1)
-end
-
-local function random_bytes(n)
-    local s = {}
-    for i=1,n do s[#s+1] = string.char(math.random(0,255)) end
-    return table.concat(s)
-end
-
-local function secure_send_envelope(payload_table)
-    ensure_keys()
-    api_out_ctr = api_out_ctr + 1
-    local iv = random_bytes(16)
-    local iv_b64 = b64encode(iv)
-    local payload_str = textutils.serialize(payload_table)
-    local ct = aes_ctr_crypt(roundKeys_cached, to_bytes(iv), payload_str)
-    local ct_b64 = b64encode(ct)
-    local mac = keyed_mac(macHex_cached, "api", iv_b64, tostring(api_out_ctr), ct_b64)
-    return { role = "api", secure = true, iv = iv_b64, ctr = api_out_ctr, ct = ct_b64, mac = mac }
-end
-
-local function secure_receive_decode(envelope)
-    ensure_keys()
-    local iv = b64decode(envelope.iv or "")
-    local ct = b64decode(envelope.ct or "")
-    local mac = tostring(envelope.mac or "")
-    local ctr_str = tostring(envelope.ctr or "0")
-    local expect = keyed_mac(macHex_cached, "server", envelope.iv, ctr_str, envelope.ct)
-    if expect ~= mac then return false, "Invalid MAC" end
-    local pt = aes_ctr_crypt(roundKeys_cached, to_bytes(iv), ct)
-    if tonumber(ctr_str) <= server_in_ctr then return false, "Replay" end
-    server_in_ctr = tonumber(ctr_str)
-    return true, textutils.unserialize(pt)
-end
-
-local function sendRequest(message)
-    -- Decide secure/plain based on negotiated flags
-    if api_secure_enabled then
-        local envelope = secure_send_envelope(message)
-        rednet.send(bankServerID, envelope, "fiducia")
-        local sender, response = rednet.receive("fiducia", 3)
-        if response and response.secure == true then
-            local ok, dec = secure_receive_decode(response)
-            if ok then return { success = dec.success, response = dec.response } else return { success=false, response=dec } end
-        else
-            return response
-        end
-    else
-        rednet.send(bankServerID, message, "fiducia")
-        local sender, response = rednet.receive("fiducia", 3)
-        return response
-    end
+    return result
 end
 
 function getServerData()
-	print("Connecting to server...")
-	local message = {
-		action = "getServerData"
-	}
-	while (true) do
-		rednet.broadcast(message, "fiducia")
-		local sender, message = rednet.receive("fiducia", 3)
-		if (message ~= nil and os.computerID() ~= sender and message.response ~= nil) then
-			bankServerID = sender
-			print("Successfully connected to server [#"..sender.."]")
-			lang = message.response.lang
-			serverData = message.response
-			-- Secure channel negotiation parameters
-			if (serverData.sessionNonce ~= nil) then api_sessionNonce = tostring(serverData.sessionNonce) else api_sessionNonce = "" end
-			api_secureEnabledServer = (serverData.secureEnabled == true)
-			api_secure_enabled = (api_secureEnabledServer and networkSecret ~= nil and networkSecret ~= "" and api_sessionNonce ~= "")
-			return message.response
-		end
-	end
+    print("Connecting to web server...")
+    local result = httpPost("/api/banking/cc/server-data", {})
+    if result == nil then
+        error("Could not connect to web server at " .. BASE_URL)
+    end
+    if not result.success then
+        error("Server error: " .. tostring(result.response))
+    end
+    serverData = result.response or {}
+    print("Successfully connected to web server")
+    return serverData
 end
 
 function getClientData()
     local message = {
         action = "getClientData"
     }
-    -- Be robust on first world load: server may still be starting.
-    -- Try a few times, then fall back to an empty table to avoid nil errors.
     for i = 1, 5 do
         local resp = sendRequest(message)
-        if resp and resp.response ~= nil then
+        if resp and resp.success and resp.response ~= nil then
             return resp.response
         end
         sleep(0.2)
@@ -1993,10 +1833,9 @@ function cancelCard(key, id)
 end
 
 function deleteCardRecord(key, id)
-    local message = { action = "deleteCardRecord", key = key, id = id }
-    local resp = sendRequest(message)
-    if resp == nil then return false, text_error_noconnection end
-    return resp.success, resp.response
+    -- Card deletion is only available through the web admin panel.
+    -- The CC bridge does not expose a delete-card endpoint for security.
+    return false, "Card deletion requires the web admin panel"
 end
 
 function validateCard(key, id)

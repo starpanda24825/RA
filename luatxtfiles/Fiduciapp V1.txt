@@ -1,36 +1,9 @@
 -- Fiducia Mobile app
  
+-- All bank operations now go through HTTP (see bankapi.lua).
+-- No modem required for the Fiduciapp anymore.
+
 os.loadAPI("bankapi.lua")
- 
-local modemSide = "back"
- 
-local modem = peripheral.find("modem")
- 
-if (modem == nil) then
-	while (true) do
-		shell.run("equip")
-		modem = peripheral.find("modem")
-		if (modem == nil) then
-			term.setBackgroundColor(colors.red)
-			term.setTextColor(colors.white)
-			term.clear()
-			term.setCursorPos(1,1)
-			print("This app needs an Ender Modem. This app will auto-equip an Ender Modem from your inventory.")
-			print("")
-			print("Retrying in")
-			for i=1, 5 do
-				term.write(6-i.."...")
-				sleep(1)
-			end
-			print("Attempting auto-equip")
-			sleep(1)
-		else
-			os.reboot()
-		end
-	end
-end
- 
-peripheral.find("modem", rednet.open)
 local serverData = bankapi.getServerData()
  
 local currentAccount = 0

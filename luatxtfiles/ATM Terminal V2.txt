@@ -4,6 +4,8 @@ os.pullEvent = os.pullEventRaw -- Lock the shell (No Ctrl+T)
 local linkedAssistantID
 
 -------------------- Start
+-- Modem is only needed for local ATM Assistant communication.
+-- All bank operations now go through HTTP (see bankapi.lua).
 local modem = peripheral.find("modem")
 
 while (modem == nil) do

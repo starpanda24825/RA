@@ -4,7 +4,6 @@ os.pullEvent = os.pullEventRaw -- Lock the shell (No Ctrl+T)
 
 
 -----------------------Params
-local bankServerID
 local adminPassword
 local assignedTreasuryKey
 local assignedTreasuryName
@@ -29,25 +28,8 @@ local function ensureSafeDisk()
     end
     return true
 end
-local modem = peripheral.find("modem")
-
-while (modem == nil) do
-    modem = peripheral.find("modem")
-    if (modem == nil) then
-        term.setBackgroundColor(colors.red)
-        term.setTextColor(colors.white)
-        term.clear()
-        term.setCursorPos(1,1)
-        print("Ender modem required. Please connect a modem to continue...")
-        -- Wait for a peripheral without allowing Ctrl+T to terminate
-        while true do
-            local ev = {os.pullEventRaw()}
-            if ev[1] == "peripheral" then break end
-        end
-    end
-end
-
-peripheral.find("modem", rednet.open)
+-- All bank operations now go through HTTP (see bankapi.lua).
+-- No modem required for the Admin Terminal anymore.
 
 os.loadAPI("bankapi.lua")
 local serverData = bankapi.getServerData()
@@ -329,16 +311,15 @@ while true do
             }, 2, 32)
             
             if (toggleOption == "toggle") then
-                -- Send request to server
-                rednet.send(bankServerID, {
-                    action = "toggleAccountFrozen",
+                -- Send request via HTTP (bankapi.sendRequest)
+                local message = {
+                    action = "freezeAccount",
                     key = account,
                     frozen = not currentFrozen
-                }, "fiducia")
-                
-                local sender, response = rednet.receive("fiducia", 5)
-                if sender == bankServerID then
-                    bankapi.responseScreen(response.success, response.response)
+                }
+                local resp = bankapi.sendRequest(message)
+                if resp then
+                    bankapi.responseScreen(resp.success, resp.response)
                 else
                     bankapi.errorScreen(text_error_noconnection)
                 end

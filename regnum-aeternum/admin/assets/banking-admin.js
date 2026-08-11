@@ -116,8 +116,10 @@
     api('/api/banking/admin/accounts' + (qs ? '?' + qs : ''))
       .then(function (res) {
         if (!res.ok) return;
-        allAccountsCache = res.data;
-        renderAccountsTable(res.data);
+        // Exclude treasury accounts — they have their own Treasuries tab
+        var nonTreasury = (res.data || []).filter(function (a) { return a.type !== 'treasury'; });
+        allAccountsCache = nonTreasury;
+        renderAccountsTable(nonTreasury);
       });
   }
 
@@ -134,7 +136,7 @@
         '<td>' + (a.frozen ? '<span class="frozen-badge">&#128274; FROZEN</span>' : 'Active') + '</td>' +
         '<td>' +
           '<button class="a-btn" data-ba-edit="' + esc(a.key) + '">Edit</button>' +
-          '<button class="a-btn" data-ba-freeze="' + esc(a.key) + '">' + (a.frozen ? 'Unfreeze' : 'Freeze') + '</button>' +
+          (a.type !== 'treasury' ? '<button class="a-btn" data-ba-freeze="' + esc(a.key) + '">' + (a.frozen ? 'Unfreeze' : 'Freeze') + '</button>' : '') +
           (isAdmin && a.type !== 'treasury' ? '<button class="a-btn danger" data-ba-del="' + esc(a.key) + '">Delete</button>' : '') +
         '</td>' +
       '</tr>';
@@ -157,6 +159,24 @@
     });
   }
 
+  function loadTreasuryOptions(selId, selectedKey) {
+    if (!isAdmin) return;
+    api('/api/banking/admin/treasuries').then(function (res) {
+      if (!res.ok) return;
+      var sel = document.getElementById(selId);
+      if (!sel) return;
+      // Keep the first "None" / current option, remove stale entries
+      while (sel.options.length > 1) sel.remove(1);
+      (res.data || []).forEach(function (t) {
+        var opt = document.createElement('option');
+        opt.value = t.key;
+        opt.textContent = t.name + ' (' + (t.tag || '') + ')';
+        if (t.key === selectedKey) opt.selected = true;
+        sel.appendChild(opt);
+      });
+    });
+  }
+
   function openAccountEditor(key) {
     var editing = key ? allAccountsCache.find(function (a) { return a.key === key; }) : null;
     var formHtml = '<div style="display:flex;flex-direction:column;gap:12px;">';
@@ -165,6 +185,12 @@
       formHtml += '<div class="a-field"><label>Type</label><select class="a-select" id="bae-type" style="width:100%;">' +
         '<option value="personal">Personal</option><option value="company">Company</option>' +
         '</select></div>';
+      // Treasury assignment (admin picks; bankers auto-assigned by backend)
+      formHtml += '<div class="a-field" id="bae-treasury-field"><label>Treasury</label>' +
+        (isAdmin
+          ? '<select class="a-select" id="bae-treasury" style="width:100%;"><option value="">None (unassigned)</option></select>'
+          : '<input class="a-input" value="Assigned automatically" disabled style="width:100%;color:var(--slate-soft);"/>') +
+        '</div>';
       // Personal: web user search dropdown (name + password come from web account)
       formHtml += '<div class="a-field" id="bae-personal-fields"><label>Linked Web User</label>' +
         '<input class="a-input" id="bae-user-search" placeholder="Search registered users…" autocomplete="off" style="width:100%;margin-bottom:4px;"/>' +
@@ -182,6 +208,13 @@
       formHtml += '<div class="a-field"><label>Color</label><input class="a-input" id="bae-color" type="number" style="width:100px;" value="' + (editing.color || 16384) + '"/></div>';
       if (editing.type === 'treasury') {
         formHtml += '<div class="a-field"><label>Tag</label><input class="a-input" id="bae-tag" style="width:80px;" maxlength="4" value="' + esc(editing.tag || '') + '"/></div>';
+      }
+      // Treasury reassignment (admin only, non-treasury accounts)
+      if (isAdmin && editing.type !== 'treasury') {
+        formHtml += '<div class="a-field"><label>Treasury</label><select class="a-select" id="bae-treasury" style="width:100%;">' +
+          '<option value="">None (unassigned)</option>' +
+          '<option value="' + esc(editing.treasury_key || '') + '" selected>' + esc(editing.treasury_key || 'Current') + '</option>' +
+          '</select></div>';
       }
       if (editing.type === 'company') {
         formHtml += '<div class="a-field"><label>Shares</label><input class="a-input" id="bae-shares" type="number" style="width:100px;" value="' + (editing.shares || 0) + '"/></div>';
@@ -223,6 +256,9 @@
         renderUserOptions('');
       });
 
+      // Populate treasury dropdown (admin only)
+      loadTreasuryOptions('bae-treasury');
+
       function renderUserOptions(filter) {
         var f = (filter || '').toLowerCase();
         var filtered = allUsers.filter(function (u) {
@@ -240,6 +276,9 @@
           renderUserOptions(userSearchEl.value);
         });
       }
+    } else {
+      // Populate treasury dropdown in Edit modal (admin only)
+      loadTreasuryOptions('bae-treasury', editing.treasury_key);
     }
 
     document.getElementById('bae-cancel-btn').addEventListener('click', function () { modal.remove(); });
@@ -259,11 +298,21 @@
           body.shares = Number(document.getElementById('bae-shares').value) || 0;
           if (!body.name) { msg.show('error', 'Account name is required.'); return; }
         }
+        // Include treasury assignment (admins select; bankers auto-assigned by backend)
+        if (isAdmin) {
+          var treSel = document.getElementById('bae-treasury');
+          if (treSel && treSel.value) body.treasuryKey = treSel.value;
+        }
       } else {
         body.name = document.getElementById('bae-name').value;
         body.frozen = document.getElementById('bae-frozen') ? document.getElementById('bae-frozen').checked : false;
         if (editing.type === 'company') body.shares = Number(document.getElementById('bae-shares').value) || 0;
         if (editing.type === 'treasury') body.tag = document.getElementById('bae-tag').value;
+        // Treasury reassignment (admin only)
+        if (isAdmin && editing.type !== 'treasury') {
+          var treSel = document.getElementById('bae-treasury');
+          if (treSel) body.treasuryKey = treSel.value;
+        }
       }
       var method = editing ? 'PUT' : 'POST';
       var url = editing ? '/api/banking/admin/accounts/' + encodeURIComponent(editing.key) : '/api/banking/admin/accounts';
