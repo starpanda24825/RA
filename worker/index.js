@@ -96,6 +96,7 @@ export default {
         if (pathname === '/api/banking/me/portfolio' && method === 'GET') return await banking.getMyPortfolio(request, env);
         if (pathname === '/api/banking/transfer' && method === 'POST') return await banking.transfer(request, env);
         if (pathname === '/api/banking/accounts/search' && method === 'GET') return await banking.searchAccounts(request, env);
+        if (pathname === '/api/banking/company/issue-shares' && method === 'POST') return await banking.issueCompanyShares(request, env);
         if (pathname === '/api/banking/companies' && method === 'GET') return await banking.listCompanies(request, env);
         if (pathname === '/api/banking/companies/top' && method === 'GET') return await banking.getTopCompanies(request, env);
 

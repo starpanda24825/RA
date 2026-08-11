@@ -3,14 +3,16 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Banking System — Regnum Aeternum</title>
+<title>Fiducia Banking System — Regnum Aeternum</title>
 <link rel="icon" href="../assets/logo.webp" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant:wght@500;600;700&family=Cormorant+SC:wght@500;600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="../assets/styles.css" />
+<link rel="stylesheet" href="assets/banking.css" />
 </head>
 <body>
+
 <header class="topbar">
   <a href="../" style="display:flex;align-items:center;gap:14px;">
     <img class="topbar__crest" src="../assets/logo.webp" alt="Crest of Regnum Aeternum" />
@@ -19,22 +21,288 @@
   <span class="topbar__tag">Banking System</span>
 </header>
 
-<main class="subpage">
-  <div class="subpage__panel">
-    <div class="subpage__seal" aria-hidden="true">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10l9-6 9 6"/><path d="M5 10v9M9 10v9M15 10v9M19 10v9"/><path d="M3 19h18"/></svg>
+<!-- ═══════════════ VIEW 1: NOT LOGGED IN ═══════════════ -->
+<div id="bank-view-guest">
+
+  <section class="bank-hero">
+    <div class="bank-hero__bg"></div>
+    <div class="bank-hero__seal">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2" y="3" width="20" height="18" rx="3" />
+        <line x1="6" y1="8" x2="6" y2="16" />
+        <line x1="9" y1="8" x2="9" y2="16" />
+        <line x1="12" y1="8" x2="12" y2="16" />
+        <line x1="15" y1="10" x2="15" y2="16" />
+        <line x1="18" y1="10" x2="18" y2="16" />
+        <circle cx="17" cy="7" r="1.2" fill="currentColor" />
+      </svg>
     </div>
-    <p class="subpage__eyebrow">Treasury</p>
-    <h1 class="subpage__title">Banking System</h1>
-    <p class="subpage__body">Accounts and reserves of the realm. This office is being fitted to the Crown's in-game ledger engines and is not yet open for transactions.</p>
-    <a href="../" class="subpage__back">
-      <span class="subpage__arrow-back" aria-hidden="true"></span>
-      Return to the Portal
-    </a>
+    <p class="bank-hero__eyebrow">Treasury of the Crown</p>
+    <h1 class="bank-hero__title">Fiducia</h1>
+    <p class="bank-hero__sub">Banking System</p>
+    <p class="bank-hero__body">
+      The official banking institution of Regnum Aeternum, entrusted with the
+      safekeeping of the Realm's currency, the facilitation of commerce, and the
+      administration of corporate equity. All accounts are secured by the Crown's
+      ledger and protected under the Fiduciary Instruments Act.
+    </p>
+  </section>
+
+  <div class="bank-wrap">
+    <div class="bank-info">
+      <div class="bank-info__card">
+        <h2>What is Fiducia?</h2>
+        <p>
+          Fiducia is the central banking system of Regnum Aeternum — a secure,
+          in-game ledger that underpins all financial transactions across the
+          Realm. Named from the Latin <em>fiducia</em> (trust, confidence), it
+          provides every citizen with the means to hold, transfer, and manage
+          funds safely.
+        </p>
+        <h3>Key Features</h3>
+        <ul>
+          <li>Personal and company banking accounts</li>
+          <li>Instant inter-account transfers</li>
+          <li>Corporate equity and share trading</li>
+          <li>Physical card system for ATM access</li>
+          <li>Full transaction history and audit trail</li>
+        </ul>
+      </div>
+
+      <div class="bank-info__card">
+        <h2>How to Open an Account</h2>
+        <p>
+          Banking accounts are created by the Crown's bankers and administrators.
+          To obtain a Fiducia account:
+        </p>
+        <h3>Step 1</h3>
+        <p>Create a web account using the <strong>Sign In</strong> button in the top bar. This registers you as a citizen of the Realm.</p>
+        <h3>Step 2</h3>
+        <p>Contact a banker or administrator — either in-game, through the official Discord, or at the Crown Authority office — and request a banking account to be linked to your web identity.</p>
+        <h3>Step 3</h3>
+        <p>Once linked, return here to view your balance, make transfers, manage your company, and review your full transaction history.</p>
+        <div class="bank-info__cta">
+          <button class="bank-cta" id="guest-signin-btn">Sign In to Get Started</button>
+        </div>
+      </div>
+    </div>
   </div>
-</main>
+</div>
+
+<!-- ═══════════════ VIEW 2: LOGGED IN, NO ACCOUNT ═══════════════ -->
+<div id="bank-view-noaccount" style="display:none;">
+  <div class="bank-noaccount">
+    <div class="bank-noaccount__seal">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2" y="3" width="20" height="18" rx="3" />
+        <line x1="6" y1="8" x2="6" y2="16" />
+        <line x1="9" y1="12" x2="9" y2="16" />
+        <line x1="12" y1="9" x2="12" y2="16" />
+        <line x1="15" y1="11" x2="15" y2="16" />
+        <line x1="18" y1="10" x2="18" y2="16" />
+        <circle cx="7" cy="7" r="1.2" fill="currentColor" />
+        <circle cx="9" cy="18" r="1.5" fill="currentColor" />
+      </svg>
+    </div>
+    <h2>No Banking Account Linked</h2>
+    <p>
+      Your web account is active, but it is not yet connected to a Fiducia
+      banking account. A banker or Crown administrator needs to create a
+      banking account and link it to your identity before you can access the
+      banking portal.
+    </p>
+    <p>
+      Please reach out through the official Discord or speak with a banker
+      in-game to get set up. The process is quick — once linked, you can
+      return here to manage your finances.
+    </p>
+  </div>
+</div>
+
+<!-- ═══════════════ VIEW 3: LOGGED IN WITH ACCOUNT ═══════════════ -->
+<div id="bank-view-app" style="display:none;">
+  <div class="bank-wrap" style="padding-top:36px;">
+
+    <!-- Tabs -->
+    <div class="bank-tabs" id="bank-tabs">
+      <button class="bank-tab active" data-tab="dashboard">Dashboard</button>
+      <button class="bank-tab" data-tab="transfer">Transfer</button>
+      <button class="bank-tab" data-tab="log">Log</button>
+      <button class="bank-tab" data-tab="portfolio" style="display:none;" id="bank-tab-portfolio">Portfolio</button>
+      <button class="bank-tab" data-tab="company" style="display:none;" id="bank-tab-company">My Company</button>
+    </div>
+
+    <!-- ── Dashboard Panel ──────────────────────────────────── -->
+    <div class="bank-panel active" id="bank-panel-dashboard">
+
+      <div class="balance-hero" id="balance-hero">
+        <p class="balance-hero__label">Current Balance</p>
+        <p class="balance-hero__amount" id="bal-amount">—</p>
+        <div class="balance-hero__meta">
+          <span class="balance-hero__name" id="bal-name"></span>
+          <span class="bank-pill" id="bal-type-pill"></span>
+        </div>
+        <p class="bank-key" id="bal-key" title="Click to copy account key"></p>
+      </div>
+
+      <div class="bank-dash-grid">
+        <!-- Cards -->
+        <div class="bank-dash-card" id="dash-cards-card">
+          <h3>Active Cards</h3>
+          <div id="dash-cards-list"></div>
+          <div class="bank-empty" id="dash-cards-empty" style="display:none;">No active cards</div>
+        </div>
+
+        <!-- Recent Transactions -->
+        <div class="bank-dash-card" id="dash-tx-card">
+          <div class="bank-dash-header">
+            <h3>Recent Transactions</h3>
+            <a id="dash-tx-viewall">View All &rarr;</a>
+          </div>
+          <div id="dash-tx-list"></div>
+          <div class="bank-empty" id="dash-tx-empty" style="display:none;">No transactions yet</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Transfer Panel ───────────────────────────────────── -->
+    <div class="bank-panel" id="bank-panel-transfer">
+      <div class="transfer-form">
+        <h3>Transfer Funds</h3>
+
+        <div class="transfer-form__field">
+          <label>Recipient</label>
+          <div class="recipient-search" id="recipient-search-wrap">
+            <input type="text" class="recipient-search__input" id="tx-recipient-search"
+                   placeholder="Search by account name or key…" autocomplete="off" />
+            <div class="recipient-search__dropdown" id="tx-recipient-dropdown"></div>
+          </div>
+          <input type="hidden" id="tx-recipient-key" />
+          <input type="hidden" id="tx-recipient-name" />
+        </div>
+
+        <div class="transfer-form__field">
+          <label>Amount (whole dollars)</label>
+          <input type="number" id="tx-amount" min="1" step="1" placeholder="Enter amount…" />
+        </div>
+
+        <div class="transfer-form__field">
+          <label>Description (optional, max 100 characters)</label>
+          <textarea id="tx-desc" maxlength="100" placeholder="What is this payment for?"></textarea>
+        </div>
+
+        <div class="transfer-preview" id="tx-preview">
+          <p>From: <strong id="tx-preview-from"></strong></p>
+          <p>To: <strong class="preview-to" id="tx-preview-to"></strong></p>
+          <p>Amount: <strong id="tx-preview-amount"></strong></p>
+          <p>Your new balance: <strong id="tx-preview-newbal"></strong></p>
+        </div>
+
+        <button class="bank-submit" id="tx-confirm-btn" disabled>Confirm Transfer</button>
+        <p class="bank-msg" id="tx-msg" style="display:none;"></p>
+      </div>
+    </div>
+
+    <!-- ── Log Panel ────────────────────────────────────────── -->
+    <div class="bank-panel" id="bank-panel-log">
+      <div class="tx-filters">
+        <input type="text" id="log-filter-desc" placeholder="Search description…" />
+        <input type="number" id="log-filter-amount-min" placeholder="Min $" style="width:100px;" />
+        <input type="number" id="log-filter-amount-max" placeholder="Max $" style="width:100px;" />
+        <input type="date" id="log-filter-date-from" />
+        <input type="date" id="log-filter-date-to" />
+        <button class="bank-cta" id="log-filter-apply" style="padding:8px 16px;font-size:10.5px;">Filter</button>
+        <button class="bank-cta" id="log-filter-clear" style="padding:8px 16px;font-size:10.5px;">Clear</button>
+      </div>
+      <div id="log-tx-list"></div>
+      <div class="bank-empty" id="log-tx-empty" style="display:none;">No transactions match</div>
+      <div class="bank-pagination" id="log-pagination"></div>
+    </div>
+
+    <!-- ── Portfolio Panel ──────────────────────────────────── -->
+    <div class="bank-panel" id="bank-panel-portfolio">
+      <div class="bank-dash-card">
+        <h3>Share Holdings</h3>
+        <table class="portfolio-table">
+          <thead>
+            <tr>
+              <th>Company</th>
+              <th class="num">Shares Held</th>
+              <th class="num">Price / Share</th>
+              <th class="num">Est. Value</th>
+            </tr>
+          </thead>
+          <tbody id="portfolio-tbody"></tbody>
+        </table>
+        <div class="bank-empty" id="portfolio-empty" style="display:none;">You do not hold any shares</div>
+        <p class="portfolio-total">Total: <strong id="portfolio-total-val">$0.00</strong></p>
+      </div>
+    </div>
+
+    <!-- ── My Company Panel ─────────────────────────────────── -->
+    <div class="bank-panel" id="bank-panel-company">
+      <div class="company-stats" id="company-stats">
+        <div class="company-stat">
+          <div class="company-stat__value" id="comp-balance">—</div>
+          <div class="company-stat__label">Balance</div>
+        </div>
+        <div class="company-stat">
+          <div class="company-stat__value" id="comp-shares">—</div>
+          <div class="company-stat__label">Total Shares</div>
+        </div>
+        <div class="company-stat">
+          <div class="company-stat__value" id="comp-price">—</div>
+          <div class="company-stat__label">Price per Share</div>
+        </div>
+      </div>
+
+      <div class="bank-dash-grid">
+        <div class="bank-dash-card">
+          <h3>7-Day Balance Trend</h3>
+          <div class="sparkline" id="comp-sparkline"></div>
+        </div>
+
+        <div class="bank-dash-card">
+          <h3>Shareholders</h3>
+          <div class="pie-chart-wrap" id="comp-pie-wrap">
+            <svg width="160" height="160" viewBox="0 0 160 160" id="comp-pie-svg"></svg>
+            <div class="pie-chart-legend" id="comp-pie-legend"></div>
+          </div>
+          <div class="bank-empty" id="comp-pie-empty" style="display:none;">No shareholders yet</div>
+        </div>
+      </div>
+
+      <div class="issuance-form" id="comp-issuance">
+        <h4>Issue New Shares</h4>
+        <div class="transfer-form__field">
+          <label>Buyer</label>
+          <div class="recipient-search" id="issuance-recipient-wrap">
+            <input type="text" class="recipient-search__input" id="issuance-recipient-search"
+                   placeholder="Search for buyer account…" autocomplete="off" />
+            <div class="recipient-search__dropdown" id="issuance-recipient-dropdown"></div>
+          </div>
+          <input type="hidden" id="issuance-buyer-key" />
+          <input type="hidden" id="issuance-buyer-name" />
+        </div>
+        <div class="transfer-form__field">
+          <label>Number of Shares</label>
+          <input type="number" id="issuance-count" min="1" step="1" placeholder="Enter share count…" />
+        </div>
+        <div class="issuance-form__preview" id="issuance-preview" style="display:none;">
+          Issuing <strong id="issuance-preview-count"></strong> shares to <strong id="issuance-preview-buyer"></strong>
+          at <strong id="issuance-preview-price"></strong> each
+          · Total: <strong id="issuance-preview-total"></strong>
+        </div>
+        <button class="bank-submit" id="issuance-confirm-btn" disabled>Issue Shares</button>
+        <p class="bank-msg" id="issuance-msg" style="display:none;"></p>
+      </div>
+    </div>
+
+  </div>
+</div>
 
 <script src="../assets/auth-widget.js" defer></script>
-</body>
+<script src="assets/banking-app.js" defer></script>
 
+</body>
 </html>

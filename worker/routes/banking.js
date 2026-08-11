@@ -186,3 +186,47 @@ export async function getMyPortfolio(request, env) {
       : 0,
   })));
 }
+
+// ── POST /api/banking/company/issue-shares ────────────────────────
+// Company owner (via linked account) issues new shares to a buyer.
+export async function issueCompanyShares(request, env) {
+  const result = await requireLinkedAccount(request, env);
+  if (result.error) return result.error;
+  const { user, account } = result;
+
+  if (account.type !== 'company') {
+    return json({ error: 'Only company accounts can issue shares.' }, { status: 403 });
+  }
+
+  let body;
+  try { body = await request.json(); }
+  catch { return json({ error: 'Invalid request body.' }, { status: 400 }); }
+
+  const { buyerKey, shareCount } = body;
+
+  if (!buyerKey || typeof buyerKey !== 'string') {
+    return json({ error: 'buyerKey is required.' }, { status: 400 });
+  }
+  const count = Number(shareCount);
+  if (!Number.isFinite(count) || count <= 0 || Math.floor(count) !== count) {
+    return json({ error: 'shareCount must be a positive integer.' }, { status: 400 });
+  }
+
+  try {
+    await store.atomicIssueShares(env, {
+      issuerKey:  account.key,
+      companyKey: account.key,
+      buyerKey:   buyerKey.trim(),
+      shareCount: count,
+    });
+    return json({ ok: true });
+  } catch (err) {
+    const statusMap = {
+      NOT_FOUND:    404,
+      FORBIDDEN:    403,
+      SELF_TRANSFER: 400,
+      INVALID_AMOUNT: 400,
+    };
+    return json({ error: err.message || 'Share issuance failed.' }, { status: statusMap[err.code] || 500 });
+  }
+}

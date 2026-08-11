@@ -1,0 +1,944 @@
+/* ============================================================
+   Regnum Aeternum — Public Banking Portal Styles
+   Uses the same CSS variables defined in ../assets/styles.css
+   ============================================================ */
+
+/* ── Banking page wrapper ──────────────────────────────────── */
+.bank-wrap {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 0 var(--edge) 80px;
+}
+
+/* ── Hero (View 1: not logged in) ─────────────────────────── */
+.bank-hero {
+  position: relative;
+  overflow: hidden;
+  min-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 80px var(--edge) 60px;
+  isolation: isolate;
+  margin-bottom: 50px;
+}
+
+.bank-hero__bg {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  z-index: -2;
+  background: linear-gradient(160deg, var(--crimson-deep) 0%, var(--crimson) 35%, var(--ink) 65%, var(--ink) 100%);
+}
+
+.bank-hero__bg::after {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: radial-gradient(ellipse at 50% 30%, rgba(201,162,39,0.14) 0%, transparent 60%);
+}
+
+.bank-hero__seal {
+  width: 80px;
+  height: 80px;
+  margin-bottom: 24px;
+  border-radius: 50%;
+  border: 2px solid var(--gold-dim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--gold-bright);
+  background: rgba(18,17,19,0.5);
+  position: relative;
+}
+
+.bank-hero__seal svg {
+  width: 36px;
+  height: 36px;
+}
+
+.bank-hero__seal::after {
+  content: "";
+  position: absolute;
+  top: -22%; left: -22%; right: -22%; bottom: -22%;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--gold-dim) 0%, transparent 70%);
+  z-index: -1;
+  animation: gleam-bank 6s ease-in-out infinite;
+}
+
+@keyframes gleam-bank {
+  0%, 100% { opacity: 0.25; transform: scale(0.94); }
+  50% { opacity: 0.55; transform: scale(1.06); }
+}
+
+.bank-hero__eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--gold-bright);
+  margin: 0 0 14px;
+}
+
+.bank-hero__title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: clamp(38px, 7vw, 72px);
+  line-height: 0.98;
+  margin: 0;
+  color: var(--parchment);
+}
+
+.bank-hero__sub {
+  font-family: var(--font-caps);
+  font-size: clamp(14px, 2vw, 17px);
+  letter-spacing: 0.1em;
+  color: var(--gold-bright);
+  margin: 14px 0 0;
+  font-style: italic;
+}
+
+.bank-hero__body {
+  max-width: 480px;
+  margin: 22px auto 0;
+  color: var(--parchment-dim);
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+/* ── Info sections (View 1) ────────────────────────────────── */
+.bank-info {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 28px;
+  margin-bottom: 50px;
+}
+
+.bank-info__card {
+  background: var(--ink-elevated);
+  border: 1px solid var(--slate-line);
+  border-radius: 14px;
+  padding: 28px 26px;
+}
+
+.bank-info__card h2 {
+  font-family: var(--font-display);
+  font-size: 21px;
+  font-weight: 600;
+  color: var(--parchment);
+  margin: 0 0 14px;
+}
+
+.bank-info__card h3 {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--gold-bright);
+  margin: 18px 0 6px;
+}
+
+.bank-info__card p,
+.bank-info__card li {
+  color: var(--parchment-dim);
+  font-size: 13.5px;
+  line-height: 1.7;
+  margin: 0 0 8px;
+}
+
+.bank-info__card ul {
+  padding-left: 18px;
+  margin: 4px 0 0;
+}
+
+.bank-info__card li {
+  margin-bottom: 4px;
+}
+
+.bank-info__card .bank-info__cta {
+  margin-top: 18px;
+}
+
+/* ── CTA button ────────────────────────────────────────────── */
+.bank-cta {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--gold-bright);
+  background: none;
+  border: 1px solid var(--gold-dim);
+  padding: 14px 28px;
+  border-radius: 100px;
+  cursor: pointer;
+  transition: border-color .2s, background .2s;
+  white-space: nowrap;
+}
+
+.bank-cta:hover {
+  border-color: var(--gold);
+  background: rgba(201,162,39,0.08);
+}
+
+/* ── Tabs (View 3) ─────────────────────────────────────────── */
+.bank-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 32px;
+  border-bottom: 1px solid var(--slate-line);
+  flex-wrap: wrap;
+}
+
+.bank-tab {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 10px 16px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--parchment-faint);
+  cursor: pointer;
+  transition: color .15s, border-color .15s;
+  white-space: nowrap;
+}
+
+.bank-tab:hover { color: var(--parchment-dim); }
+.bank-tab.active {
+  color: var(--gold-bright);
+  border-bottom-color: var(--gold-bright);
+}
+
+.bank-panel { display: none; }
+.bank-panel.active { display: block; }
+
+/* ── Balance hero (Dashboard) ──────────────────────────────── */
+.balance-hero {
+  text-align: center;
+  padding: 48px 24px 40px;
+  background: radial-gradient(ellipse at 50% 30%, rgba(201,162,39,0.08) 0%, transparent 70%);
+  border: 1px solid var(--slate-line);
+  border-radius: 16px;
+  margin-bottom: 32px;
+}
+
+.balance-hero__label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--slate-soft);
+  margin-bottom: 8px;
+}
+
+.balance-hero__amount {
+  font-family: var(--font-display);
+  font-size: clamp(48px, 7vw, 72px);
+  font-weight: 600;
+  color: var(--parchment);
+  line-height: 1;
+  letter-spacing: 0.01em;
+}
+
+.balance-hero__meta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+.balance-hero__name {
+  font-family: var(--font-display);
+  font-size: 18px;
+  color: var(--parchment);
+}
+
+/* ── Account type & key pills ──────────────────────────────── */
+.bank-pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 4px 12px;
+  border-radius: 100px;
+  border: 1px solid currentColor;
+}
+
+.bank-pill--personal { color: var(--gold-bright); }
+.bank-pill--company  { color: var(--teal-bright); }
+.bank-pill--treasury { color: var(--crimson-bright); }
+
+.bank-key {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--slate-soft);
+  margin-top: 10px;
+  user-select: all;
+  cursor: pointer;
+}
+
+.bank-key:hover { color: var(--parchment-dim); }
+
+/* ── Dashboard cards ───────────────────────────────────────── */
+.bank-dash-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 20px;
+}
+
+.bank-dash-card {
+  background: var(--ink-elevated);
+  border: 1px solid var(--slate-line);
+  border-radius: 12px;
+  padding: 22px 20px;
+}
+
+.bank-dash-card h3 {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--parchment);
+  margin: 0 0 14px;
+}
+
+/* ── Bank card (visual Fiducia card) ───────────────────────── */
+.bank-card {
+  background: linear-gradient(135deg, var(--crimson-deep), var(--crimson));
+  border: 1px solid var(--crimson-bright);
+  border-radius: 12px;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  position: relative;
+  overflow: hidden;
+}
+
+.bank-card::after {
+  content: "";
+  position: absolute;
+  top: -20%; right: -20%;
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(201,162,39,0.15) 0%, transparent 70%);
+}
+
+.bank-card__name {
+  font-family: var(--font-caps);
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  color: var(--parchment);
+  position: relative;
+  z-index: 1;
+}
+
+.bank-card__key {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--parchment-faint);
+  position: relative;
+  z-index: 1;
+  word-break: break-all;
+}
+
+.bank-card__meta {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(237,230,214,0.28);
+  display: flex;
+  justify-content: space-between;
+  position: relative;
+  z-index: 1;
+}
+
+.bank-card__status {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 100px;
+  border: 1px solid currentColor;
+}
+
+.bank-card__status--active  { color: var(--teal-bright); }
+.bank-card__status--cancelled { color: var(--slate-soft); }
+
+/* ── Transaction rows ──────────────────────────────────────── */
+.tx-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    "other amount"
+    "desc  date";
+  gap: 2px 14px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--slate-line);
+  cursor: pointer;
+  transition: background .15s;
+  border-radius: 6px;
+}
+
+.tx-row:hover { background: var(--ink-soft); }
+.tx-row:last-child { border-bottom: none; }
+
+.tx-row--credit { border-left: 3px solid var(--teal-bright); padding-left: 11px; }
+.tx-row--debit  { border-left: 3px solid #b34040; padding-left: 11px; }
+
+.tx-row__other {
+  grid-area: other;
+  font-size: 13.5px;
+  color: var(--parchment-dim);
+}
+
+.tx-row__amount {
+  grid-area: amount;
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  font-weight: 500;
+  text-align: right;
+}
+
+.tx-row__amount--credit { color: var(--teal-bright); }
+.tx-row__amount--debit  { color: #e3a3a3; }
+
+.tx-row__desc {
+  grid-area: desc;
+  font-size: 12px;
+  color: var(--slate-soft);
+  font-style: italic;
+}
+
+.tx-row__date {
+  grid-area: date;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--parchment-faint);
+  text-align: right;
+}
+
+/* ── Expanded transaction detail ───────────────────────────── */
+.tx-row__detail {
+  display: none;
+  grid-column: 1 / -1;
+  padding: 8px 0 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--slate-soft);
+  border-top: 1px solid var(--slate-line);
+  margin-top: 6px;
+}
+
+.tx-row--expanded .tx-row__detail { display: block; }
+
+/* ── Transaction log filters ───────────────────────────────── */
+.tx-filters {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.tx-filters input,
+.tx-filters select {
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--parchment);
+  background: var(--ink-soft);
+  border: 1px solid var(--slate-line);
+  border-radius: 7px;
+  padding: 8px 12px;
+}
+
+.tx-filters input:focus,
+.tx-filters select:focus {
+  outline: none;
+  border-color: var(--gold-dim);
+}
+
+.tx-filters input::placeholder {
+  color: var(--slate-soft);
+}
+
+/* ── Transfer form ─────────────────────────────────────────── */
+.transfer-form {
+  background: var(--ink-elevated);
+  border: 1px solid var(--slate-line);
+  border-radius: 14px;
+  padding: 28px 26px;
+  max-width: 520px;
+}
+
+.transfer-form h3 {
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 600;
+  color: var(--parchment);
+  margin: 0 0 20px;
+}
+
+.transfer-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.transfer-form__field label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--slate-soft);
+}
+
+.transfer-form input,
+.transfer-form textarea {
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: var(--parchment);
+  background: var(--ink-soft);
+  border: 1px solid var(--slate-line);
+  border-radius: 8px;
+  padding: 10px 14px;
+  width: 100%;
+  resize: vertical;
+}
+
+.transfer-form input:focus,
+.transfer-form textarea:focus {
+  outline: none;
+  border-color: var(--gold-dim);
+}
+
+.transfer-form textarea {
+  min-height: 70px;
+  font-size: 13.5px;
+}
+
+/* ── Recipient search ──────────────────────────────────────── */
+.recipient-search {
+  position: relative;
+}
+
+.recipient-search__input {
+  width: 100%;
+}
+
+.recipient-search__dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: var(--ink-elevated);
+  border: 1px solid var(--slate-line);
+  border-radius: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+  z-index: 20;
+  margin-top: 4px;
+  display: none;
+}
+
+.recipient-search__dropdown.open { display: block; }
+
+.recipient-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: background .1s;
+}
+
+.recipient-option:hover,
+.recipient-option--selected {
+  background: var(--ink-soft);
+}
+
+.recipient-option__name {
+  font-size: 13.5px;
+  color: var(--parchment);
+}
+
+.recipient-option__key {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--slate-soft);
+}
+
+.recipient-option__type {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--teal-bright);
+}
+
+/* ── Transfer preview ──────────────────────────────────────── */
+.transfer-preview {
+  background: var(--ink-soft);
+  border: 1px solid var(--slate-line);
+  border-radius: 10px;
+  padding: 16px 18px;
+  margin: 16px 0;
+  display: none;
+}
+
+.transfer-preview.visible { display: block; }
+
+.transfer-preview p {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--parchment-dim);
+  margin: 0 0 6px;
+  line-height: 1.6;
+}
+
+.transfer-preview p:last-child { margin-bottom: 0; }
+
+.transfer-preview strong {
+  color: var(--parchment);
+}
+
+.transfer-preview .preview-to {
+  color: var(--teal-bright);
+}
+
+/* ── Submit button ─────────────────────────────────────────── */
+.bank-submit {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  background: var(--crimson);
+  border: 1px solid var(--crimson-bright);
+  color: var(--parchment);
+  border-radius: 8px;
+  padding: 12px 24px;
+  cursor: pointer;
+  transition: background .2s;
+}
+
+.bank-submit:hover { background: var(--crimson-bright); }
+.bank-submit:disabled { opacity: .45; cursor: not-allowed; }
+
+/* ── Portfolio table ───────────────────────────────────────── */
+.portfolio-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.portfolio-table th {
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--slate-soft);
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--slate-line);
+}
+
+.portfolio-table td {
+  padding: 12px 10px;
+  border-bottom: 1px solid var(--slate-line);
+  font-size: 13.5px;
+  color: var(--parchment-dim);
+}
+
+.portfolio-table tr:last-child td { border-bottom: none; }
+
+.portfolio-table tr:hover td { background: rgba(255,255,255,0.015); }
+
+.portfolio-table .num {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  text-align: right;
+}
+
+.portfolio-total {
+  font-family: var(--font-display);
+  font-size: 18px;
+  color: var(--parchment);
+  text-align: right;
+  padding: 14px 10px 0;
+}
+
+.portfolio-total strong {
+  color: var(--gold-bright);
+}
+
+/* ── Sparkline chart ───────────────────────────────────────── */
+.sparkline {
+  width: 100%;
+  height: 80px;
+  margin: 12px 0;
+  background: var(--ink);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.sparkline svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* ── Shareholder pie chart ─────────────────────────────────── */
+.pie-chart-wrap {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.pie-chart-wrap svg {
+  flex-shrink: 0;
+}
+
+.pie-chart-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.pie-chart-legend__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--parchment-dim);
+}
+
+.pie-chart-legend__swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+/* ── Share issuance form ───────────────────────────────────── */
+.issuance-form {
+  background: var(--ink-elevated);
+  border: 1px solid var(--slate-line);
+  border-radius: 12px;
+  padding: 22px 20px;
+  margin-top: 20px;
+}
+
+.issuance-form h4 {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--parchment);
+  margin: 0 0 14px;
+}
+
+.issuance-form__preview {
+  background: var(--ink-soft);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--slate-soft);
+  margin-top: 10px;
+}
+
+.issuance-form__preview strong {
+  color: var(--gold-bright);
+}
+
+/* ── Messages ──────────────────────────────────────────────── */
+.bank-msg {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  margin: 10px 0 0;
+}
+
+.bank-msg.error   { color: #e3a3a3; }
+.bank-msg.success { color: var(--teal-bright); }
+
+/* ── View 2: no account linked ─────────────────────────────── */
+.bank-noaccount {
+  text-align: center;
+  padding: 80px var(--edge);
+  max-width: 520px;
+  margin: 0 auto;
+}
+
+.bank-noaccount__seal {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 26px;
+  border-radius: 50%;
+  border: 1.5px solid var(--gold-dim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--gold-bright);
+}
+
+.bank-noaccount__seal svg { width: 28px; height: 28px; }
+
+.bank-noaccount h2 {
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--parchment);
+  margin: 0 0 14px;
+}
+
+.bank-noaccount p {
+  color: var(--parchment-dim);
+  font-size: 14.5px;
+  line-height: 1.7;
+  margin: 0 0 20px;
+}
+
+/* ── Pagination ────────────────────────────────────────────── */
+.bank-pagination {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--slate-soft);
+  justify-content: center;
+}
+
+.bank-pagination button {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: none;
+  border: 1px solid var(--slate-line);
+  color: var(--parchment-dim);
+  border-radius: 100px;
+  padding: 5px 14px;
+  cursor: pointer;
+}
+
+.bank-pagination button:hover {
+  border-color: var(--gold-dim);
+  color: var(--parchment);
+}
+
+.bank-pagination button:disabled {
+  opacity: .35;
+  cursor: not-allowed;
+}
+
+/* ── Dashboard section header ──────────────────────────────── */
+.bank-dash-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.bank-dash-header h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--parchment);
+}
+
+.bank-dash-header a {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--gold-bright);
+  cursor: pointer;
+}
+
+.bank-dash-header a:hover { text-decoration: underline; }
+
+/* ── Empty states ──────────────────────────────────────────── */
+.bank-empty {
+  text-align: center;
+  padding: 32px 20px;
+  color: var(--slate-soft);
+  font-size: 13px;
+}
+
+/* ── Loading spinner ───────────────────────────────────────── */
+.bank-spinner {
+  text-align: center;
+  padding: 40px;
+  color: var(--parchment-faint);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* ── Company stats row ─────────────────────────────────────── */
+.company-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.company-stat {
+  background: var(--ink-soft);
+  border: 1px solid var(--slate-line);
+  border-radius: 10px;
+  padding: 16px;
+  text-align: center;
+}
+
+.company-stat__value {
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--parchment);
+}
+
+.company-stat__label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--slate-soft);
+  margin-top: 6px;
+}
+
+/* ── Responsive ────────────────────────────────────────────── */
+@media (max-width: 600px) {
+  .bank-tabs {
+    gap: 2px;
+  }
+
+  .bank-tab {
+    font-size: 10px;
+    padding: 8px 10px;
+  }
+
+  .balance-hero__amount {
+    font-size: 40px;
+  }
+
+  .transfer-form {
+    padding: 20px 18px;
+  }
+
+  .tx-row {
+    padding: 10px;
+  }
+
+  .tx-row__amount {
+    font-size: 12.5px;
+  }
+}
