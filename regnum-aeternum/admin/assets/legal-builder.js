@@ -154,7 +154,12 @@
           renderContentEditor(state.preamble, "preamble", { allowHeading: false }) +
         "</div>" +
         '<div class="lb-section">' +
-          '<div class="lb-section__head"><h3 class="lb-section__title">Chapters</h3></div>' +
+          '<div class="lb-section__head lb-section__head--row">' +
+            '<h3 class="lb-section__title">Chapters</h3>' +
+            '<span class="lb-section__spacer"></span>' +
+            '<button type="button" class="lb-btn lb-btn--sm" data-action="collapse-all-chapters">Collapse All</button>' +
+            '<button type="button" class="lb-btn lb-btn--sm" data-action="expand-all-chapters">Expand All</button>' +
+          "</div>" +
           '<div class="lb-chapters">' + state.chapters.map(renderChapter).join("") + "</div>" +
           '<div class="lb-addbar"><button type="button" class="lb-btn lb-btn--add" data-action="add-chapter">+ Add Chapter</button></div>' +
         "</div>"
@@ -163,19 +168,24 @@
 
     function renderChapter(chapter, ci) {
       var base = "chapters." + ci;
+      var articleCount = (chapter.articles || []).length;
       return (
         '<div class="lb-chapter">' +
           '<div class="lb-chapter__head">' +
+            '<button type="button" class="lb-toggle-btn" data-action="collapse" data-target="chapter-body-' + ci + '" title="Collapse/Expand chapter">\u25BC</button>' +
             '<div class="lb-field lb-field--grow"><label>Chapter Title</label><input class="lb-input" data-path="' + base + '.title" value="' + escapeHtml(chapter.title) + '"/></div>' +
             '<div class="lb-field lb-field--sm"><label>ID</label><input class="lb-input" data-path="' + base + '.id" value="' + escapeHtml(chapter.id) + '"/></div>' +
+            '<span class="lb-collapse-count">' + articleCount + ' article' + (articleCount !== 1 ? 's' : '') + '</span>' +
             '<div class="lb-chapter__moves">' +
               '<button type="button" class="lb-icon-btn" data-action="move" data-path="chapters" data-index="' + ci + '" data-delta="-1" title="Move up">\u2191</button>' +
               '<button type="button" class="lb-icon-btn" data-action="move" data-path="chapters" data-index="' + ci + '" data-delta="1" title="Move down">\u2193</button>' +
               '<button type="button" class="lb-icon-btn lb-icon-btn--danger" data-action="remove" data-path="chapters" data-index="' + ci + '" data-confirm="Delete this chapter and all its articles?" title="Delete chapter">\u2715</button>' +
             "</div>" +
           "</div>" +
-          '<div class="lb-articles">' + chapter.articles.map(function (a, ai) { return renderArticle(a, base + ".articles", ai); }).join("") + "</div>" +
-          '<div class="lb-addbar"><button type="button" class="lb-btn" data-action="add-article" data-path="' + base + '.articles">+ Add Article</button></div>' +
+          '<div class="lb-chapter__body" id="chapter-body-' + ci + '">' +
+            '<div class="lb-articles">' + chapter.articles.map(function (a, ai) { return renderArticle(a, base + ".articles", ai); }).join("") + "</div>" +
+            '<div class="lb-addbar"><button type="button" class="lb-btn" data-action="add-article" data-path="' + base + '.articles">+ Add Article</button></div>' +
+          "</div>" +
         "</div>"
       );
     }
@@ -185,9 +195,11 @@
       var lastIdx = article.history.length - 1;
       var current = article.history[lastIdx];
       var contentPath = base + ".history." + lastIdx + ".content";
+      var articleBodyId = "article-body-" + arrPath.replace(/\./g, "-") + "-" + ai;
       return (
         '<div class="lb-article">' +
           '<div class="lb-article__head">' +
+            '<button type="button" class="lb-toggle-btn" data-action="collapse" data-target="' + articleBodyId + '" title="Collapse/Expand article">\u25BC</button>' +
             '<div class="lb-field lb-field--num"><label>No.</label><input type="number" class="lb-input" data-num="1" data-path="' + base + '.number" value="' + article.number + '"/></div>' +
             '<div class="lb-field lb-field--grow"><label>Article Title</label><input class="lb-input" data-path="' + base + '.title" value="' + escapeHtml(article.title) + '"/></div>' +
             '<div class="lb-field lb-field--sm"><label>ID</label><input class="lb-input" data-path="' + base + '.id" value="' + escapeHtml(article.id) + '"/></div>' +
@@ -198,16 +210,18 @@
             "</div>" +
           "</div>" +
 
-          '<div class="lb-version-bar">' +
-            '<span class="lb-version-tag">v' + current.version + " \u00b7 " + escapeHtml(current.date || "") + "</span>" +
-            '<input class="lb-input lb-input--note" data-path="' + base + ".history." + lastIdx + '.changeNote" value="' + escapeHtml(current.changeNote || "") + '" placeholder="Change note"/>' +
-            '<button type="button" class="lb-btn lb-btn--ghost" data-action="new-version" data-path="' + base + '">+ New Version</button>' +
-            (article.history.length > 1 ? '<span class="lb-version-count">' + article.history.length + " versions on file</span>" : "") +
-          "</div>" +
+          '<div class="lb-article__body" id="' + articleBodyId + '">' +
+            '<div class="lb-version-bar">' +
+              '<span class="lb-version-tag">v' + current.version + " \u00b7 " + escapeHtml(current.date || "") + "</span>" +
+              '<input class="lb-input lb-input--note" data-path="' + base + ".history." + lastIdx + '.changeNote" value="' + escapeHtml(current.changeNote || "") + '" placeholder="Change note"/>' +
+              '<button type="button" class="lb-btn lb-btn--ghost" data-action="new-version" data-path="' + base + '">+ New Version</button>' +
+              (article.history.length > 1 ? '<span class="lb-version-count">' + article.history.length + " versions on file</span>" : "") +
+            "</div>" +
 
-          renderContentEditor(current.content || [], contentPath, { allowHeading: true }) +
-          renderRefChips(article.crossRefs || [], base + ".crossRefs", "ref") +
-          renderRefChips(article.caseLawIds || [], base + ".caseLawIds", "case") +
+            renderContentEditor(current.content || [], contentPath, { allowHeading: true }) +
+            renderRefChips(article.crossRefs || [], base + ".crossRefs", "ref") +
+            renderRefChips(article.caseLawIds || [], base + ".caseLawIds", "case") +
+          "</div>" +
         "</div>"
       );
     }
@@ -286,6 +300,7 @@
             '<span class="lb-node__spacer"></span>' +
             '<button type="button" class="lb-icon-btn" data-action="open-inline-picker" data-kind="ref" data-path="' + path + '.text" title="Insert cross-reference">[Art.]</button>' +
             '<button type="button" class="lb-icon-btn" data-action="open-inline-picker" data-kind="case" data-path="' + path + '.text" title="Insert case-law citation">[Case]</button>' +
+            '<button type="button" class="lb-icon-btn" data-action="open-inline-picker" data-kind="heading" data-path="' + path + '.text" title="Insert sub-heading reference">[\u00a7]</button>' +
             moves +
           "</div>" +
           '<textarea class="lb-textarea" data-path="' + path + '.text" rows="2" placeholder="Paragraph text">' + escapeHtml(node.text || "") + "</textarea>" +
@@ -303,6 +318,7 @@
             '<input class="lb-input lb-input--grow" data-path="' + path + '.text" value="' + escapeHtml(item.text) + '" placeholder="Point text"/>' +
             '<button type="button" class="lb-icon-btn" data-action="open-inline-picker" data-kind="ref" data-path="' + path + '.text" title="Insert cross-reference">[Art.]</button>' +
             '<button type="button" class="lb-icon-btn" data-action="open-inline-picker" data-kind="case" data-path="' + path + '.text" title="Insert case-law citation">[Case]</button>' +
+            '<button type="button" class="lb-icon-btn" data-action="open-inline-picker" data-kind="heading" data-path="' + path + '.text" title="Insert sub-heading reference">[\u00a7]</button>' +
             (hasChildren ? "" : '<button type="button" class="lb-icon-btn" data-action="add-sublist" data-path="' + path + '" title="Add sub-points">\u21B3</button>') +
             renderMoveRemove(arrPath, i, "Remove point") +
           "</div>" +
@@ -348,8 +364,36 @@
       if (Array.isArray(arr)) arr.push(value);
     }
 
+    var collapsedIds = {};
+
+    function setAllCollapsed(collapse) {
+      // Walk all chapter and article body elements and collapse/expand them.
+      var bodies = container.querySelectorAll(".lb-chapter__body, .lb-article__body");
+      for (var i = 0; i < bodies.length; i++) {
+        var body = bodies[i];
+        var id = body.id;
+        var btn = container.querySelector('[data-target="' + id + '"]');
+        if (collapse) {
+          body.classList.add("collapsed");
+          collapsedIds[id] = true;
+          if (btn) { btn.classList.add("lb-toggle-btn--collapsed"); btn.innerHTML = "\u25B6"; }
+        } else {
+          body.classList.remove("collapsed");
+          delete collapsedIds[id];
+          if (btn) { btn.classList.remove("lb-toggle-btn--collapsed"); btn.innerHTML = "\u25BC"; }
+        }
+      }
+    }
+
     function rerender() {
       container.innerHTML = renderRoot();
+      // Re-apply collapsed state after full re-render
+      Object.keys(collapsedIds).forEach(function (id) {
+        var body = document.getElementById(id);
+        var btn = container.querySelector('[data-target="' + id + '"]');
+        if (body) body.classList.add("collapsed");
+        if (btn) { btn.classList.add("lb-toggle-btn--collapsed"); btn.innerHTML = "\u25B6"; }
+      });
       notifyChange();
     }
     function notifyChange() {
@@ -363,6 +407,66 @@
     function closeOpenPickers() {
       var open = container.querySelectorAll(".lb-picker");
       for (var i = 0; i < open.length; i++) open[i].parentNode.removeChild(open[i]);
+    }
+
+    // Given a field path inside an article's content (e.g.
+    // "chapters.0.articles.1.history.0.content.2.text"), walk the current
+    // version's content array and return all heading texts found.
+    function getHeadingsInArticle(fieldPath) {
+      var parts = fieldPath.split(".");
+      var histIdx = parts.indexOf("history");
+      if (histIdx === -1) return [];
+      var articlePath = parts.slice(0, histIdx).join(".");
+      var article = getByPath(state, articlePath);
+      if (!article || !Array.isArray(article.history)) return [];
+      var current = article.history[article.history.length - 1];
+      if (!current || !Array.isArray(current.content)) return [];
+      var headings = [];
+      function walk(nodes) {
+        (nodes || []).forEach(function (node) {
+          if (node && node.type === "heading" && node.text && node.text.trim()) {
+            headings.push(node.text.trim());
+          }
+          if (node && node.type === "list" && Array.isArray(node.items)) {
+            node.items.forEach(function (item) {
+              if (Array.isArray(item.children)) walk(item.children);
+            });
+          }
+        });
+      }
+      walk(current.content);
+      return headings;
+    }
+
+    function buildHeadingPickerPanel(onInsert) {
+      var panel = document.createElement("div");
+      panel.className = "lb-picker";
+      panel.innerHTML =
+        '<div class="lb-picker__row"><select class="lb-select lb-picker-heading"><option value="">Choose a sub-heading\u2026</option></select></div>' +
+        '<div class="lb-picker__actions">' +
+          '<button type="button" class="lb-btn lb-btn--sm" data-pk="cancel">Cancel</button>' +
+          '<button type="button" class="lb-btn lb-btn--sm lb-btn--primary" data-pk="go">Insert</button>' +
+        "</div>";
+
+      panel.querySelector('[data-pk="cancel"]').addEventListener("click", function () { panel.parentNode.removeChild(panel); });
+      panel.querySelector('[data-pk="go"]').addEventListener("click", function () {
+        var val = panel.querySelector(".lb-picker-heading").value;
+        if (val) onInsert(val);
+        if (panel.parentNode) panel.parentNode.removeChild(panel);
+      });
+      return panel;
+    }
+
+    // Fills a heading picker panel's dropdown with headings from the
+    // article that contains the given field path.
+    function populateHeadingPicker(panel, fieldPath) {
+      var sel = panel.querySelector(".lb-picker-heading");
+      if (!sel) return;
+      var headings = getHeadingsInArticle(fieldPath);
+      sel.innerHTML = headings.length
+        ? '<option value="">Choose a sub-heading\u2026</option>' +
+          headings.map(function (h) { return '<option value="' + escapeHtml(h) + '">' + escapeHtml(h) + "</option>"; }).join("")
+        : '<option value="">No sub-headings in this article</option>';
     }
 
     function buildCasePickerPanel(onInsert) {
@@ -467,7 +571,7 @@
       }
     }
 
-    // Inserts an inline {{ref:..}}/{{case:..}} token into a paragraph/point's text field.
+    // Inserts an inline {{ref:..}}/{{case:..}}/{{heading:..}} token into a paragraph/point's text field.
     function openInlinePicker(btn) {
       closeOpenPickers();
       var kind = btn.getAttribute("data-kind");
@@ -485,6 +589,16 @@
         fieldEl.focus();
         try { fieldEl.setSelectionRange(newPos, newPos); } catch (e) { /* not all input types support this */ }
         notifyChange();
+      }
+
+      if (kind === "heading") {
+        var hpanel = buildHeadingPickerPanel(function (headingText) {
+          insertToken("{{heading:" + headingText + "}}");
+        });
+        populateHeadingPicker(hpanel, path);
+        hpanel.className += " lb-picker--inline";
+        fieldEl.insertAdjacentElement("afterend", hpanel);
+        return;
       }
 
       var panel = kind === "case"
@@ -577,6 +691,34 @@
         if (confirmMsg && !window.confirm(confirmMsg)) return;
         removeFromArrayAtPath(btn.getAttribute("data-path"), parseInt(btn.getAttribute("data-index"), 10));
         return rerender();
+      }
+
+      if (action === "collapse-all-chapters") {
+        setAllCollapsed(true);
+        return;
+      }
+
+      if (action === "expand-all-chapters") {
+        setAllCollapsed(false);
+        return;
+      }
+
+      if (action === "collapse") {
+        var targetId = btn.getAttribute("data-target");
+        var target = document.getElementById(targetId);
+        if (!target) return;
+        if (target.classList.contains("collapsed")) {
+          target.classList.remove("collapsed");
+          btn.classList.remove("lb-toggle-btn--collapsed");
+          btn.innerHTML = "\u25BC";
+          delete collapsedIds[targetId];
+        } else {
+          target.classList.add("collapsed");
+          btn.classList.add("lb-toggle-btn--collapsed");
+          btn.innerHTML = "\u25B6";
+          collapsedIds[targetId] = true;
+        }
+        return;
       }
 
       if (action === "open-array-picker") return openArrayPicker(btn);

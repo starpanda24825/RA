@@ -76,6 +76,10 @@ var LegalApp = (function () {
     return { label: "In Force", cls: "tag--inforce" };
   }
 
+  function headingSlug(text) {
+    return String(text || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  }
+
   function categoryLabel(cat) {
     var map = { constitution: "Constitution", code: "Code", act: "Act", regulation: "Regulation" };
     return map[cat] || cat;
@@ -161,6 +165,9 @@ var LegalApp = (function () {
       .replace(/\{\{case:([a-z0-9-]+)\}\}/g, function (_, slug) {
         var c = getCase(slug);
         return c ? c.refNumber : slug;
+      })
+      .replace(/\{\{heading:([^}]+)\}\}/g, function (_, text) {
+        return "\u00a7 " + text;
       });
   }
 
@@ -424,6 +431,9 @@ var LegalApp = (function () {
       var label = c ? c.refNumber : slug;
       return '<a class="xref" href="../case-law/view.html?case=' + slug + '">' + escapeHtml(label) + "</a>";
     });
+    html = html.replace(/\{\{heading:([^}]+)\}\}/g, function (_, text) {
+      return '<a class="xref" href="#' + fromActSlug + '-s-' + headingSlug(text) + '">\u00a7 ' + escapeHtml(text) + "</a>";
+    });
     return html;
   }
 
@@ -446,7 +456,8 @@ var LegalApp = (function () {
       if (node.type === "list") return renderList(node);
       if (node.type === "heading") {
         var lvl = Math.min(4, Math.max(3, node.level || 3));
-        return "<h" + lvl + ' class="article__subhead">' + renderInlineText(node.text || "", fromActSlug) + "</h" + lvl + ">";
+        var hid = fromActSlug + "-s-" + headingSlug(node.text);
+        return "<h" + lvl + ' class="article__subhead" id="' + hid + '">' + renderInlineText(node.text || "", fromActSlug) + "</h" + lvl + ">";
       }
       var cls = node.numbered ? " article__para--numbered" : "";
       return '<p class="article__para' + cls + '">' + renderInlineText(node.text || "", fromActSlug) + "</p>";
