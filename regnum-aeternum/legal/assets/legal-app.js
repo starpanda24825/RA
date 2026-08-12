@@ -158,9 +158,9 @@ var LegalApp = (function () {
 
   function flattenInlineToText(text) {
     return String(text || "")
-      .replace(/\{\{ref:([a-z0-9-]+):(\d+)\}\}/g, function (_, slug, num) {
+      .replace(/\{\{ref:([a-z0-9-]+):(\d+)(?:\|(.+?))?\}\}/g, function (_, slug, num, displayText) {
         var found = getArticle(slug, num);
-        return found ? (found.act.shortTitle + ", Art. " + num) : ("Art. " + num);
+        return displayText || (found ? (found.act.shortTitle + ", Art. " + num) : ("Art. " + num));
       })
       .replace(/\{\{case:([a-z0-9-]+)\}\}/g, function (_, slug) {
         var c = getCase(slug);
@@ -409,9 +409,9 @@ var LegalApp = (function () {
 
   function renderInlineText(text, fromActSlug) {
     var html = escapeHtml(String(text || ""));
-    html = html.replace(/\{\{ref:([a-z0-9-]+):(\d+)\}\}/g, function (_, slug, num) {
+    html = html.replace(/\{\{ref:([a-z0-9-]+):(\d+)(?:\|(.+?))?\}\}/g, function (_, slug, num, displayText) {
       var act = getAct(slug);
-      var label = act ? act.shortTitle + ", Art. " + num : "Art. " + num;
+      var label = displayText || (act ? act.shortTitle + ", Art. " + num : "Art. " + num);
       // Resolve the *actual* DOM id of the target article rather than
       // assuming it's always "art-<number>" — that was true for every
       // article in the original seed data, but the Legal admin editor

@@ -257,7 +257,7 @@
       <h2>Legal Acts</h2>
       <button class="a-btn primary" id="new-act-btn" style="margin-bottom:16px;">+ New Act</button>
       <table class="a-table">
-        <thead><tr><th>Title</th><th>Category</th><th>Status</th><th>Chapters</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Title</th><th>Category</th><th>Status</th><th>Articles</th><th>Chapters</th><th>Actions</th></tr></thead>
         <tbody id="acts-tbody"></tbody>
       </table>
     </div>
@@ -941,6 +941,7 @@
         <td>${escapeHtml(a.category)}</td>
         <td>${escapeHtml(a.status)}</td>
         <td>${actArticleCount(a)}</td>
+        <td>${(a.chapters || []).length}</td>
         <td>
           <button class="a-btn" data-edit-act="${escapeHtml(a.slug)}">Edit</button>
           <button class="a-btn danger" data-del-act="${escapeHtml(a.slug)}">Delete</button>

@@ -335,6 +335,29 @@
       btn.addEventListener('click', openModal);
       slotEl.appendChild(btn);
     }
+
+    // Show/hide the Ballistic Calculator link based on current roles.
+    // The link starts hidden (display:none) so unauthorised visitors
+    // never see it; this runs on every renderWidget call (login, logout,
+    // page load) to keep visibility in sync with auth state.
+    var ballisticsLink = document.getElementById('office-ballistics');
+    if (ballisticsLink) {
+      var hasBallistics = state.user && (
+        state.user.role.indexOf('ballistics') !== -1 ||
+        state.user.role.indexOf('admin') !== -1
+      );
+      if (hasBallistics) {
+        ballisticsLink.style.display = '';
+        // Force a reflow so the browser paints the initial .reveal.pre state
+        // (opacity:0, translateY:14px) before we add .is-visible — without
+        // this, the CSS transition never fires because the element goes from
+        // display:none (no box) straight to opacity:1.
+        ballisticsLink.offsetHeight;
+        ballisticsLink.classList.add('is-visible');
+      } else {
+        ballisticsLink.style.display = 'none';
+      }
+    }
   }
 
   function init() {

@@ -473,21 +473,49 @@
       var panel = document.createElement("div");
       panel.className = "lb-picker";
       panel.innerHTML =
-        '<div class="lb-picker__row"><select class="lb-select lb-picker-case"><option value="">Loading\u2026</option></select></div>' +
+        '<div class="lb-picker__row">' +
+          '<div class="lb-picker__col" style="flex:1 1 100%;">' +
+            '<div class="lb-picker__col-header">Case Law</div>' +
+            '<div class="lb-picker__list" id="case-pick-list"><div class="lb-picker__empty">Loading…</div></div>' +
+          '</div>' +
+        '</div>' +
         '<div class="lb-picker__actions">' +
           '<button type="button" class="lb-btn lb-btn--sm" data-pk="cancel">Cancel</button>' +
-          '<button type="button" class="lb-btn lb-btn--sm lb-btn--primary" data-pk="go">Add</button>' +
-        "</div>";
-      loadCases().then(function (cases) {
-        var sel = panel.querySelector(".lb-picker-case");
-        sel.innerHTML = cases.length
-          ? cases.map(function (c) { return '<option value="' + escapeHtml(c.slug) + '">' + escapeHtml(c.refNumber + " \u2014 " + c.title) + "</option>"; }).join("")
-          : '<option value="">No case law on file</option>';
+          '<button type="button" class="lb-btn lb-btn--sm lb-btn--primary" data-pk="go" disabled>Add</button>' +
+        '</div>';
+
+      var listEl = panel.querySelector("#case-pick-list");
+      var goBtn = panel.querySelector('[data-pk="go"]');
+      var selectedSlug = null;
+
+      function renderCaseList(cases) {
+        if (!cases.length) {
+          listEl.innerHTML = '<div class="lb-picker__empty">No case law on file</div>';
+          return;
+        }
+        var html = cases.map(function (c) {
+          var isSel = selectedSlug === c.slug;
+          return '<div class="lb-picker__item' + (isSel ? ' lb-picker__item--selected' : '') + '" data-slug="' + escapeHtml(c.slug) + '">' +
+            '<span>' + escapeHtml(c.refNumber + ' — ' + c.title) + '</span></div>';
+        }).join("");
+        listEl.innerHTML = html;
+        listEl.querySelectorAll('.lb-picker__item').forEach(function (item) {
+          item.addEventListener('click', function () {
+            listEl.querySelectorAll('.lb-picker__item').forEach(function (el) { el.classList.remove('lb-picker__item--selected'); });
+            item.classList.add('lb-picker__item--selected');
+            selectedSlug = item.dataset.slug;
+            goBtn.disabled = false;
+          });
+        });
+      }
+
+      loadCases().then(function (cases) { renderCaseList(cases); });
+
+      panel.querySelector('[data-pk="cancel"]').addEventListener('click', function () {
+        if (panel.parentNode) panel.parentNode.removeChild(panel);
       });
-      panel.querySelector('[data-pk="cancel"]').addEventListener("click", function () { panel.parentNode.removeChild(panel); });
-      panel.querySelector('[data-pk="go"]').addEventListener("click", function () {
-        var slug = panel.querySelector(".lb-picker-case").value;
-        if (slug) onInsert(slug);
+      goBtn.addEventListener('click', function () {
+        if (selectedSlug) onInsert(selectedSlug);
         if (panel.parentNode) panel.parentNode.removeChild(panel);
       });
       return panel;
@@ -498,52 +526,110 @@
       panel.className = "lb-picker";
       panel.innerHTML =
         '<div class="lb-picker__row">' +
-          '<select class="lb-select lb-picker-act"><option value="__own__">(this act)</option></select>' +
-          '<select class="lb-select lb-picker-art"><option value="">Loading\u2026</option></select>' +
-        "</div>" +
+          '<div class="lb-picker__col">' +
+            '<div class="lb-picker__col-header">Acts</div>' +
+            '<div class="lb-picker__list" id="ref-act-list"><div class="lb-picker__empty">Loading…</div></div>' +
+          '</div>' +
+          '<div class="lb-picker__col">' +
+            '<div class="lb-picker__col-header">Articles</div>' +
+            '<div class="lb-picker__list" id="ref-art-list"><div class="lb-picker__empty">Select an act</div></div>' +
+          '</div>' +
+        '</div>' +
         '<div class="lb-picker__actions">' +
           '<button type="button" class="lb-btn lb-btn--sm" data-pk="cancel">Cancel</button>' +
-          '<button type="button" class="lb-btn lb-btn--sm lb-btn--primary" data-pk="go">Add</button>' +
-        "</div>";
+          '<button type="button" class="lb-btn lb-btn--sm lb-btn--primary" data-pk="go" disabled>Add</button>' +
+        '</div>';
 
-      var actSel = panel.querySelector(".lb-picker-act");
-      var artSel = panel.querySelector(".lb-picker-art");
+      var actList = panel.querySelector("#ref-act-list");
+      var artList = panel.querySelector("#ref-art-list");
+      var goBtn  = panel.querySelector('[data-pk="go"]');
 
-      function fillOwnArticles() {
-        var list = [];
-        state.chapters.forEach(function (c) { c.articles.forEach(function (a) { list.push(a); }); });
-        artSel.innerHTML = list.length
-          ? list.map(function (a) { return '<option value="' + a.number + '">Art. ' + a.number + " \u2014 " + escapeHtml(a.title) + "</option>"; }).join("")
-          : '<option value="">No articles yet</option>';
-      }
-      fillOwnArticles();
+      var selectedActSlug = "__own__";
+      var selectedActShortTitle = null;
+      var selectedArtNum = null;
+      var selectedArtTitle = null;
+      var allActs = [];
 
-      loadActs().then(function (acts) {
-        actSel.innerHTML = '<option value="__own__">(this act)</option>' +
-          acts.map(function (a) { return '<option value="' + escapeHtml(a.slug) + '">' + escapeHtml(a.shortTitle) + "</option>"; }).join("");
-        actSel.addEventListener("change", function () {
-          if (actSel.value === "__own__") { fillOwnArticles(); return; }
-          var act = acts.filter(function (a) { return a.slug === actSel.value; })[0];
-          var list = [];
-          (act ? act.chapters : []).forEach(function (c) { c.articles.forEach(function (a) { list.push(a); }); });
-          artSel.innerHTML = list.length
-            ? list.map(function (a) { return '<option value="' + a.number + '">Art. ' + a.number + " \u2014 " + escapeHtml(a.title) + "</option>"; }).join("")
-            : '<option value="">No articles</option>';
+      function renderActList(acts) {
+        allActs = acts;
+        var html = '';
+        var ownCount = 0;
+        state.chapters.forEach(function (c) { ownCount += (c.articles || []).length; });
+        html += '<div class="lb-picker__item' + (selectedActSlug === '__own__' ? ' lb-picker__item--selected' : '') + '" data-slug="__own__">' +
+          '<span>(this act)</span><span class="lb-picker__item-badge">' + ownCount + ' art' + (ownCount !== 1 ? 's' : '') + '</span></div>';
+
+        acts.forEach(function (a) {
+          var artCount = 0;
+          (a.chapters || []).forEach(function (c) { artCount += (c.articles || []).length; });
+          var isSel = selectedActSlug === a.slug;
+          html += '<div class="lb-picker__item' + (isSel ? ' lb-picker__item--selected' : '') + '" data-slug="' + escapeHtml(a.slug) + '">' +
+            '<span>' + escapeHtml(a.shortTitle) + '</span><span class="lb-picker__item-badge">' + artCount + ' art' + (artCount !== 1 ? 's' : '') + '</span></div>';
         });
-      });
+        actList.innerHTML = html || '<div class="lb-picker__empty">No acts on file</div>';
 
-      panel.querySelector('[data-pk="cancel"]').addEventListener("click", function () { panel.parentNode.removeChild(panel); });
-      panel.querySelector('[data-pk="go"]').addEventListener("click", function () {
-        var num = parseInt(artSel.value, 10);
-        if (!num) { if (panel.parentNode) panel.parentNode.removeChild(panel); return; }
-        var isOwn = actSel.value === "__own__";
-        var actSlug = isOwn ? (options.getOwnActSlug ? options.getOwnActSlug() : "") : actSel.value;
-        var actShortTitle = isOwn
-          ? (options.getOwnActShortTitle ? options.getOwnActShortTitle() : "This Act")
-          : (actSel.options[actSel.selectedIndex] ? actSel.options[actSel.selectedIndex].text : actSlug);
-        var artText = artSel.options[artSel.selectedIndex] ? artSel.options[artSel.selectedIndex].text : "";
-        var artTitle = artText.replace(/^Art\.\s*\d+\s*\u2014\s*/, "");
-        onInsert({ actSlug: actSlug, number: num, actShortTitle: actShortTitle, artTitle: artTitle });
+        actList.querySelectorAll('.lb-picker__item').forEach(function (item) {
+          item.addEventListener('click', function () {
+            actList.querySelectorAll('.lb-picker__item').forEach(function (el) { el.classList.remove('lb-picker__item--selected'); });
+            item.classList.add('lb-picker__item--selected');
+            selectedActSlug = item.dataset.slug;
+            selectedArtNum = null;
+            selectedArtTitle = null;
+            goBtn.disabled = true;
+            fillArtList(selectedActSlug);
+          });
+        });
+      }
+
+      function fillArtList(actSlug) {
+        var articles = [];
+        if (actSlug === '__own__') {
+          state.chapters.forEach(function (c) { c.articles.forEach(function (a) { articles.push(a); }); });
+          selectedActShortTitle = options.getOwnActShortTitle ? options.getOwnActShortTitle() : 'This Act';
+        } else {
+          var act = allActs.filter(function (a) { return a.slug === actSlug; })[0];
+          if (act) {
+            (act.chapters || []).forEach(function (c) { c.articles.forEach(function (a) { articles.push(a); }); });
+            selectedActShortTitle = act.shortTitle;
+          }
+        }
+
+        if (articles.length === 0) {
+          artList.innerHTML = '<div class="lb-picker__empty">No articles</div>';
+          return;
+        }
+
+        var html = articles.map(function (a) {
+          var isSel = selectedArtNum === a.number;
+          return '<div class="lb-picker__item' + (isSel ? ' lb-picker__item--selected' : '') + '" data-num="' + a.number + '" data-title="' + escapeHtml(a.title) + '">' +
+            '<span>Art. ' + a.number + ' \u2014 ' + escapeHtml(a.title) + '</span></div>';
+        }).join("");
+        artList.innerHTML = html;
+
+        artList.querySelectorAll('.lb-picker__item').forEach(function (item) {
+          item.addEventListener('click', function () {
+            artList.querySelectorAll('.lb-picker__item').forEach(function (el) { el.classList.remove('lb-picker__item--selected'); });
+            item.classList.add('lb-picker__item--selected');
+            selectedArtNum = parseInt(item.dataset.num, 10);
+            selectedArtTitle = item.dataset.title;
+            goBtn.disabled = false;
+          });
+        });
+      }
+
+      // Initial: show "(this act)" selected + its articles
+      fillArtList('__own__');
+
+      loadActs().then(function (acts) { renderActList(acts); });
+
+      panel.querySelector('[data-pk="cancel"]').addEventListener('click', function () {
+        if (panel.parentNode) panel.parentNode.removeChild(panel);
+      });
+      goBtn.addEventListener('click', function () {
+        if (!selectedArtNum) return;
+        var actualSlug = selectedActSlug === '__own__'
+          ? (options.getOwnActSlug ? options.getOwnActSlug() : '')
+          : selectedActSlug;
+        onInsert({ actSlug: actualSlug, number: selectedArtNum, actShortTitle: selectedActShortTitle, artTitle: selectedArtTitle });
         if (panel.parentNode) panel.parentNode.removeChild(panel);
       });
       return panel;
@@ -572,12 +658,41 @@
     }
 
     // Inserts an inline {{ref:..}}/{{case:..}}/{{heading:..}} token into a paragraph/point's text field.
+    // For cross-references, the user must first select text in the field — that
+    // text becomes the visible link label (e.g. "{{ref:slug:num|selected text}}").
     function openInlinePicker(btn) {
       closeOpenPickers();
       var kind = btn.getAttribute("data-kind");
       var path = btn.getAttribute("data-path");
       var fieldEl = container.querySelector('[data-path="' + path + '"]');
       if (!fieldEl) return;
+
+      var selectedText = "";
+      if (kind === "ref") {
+        // Cross-references require a text selection — that selection
+        // becomes the clickable link text in the rendered document.
+        var selStart = fieldEl.selectionStart != null ? fieldEl.selectionStart : 0;
+        var selEnd = fieldEl.selectionEnd != null ? fieldEl.selectionEnd : 0;
+        selectedText = (selStart !== selEnd) ? fieldEl.value.slice(selStart, selEnd).trim() : "";
+        if (!selectedText) {
+          // Nothing selected — tell the user and re-focus so they can try again.
+          fieldEl.focus();
+          fieldEl.style.backgroundColor = "rgba(212,175,55,0.12)";
+          fieldEl.style.transition = "background-color 0.5s";
+          setTimeout(function () {
+            fieldEl.style.backgroundColor = "";
+            fieldEl.style.transition = "";
+          }, 1200);
+          // Show an explicit hint so the user knows what to do.
+          var hint = document.createElement("span");
+          hint.textContent = "Select the text you want to become the link, then click [Art.] again";
+          hint.className = "lb-hint";
+          hint.style.cssText = "color:var(--gold-bright);display:block;margin-top:4px;";
+          fieldEl.insertAdjacentElement("afterend", hint);
+          setTimeout(function () { if (hint.parentNode) hint.parentNode.removeChild(hint); }, 3000);
+          return;
+        }
+      }
 
       function insertToken(token) {
         var start = fieldEl.selectionStart != null ? fieldEl.selectionStart : fieldEl.value.length;
@@ -601,11 +716,21 @@
         return;
       }
 
-      var panel = kind === "case"
-        ? buildCasePickerPanel(function (slug) { insertToken("{{case:" + slug + "}}"); })
-        : buildRefPickerPanel(function (picked) { insertToken("{{ref:" + picked.actSlug + ":" + picked.number + "}}"); });
-      panel.className += " lb-picker--inline";
-      fieldEl.insertAdjacentElement("afterend", panel);
+      if (kind === "case") {
+        var casePanel = buildCasePickerPanel(function (slug) {
+          insertToken("{{case:" + slug + "}}");
+        });
+        casePanel.className += " lb-picker--inline";
+        fieldEl.insertAdjacentElement("afterend", casePanel);
+        return;
+      }
+
+      // kind === "ref" — selectedText is guaranteed non-empty by the guard above
+      var refPanel = buildRefPickerPanel(function (picked) {
+        insertToken("{{ref:" + picked.actSlug + ":" + picked.number + "|" + selectedText + "}}");
+      });
+      refPanel.className += " lb-picker--inline";
+      fieldEl.insertAdjacentElement("afterend", refPanel);
     }
 
     // -------- event delegation --------

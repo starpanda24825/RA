@@ -273,11 +273,83 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  max-height: 420px;
+  overflow: hidden;
 }
-.lb-picker__row { display: flex; gap: 8px; flex-wrap: wrap; }
+.lb-picker__row { display: flex; gap: 8px; flex-wrap: wrap; min-height: 0; flex: 1 1 auto; }
 .lb-picker__row .lb-select { flex: 1 1 160px; }
-.lb-picker__actions { display: flex; justify-content: flex-end; gap: 8px; }
+.lb-picker__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--slate-line);
+  flex-shrink: 0;
+}
 .lb-picker--inline { max-width: 420px; }
+
+/* Scrollable picker lists (replaces native <select>) */
+.lb-picker__col {
+  flex: 1 1 160px;
+  min-width: 150px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.lb-picker__col-header {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--slate-soft);
+  padding: 0 2px 5px;
+  flex-shrink: 0;
+}
+.lb-picker__list {
+  border: 1px solid var(--slate-line);
+  border-radius: 7px;
+  background: var(--ink-soft);
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 60px;
+  max-height: 280px;
+}
+.lb-picker__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  color: var(--parchment-dim);
+  cursor: pointer;
+  border-bottom: 1px solid var(--slate-line);
+  transition: background 0.15s, color 0.15s;
+  user-select: none;
+}
+.lb-picker__item:last-child { border-bottom: none; }
+.lb-picker__item:hover { background: rgba(212,175,55,0.08); color: var(--parchment); }
+.lb-picker__item--selected {
+  background: rgba(212,175,55,0.14);
+  color: var(--gold-bright);
+  font-weight: 500;
+}
+.lb-picker__item-badge {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--slate-soft);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.lb-picker__item--selected .lb-picker__item-badge { color: var(--gold-dim); }
+.lb-picker__empty {
+  padding: 20px 10px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--slate-soft);
+  font-style: italic;
+}
 
 /* ---------- read-only JSON preview ---------- */
 
