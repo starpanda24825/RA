@@ -23,6 +23,7 @@ window.ExchangeAdmin = (function () {
     // Show/hide admin-only elements
     document.getElementById('exp-nav-settings').style.display = isAdmin ? '' : 'none';
     document.getElementById('exp-nav-reports').style.display = isAdmin ? '' : 'none';
+    document.getElementById('exp-nav-oversight').style.display = isAdmin ? '' : 'none';
     document.getElementById('exp-nav-ipo').style.display = (isAdmin || hasBanker) ? '' : 'none';
 
     // Sub-tab switching
