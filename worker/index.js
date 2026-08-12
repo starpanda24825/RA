@@ -263,7 +263,7 @@ export default {
         if (m && method === 'POST') return await exchange.addToWatchlist(request, env, m[1]);
         if (m && method === 'DELETE') return await exchange.removeFromWatchlist(request, env, m[1]);
 
-        // ---- Fiducia Exchange: IPO ----
+        // ---- Fiducia Exchange: Offerings ----
         if (pathname === '/api/exchange/ipo' && method === 'GET') return await exchange.listIpos(request, env);
         if (pathname === '/api/exchange/ipo/my' && method === 'GET') return await exchange.getMyIpoSubscriptions(request, env);
 

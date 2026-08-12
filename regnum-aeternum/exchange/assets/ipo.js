@@ -1,4 +1,4 @@
-// IPO JS for Fiducia Exchange
+// Public Offerings JS for Fiducia Exchange
 (function () {
   'use strict';
 
@@ -23,7 +23,7 @@
       const past = data.past || [];
       render(active, past);
     } catch(e) {
-      document.getElementById('app').innerHTML = '<div class="exchange-header"><h1 class="exchange-title">IPOs</h1></div><div class="empty-state">Could not load IPOs.</div>';
+      document.getElementById('app').innerHTML = '<div class="exchange-header"><h1 class="exchange-title">Public Offerings</h1></div><div class="empty-state">Could not load offerings.</div>';
     }
   }
 
@@ -36,16 +36,16 @@
         </div>
       </div>
 
-      ${!me ? '<div class="auth-notice">Sign in to subscribe to IPOs. <a href="../../admin/">Go to admin panel</a> to log in.</div>' : ''}
+      ${!me ? '<div class="auth-notice">Sign in to subscribe to public offerings. <a href="../../admin/">Go to admin panel</a> to log in.</div>' : ''}
 
-      <h2 style="font-family:var(--font-display);font-size:20px;font-weight:600;color:var(--parchment);margin-bottom:14px;">Active IPOs</h2>
-      ${active.length ? active.map(ipo => renderIpoCard(ipo)).join('') : '<div class="empty-state">No active IPOs at this time.</div>'}
+      <h2 style="font-family:var(--font-display);font-size:20px;font-weight:600;color:var(--parchment);margin-bottom:14px;">Active Offerings</h2>
+      ${active.length ? active.map(ipo => renderIpoCard(ipo)).join('') : '<div class="empty-state">No active offerings at this time.</div>'}
 
-      <h2 style="font-family:var(--font-display);font-size:20px;font-weight:600;color:var(--parchment);margin:32px 0 14px;">Past IPOs</h2>
+      <h2 style="font-family:var(--font-display);font-size:20px;font-weight:600;color:var(--parchment);margin:32px 0 14px;">Past Offerings</h2>
       ${past.length ? `
       <div class="ex-table-wrap">
         <table class="ex-table">
-          <thead><tr><th>Ticker</th><th>Name</th><th>IPO Price</th><th>Current</th><th>Return</th><th>Status</th></tr></thead>
+          <thead><tr><th>Ticker</th><th>Name</th><th>Offering Price</th><th>Current</th><th>Return</th><th>Status</th></tr></thead>
           <tbody>
             ${past.map(ipo => {
               const retClass = (ipo.returnPct || 0) >= 0 ? 'up' : 'down';
@@ -62,7 +62,7 @@
           </tbody>
         </table>
       </div>
-      ` : '<div class="empty-state">No past IPOs.</div>'}
+      ` : '<div class="empty-state">No past offerings.</div>'}
     `;
 
     attachHandlers();
@@ -79,7 +79,7 @@
           <div class="ipo-card__ticker">${ipo.ticker}</div>
           <div class="ipo-card__name">${esc(ipo.name)} <span style="font-size:11px;color:var(--slate-soft);">${ipo.sector}</span></div>
           <div class="ipo-card__meta">
-            IPO Price: <span>${formatNum(ipo.ipo_price)}</span> &nbsp;|&nbsp;
+            Offering Price: <span>${formatNum(ipo.ipo_price)}</span> &nbsp;|&nbsp;
             Shares Offered: <span>${formatNum(ipo.shares_in_float)}</span> &nbsp;|&nbsp;
             Subscribed: <span>${formatNum(ipo.total_subscribed)}</span>
             ${ipo.oversubscription ? `<span class="ipo-oversub"> (${ipo.oversubscription}x oversubscribed!)</span>` : ''}

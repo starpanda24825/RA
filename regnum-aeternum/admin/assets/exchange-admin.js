@@ -10,7 +10,10 @@ window.ExchangeAdmin = (function () {
   function formatNum(n) { return n != null ? n.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '—'; }
   function esc(s) { return (s || '').replace(/[<>&\"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c])); }
 
-  function statusBadge(s) { return `<span class="status-badge ${s}">${s}</span>`; }
+  function statusBadge(s) {
+    const label = s === 'ipo' ? 'offering' : s;
+    return `<span class="status-badge ${s}">${label}</span>`;
+  }
 
   async function init(user) {
     me = user;
@@ -69,7 +72,7 @@ window.ExchangeAdmin = (function () {
     // Report handlers
     document.getElementById('exp-rep-submit').addEventListener('click', fileReport);
 
-    // IPO handlers
+    // Offering handlers
     document.getElementById('exp-ipo-create').addEventListener('click', createIpo);
     document.getElementById('exp-ipo-allocate').addEventListener('click', allocateIpo);
     document.getElementById('exp-ipo-cancel').addEventListener('click', cancelIpo);
@@ -134,8 +137,8 @@ window.ExchangeAdmin = (function () {
     if (!name) return;
     const sector = prompt('Sector (BANKING, TRADE, MINING, AGRICULTURE, SERVICES, MILITARY):');
     if (!sector) return;
-    const ipoPrice = parseFloat(prompt('IPO price:') || '');
-    if (!ipoPrice || ipoPrice <= 0) return alert('Invalid IPO price.');
+    const ipoPrice = parseFloat(prompt('Offering price:') || '');
+    if (!ipoPrice || ipoPrice <= 0) return alert('Invalid offering price.');
 
     createCompany(ticker.toUpperCase(), name, sector, ipoPrice);
   }
@@ -494,7 +497,7 @@ window.ExchangeAdmin = (function () {
     } catch(e) {}
   }
 
-  // ── IPOs ───────────────────────────────────────────────────────
+  // ── Offerings ───────────────────────────────────────────────────────
 
   async function loadIpos() {
     try {
@@ -514,7 +517,7 @@ window.ExchangeAdmin = (function () {
             <button class="a-btn primary" data-view-ipo="${ipo.id}" data-ipo-ticker="${ipo.ticker}">Manage</button>
           </td>
         </tr>
-      `).join('') : '<tr><td colspan="7" style="color:var(--slate-soft);">No active IPOs.</td></tr>';
+      `).join('') : '<tr><td colspan="7" style="color:var(--slate-soft);">No active offerings.</td></tr>';
 
       document.getElementById('exp-ipo-past-tbody').innerHTML = past.length ? past.map(ipo => {
         const retClass = (ipo.returnPct || 0) >= 0 ? 'var(--teal-bright)' : 'var(--crimson-bright)';
@@ -525,7 +528,7 @@ window.ExchangeAdmin = (function () {
           <td>${formatNum(ipo.current_price)}</td>
           <td style="color:${retClass};">${ipo.returnPct != null ? (ipo.returnPct >= 0 ? '+' : '') + formatNum(ipo.returnPct) + '%' : '—'}</td>
         </tr>`;
-      }).join('') : '<tr><td colspan="5" style="color:var(--slate-soft);">No past IPOs.</td></tr>';
+      }).join('') : '<tr><td colspan="5" style="color:var(--slate-soft);">No past offerings.</td></tr>';
 
       document.querySelectorAll('[data-view-ipo]').forEach(b => b.addEventListener('click', () => openIpoSubs(b.dataset.viewIpo, b.dataset.ipoTicker)));
     } catch(e) { console.error('loadIpos:', e); }
@@ -550,7 +553,7 @@ window.ExchangeAdmin = (function () {
       });
       msg.style.display = 'block';
       if (r.ok) {
-        msg.className = 'a-msg success'; msg.textContent = 'IPO created. Players can now subscribe.';
+        msg.className = 'a-msg success'; msg.textContent = 'Offering created. Players can now subscribe.';
         document.getElementById('exp-ipo-ticker').value = '';
         document.getElementById('exp-ipo-name').value = '';
         document.getElementById('exp-ipo-sector').value = '';
@@ -571,7 +574,7 @@ window.ExchangeAdmin = (function () {
       const subs = data.subscriptions || [];
 
       document.getElementById('exp-ipo-subs-card').classList.add('active');
-      document.getElementById('exp-ipo-subs-heading').textContent = 'IPO Subscriptions — ' + ticker;
+      document.getElementById('exp-ipo-subs-heading').textContent = 'Offering Subscriptions — ' + ticker;
       document.getElementById('exp-ipo-subs-msg').style.display = 'none';
       document.getElementById('exp-ipo-subs-card').dataset.ipoId = id;
 

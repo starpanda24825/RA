@@ -537,12 +537,12 @@ export async function getSectors(request, env) {
 }
 
 // ════════════════════════════════════════════════════════════════
-// IPO SYSTEM — Player endpoints
+// OFFERINGS — Player endpoints
 // ════════════════════════════════════════════════════════════════
 
 // ── GET /api/exchange/ipo ─────────────────────────────────────────
 export async function listIpos(request, env) {
-  // Active IPOs (status = 'ipo')
+  // Active offerings (status = 'ipo')
   const { results: active } = await env.DB.prepare(
     `SELECT c.*, COUNT(o.id) AS subscription_count,
             COALESCE(SUM(o.quantity), 0) AS total_subscribed
@@ -554,7 +554,7 @@ export async function listIpos(request, env) {
      ORDER BY c.listed_at DESC`
   ).all();
 
-  // Past IPOs — companies that went through IPO allocation (have IPO_ALLOCATE audit entries)
+  // Past offerings — companies that went through offering allocation (have IPO_ALLOCATE audit entries)
   const { results: past } = await env.DB.prepare(
     `SELECT DISTINCT c.ticker, c.name, c.ipo_price, c.current_price, c.listed_at, c.status
      FROM fdx_companies c
@@ -591,7 +591,7 @@ export async function subscribeToIpo(request, env, companyId) {
     'SELECT * FROM fdx_companies WHERE id = ? AND status = ?'
   ).bind(Number(companyId), 'ipo').first();
 
-  if (!company) return json({ error: 'IPO not found or not open for subscription.' }, { status: 404 });
+  if (!company) return json({ error: 'Offering not found or not open for subscription.' }, { status: 404 });
 
   let body;
   try { body = await request.json(); }
@@ -607,7 +607,7 @@ export async function subscribeToIpo(request, env, companyId) {
   const available = await marketEngine.getAvailableBalance(env.DB, account.key);
   if (available < totalCost) {
     return json({
-      error: `Insufficient balance. IPO cost: ${totalCost}, available: ${available}.`,
+      error: `Insufficient balance. Offering cost: ${totalCost}, available: ${available}.`,
     }, { status: 422 });
   }
 
@@ -642,7 +642,7 @@ export async function cancelIpoSubscription(request, env, companyId) {
     'SELECT id FROM fdx_companies WHERE id = ? AND status = ?'
   ).bind(Number(companyId), 'ipo').first();
 
-  if (!company) return json({ error: 'IPO not found.' }, { status: 404 });
+  if (!company) return json({ error: 'Offering not found.' }, { status: 404 });
 
   await env.DB.prepare(
     `UPDATE fdx_orders SET status = 'cancelled', cancelled_at = ?

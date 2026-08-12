@@ -883,7 +883,7 @@ export async function updateReport(request, env, id) {
 }
 
 // ════════════════════════════════════════════════════════════════
-// IPO MANAGEMENT — Admin endpoints
+// OFFERINGS — Admin endpoints
 // ════════════════════════════════════════════════════════════════
 
 // ── GET /api/exchange/admin/companies/:id/ipo/subscriptions ───────
@@ -926,7 +926,7 @@ export async function allocateIpo(request, env, id) {
     .bind(Number(id)).first();
   if (!company) return json({ error: 'Company not found.' }, { status: 404 });
   if (company.status !== 'ipo') {
-    return json({ error: 'Company must be in IPO status to allocate.' }, { status: 400 });
+    return json({ error: 'Company must be in offering status to allocate.' }, { status: 400 });
   }
 
   const { results: subscriptions } = await env.DB.prepare(
@@ -966,9 +966,9 @@ export async function allocateIpo(request, env, id) {
 
       // Debit buyer
       try {
-        await debitIpo(env, sub.account_id, total);
+        await debitOffering(env, sub.account_id, total);
         // Credit exchange treasury
-        await creditIpo(env, '__exchange_treasury__', fee, 'IPO fee: ' + company.ticker);
+        await creditOffering(env, '__exchange_treasury__', fee, 'Offering fee: ' + company.ticker);
 
         // Update portfolio
         await env.DB.prepare(
@@ -989,7 +989,7 @@ export async function allocateIpo(request, env, id) {
 
         allocated += sub.quantity;
       } catch (err) {
-        console.error('IPO allocation error for', sub.account_id, err.message);
+        console.error('Offering allocation error for', sub.account_id, err.message);
         await env.DB.prepare(
           `UPDATE fdx_orders SET status = 'rejected', flag_reason = ? WHERE id = ?`
         ).bind('Insufficient funds: ' + err.message, sub.id).run();
@@ -1016,8 +1016,8 @@ export async function allocateIpo(request, env, id) {
       const total = Math.round((cost + fee) * 100) / 100;
 
       try {
-        await debitIpo(env, sub.account_id, total);
-        await creditIpo(env, '__exchange_treasury__', fee, 'IPO fee: ' + company.ticker);
+        await debitOffering(env, sub.account_id, total);
+        await creditOffering(env, '__exchange_treasury__', fee, 'Offering fee: ' + company.ticker);
 
         await env.DB.prepare(
           `INSERT INTO fdx_portfolios (account_id, company_id, quantity, average_cost, total_invested)
@@ -1036,7 +1036,7 @@ export async function allocateIpo(request, env, id) {
 
         allocatedFloat += allocatedQty;
       } catch (err) {
-        console.error('IPO oversubscription error for', sub.account_id, err.message);
+        console.error('Offering oversubscription error for', sub.account_id, err.message);
         await env.DB.prepare(
           `UPDATE fdx_orders SET status = 'rejected', flag_reason = ? WHERE id = ?`
         ).bind('Insufficient funds: ' + err.message, sub.id).run();
@@ -1072,7 +1072,7 @@ export async function cancelIpo(request, env, id) {
     .bind(Number(id)).first();
   if (!company) return json({ error: 'Company not found.' }, { status: 404 });
   if (company.status !== 'ipo') {
-    return json({ error: 'Company is not in IPO status.' }, { status: 400 });
+    return json({ error: 'Company is not in offering status.' }, { status: 400 });
   }
 
   // Cancel all subscriptions
@@ -1081,7 +1081,7 @@ export async function cancelIpo(request, env, id) {
      WHERE company_id = ? AND status = 'pending_ipo'`
   ).bind(nowIso(), Number(id)).run();
 
-  // Set company to delisted (or back to a pre-ipo state)
+  // Set company to delisted (or back to a pre-offering state)
   await env.DB.prepare(
     `UPDATE fdx_companies SET status = 'delisted', halt_reason = NULL, updated_at = ? WHERE id = ?`
   ).bind(nowIso(), Number(id)).run();
@@ -1122,7 +1122,7 @@ export async function getNewsFeed(request, env) {
      ORDER BY d.declared_at DESC LIMIT ?`
   ).bind(Math.floor(limit / 2)).all();
 
-  // Fetch recent IPOs
+  // Fetch recent offerings
   const { results: ipos } = await env.DB.prepare(
     `SELECT a.details, a.performed_at
      FROM fdx_audit_log a
@@ -1172,12 +1172,12 @@ ${r.earnings_change ? `Earnings ${r.earnings_change >= 0 ? 'up' : 'down'} ${Math
     try { details = JSON.parse(ipo.details); } catch { details = {}; }
     items.push({
       type: 'ipo',
-      headline: `New Listing: IPO Completed`,
+      headline: `New Listing: Public Offering Completed`,
       subtitle: `${details.subscribers || '?'} subscribers, ${formatNum(details.allocated || 0)} shares allocated`,
-      body: details.oversubscribed ? 'The IPO was oversubscribed. Shares were allocated on a pro-rata basis.' : 'All subscriptions were fulfilled.',
+      body: details.oversubscribed ? 'The offering was oversubscribed. Shares were allocated on a pro-rata basis.' : 'All subscriptions were fulfilled.',
       date: ipo.performed_at,
-      suggested_title: `IPO Completed: ${details.subscribers || 0} Investors Participate`,
-      suggested_content: `The latest IPO on the Fiducia Exchange has completed, with ${details.subscribers || 0} subscribers receiving ${formatNum(details.allocated || 0)} shares.${details.oversubscribed ? ' The offering was oversubscribed, demonstrating strong market demand.' : ''}`,
+      suggested_title: `Public Offering Completed: ${details.subscribers || 0} Investors Participate`,
+      suggested_content: `The latest public offering on the Fiducia Exchange has completed, with ${details.subscribers || 0} subscribers receiving ${formatNum(details.allocated || 0)} shares.${details.oversubscribed ? ' The offering was oversubscribed, demonstrating strong market demand.' : ''}`,
     });
   }
 
@@ -1187,7 +1187,7 @@ ${r.earnings_change ? `Earnings ${r.earnings_change >= 0 ? 'up' : 'down'} ${Math
   return json(items.slice(0, limit));
 }
 
-async function debitIpo(env, accountKey, amount) {
+async function debitOffering(env, accountKey, amount) {
   const account = await env.DB.prepare(
     'SELECT balance, frozen FROM banking_accounts WHERE key = ?'
   ).bind(accountKey).first();
@@ -1199,11 +1199,11 @@ async function debitIpo(env, accountKey, amount) {
   const now = nowIso();
   await env.DB.batch([
     env.DB.prepare('UPDATE banking_accounts SET balance = ?, updated_at = ? WHERE key = ?').bind(newBalance, now, accountKey),
-    env.DB.prepare('INSERT INTO banking_transactions (from_key, to_key, amount, from_balance_after, to_balance_after, description, initiated_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(accountKey, '__exchange__', amount, newBalance, 0, 'IPO_SUBSCRIPTION', 'system:ipo', now),
+    env.DB.prepare('INSERT INTO banking_transactions (from_key, to_key, amount, from_balance_after, to_balance_after, description, initiated_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(accountKey, '__exchange__', amount, newBalance, 0, 'OFFERING_SUBSCRIPTION', 'system:offering', now),
   ]);
 }
 
-async function creditIpo(env, accountKey, amount, description) {
+async function creditOffering(env, accountKey, amount, description) {
   const account = await env.DB.prepare(
     'SELECT balance FROM banking_accounts WHERE key = ?'
   ).bind(accountKey).first();
@@ -1219,7 +1219,7 @@ async function creditIpo(env, accountKey, amount, description) {
         const newBal = Math.round((existing.balance + amount) * 100) / 100;
         await env.DB.batch([
           env.DB.prepare('UPDATE banking_accounts SET balance = ?, updated_at = ? WHERE key = ?').bind(newBal, now, accountKey),
-          env.DB.prepare('INSERT INTO banking_transactions (from_key, to_key, amount, from_balance_after, to_balance_after, description, initiated_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind('__exchange__', accountKey, amount, 0, newBal, description, 'system:ipo', now),
+          env.DB.prepare('INSERT INTO banking_transactions (from_key, to_key, amount, from_balance_after, to_balance_after, description, initiated_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind('__exchange__', accountKey, amount, 0, newBal, description, 'system:offering', now),
         ]);
       }
       return;
@@ -1231,6 +1231,6 @@ async function creditIpo(env, accountKey, amount, description) {
   const now = nowIso();
   await env.DB.batch([
     env.DB.prepare('UPDATE banking_accounts SET balance = ?, updated_at = ? WHERE key = ?').bind(newBalance, now, accountKey),
-    env.DB.prepare('INSERT INTO banking_transactions (from_key, to_key, amount, from_balance_after, to_balance_after, description, initiated_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind('__exchange__', accountKey, amount, 0, newBalance, description, 'system:ipo', now),
+    env.DB.prepare('INSERT INTO banking_transactions (from_key, to_key, amount, from_balance_after, to_balance_after, description, initiated_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind('__exchange__', accountKey, amount, 0, newBalance, description, 'system:offering', now),
   ]);
 }
