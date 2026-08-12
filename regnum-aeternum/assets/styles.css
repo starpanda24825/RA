@@ -226,6 +226,49 @@ img { max-width: 100%; display: block; }
   font-style: italic;
 }
 
+/* ---------- Hero slogan cycler ---------- */
+
+.hero__slogans {
+  position: relative;
+  overflow: hidden;
+  height: 2em;
+  margin: 18px 0 0;
+  font-family: var(--font-caps);
+  font-size: clamp(15px, 2vw, 19px);
+  letter-spacing: 0.08em;
+  color: var(--gold-bright);
+  font-style: italic;
+}
+
+.hero__slogan {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  white-space: nowrap;
+  text-align: center;
+  transform: translateX(100%);
+  will-change: transform;
+}
+
+.hero__slogan--active,
+.hero__slogan--exit {
+  transition: transform 0.7s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.hero__slogan--active {
+  transform: translateX(0);
+}
+
+.hero__slogan--exit {
+  transform: translateX(-100%);
+}
+
+/* Start visible on load — first slogan slides in instantly */
+.hero__slogan[data-slogan="0"] {
+  transform: translateX(0);
+}
+
 .hero__lede {
   max-width: 540px;
   margin: 26px auto 0;
