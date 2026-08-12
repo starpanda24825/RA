@@ -24,70 +24,6 @@ async function requireAdmin(request, env) {
   return { user };
 }
 
-// ── POST /api/exchange/admin/companies ────────────────────────────
-export async function createCompany(request, env) {
-  const auth = await requireAdmin(request, env);
-  if (auth.error) return auth.error;
-
-  let body;
-  try { body = await request.json(); }
-  catch { return json({ error: 'Invalid request body.' }, { status: 400 }); }
-
-  const { ticker, name, sector, description, logo_emoji, total_shares, shares_in_float,
-          ipo_price, linked_bank_account, fundamental_earnings, fundamental_assets,
-          fundamental_liabilities, fundamental_revenue, fundamental_growth_rate,
-          fundamental_beta, status } = body;
-
-  if (!ticker || !name || !sector || !ipo_price) {
-    return json({ error: 'ticker, name, sector, and ipo_price are required.' }, { status: 400 });
-  }
-
-  const tick = ticker.toUpperCase();
-  if (!/^[A-Z]{1,4}$/.test(tick)) {
-    return json({ error: 'Ticker must be 1-4 uppercase letters.' }, { status: 400 });
-  }
-
-  const totalShares = total_shares || 1000000;
-  const floatShares = shares_in_float || Math.floor(totalShares * 0.75);
-  const price = parseFloat(ipo_price);
-  const coStatus = status || 'active';
-
-  if (!['active','ipo','halted'].includes(coStatus)) {
-    return json({ error: 'Invalid status.' }, { status: 400 });
-  }
-
-  try {
-    const result = await env.DB.prepare(
-      `INSERT INTO fdx_companies
-         (ticker, name, sector, description, logo_emoji, linked_bank_account,
-          total_shares, shares_in_float, ipo_price, current_price, status,
-          fundamental_earnings, fundamental_assets, fundamental_liabilities,
-          fundamental_revenue, fundamental_growth_rate, fundamental_beta)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(tick, name, sector, description || '', logo_emoji || '🏢',
-           linked_bank_account || null, totalShares, floatShares, price, price, coStatus,
-           fundamental_earnings || 0, fundamental_assets || 0, fundamental_liabilities || 0,
-           fundamental_revenue || 0, fundamental_growth_rate || 0, fundamental_beta || 1.0).run();
-
-    // Audit log
-    await env.DB.prepare(
-      `INSERT INTO fdx_audit_log (actor, action, entity_type, entity_id, details)
-       VALUES (?, 'CREATE_COMPANY', 'company', ?, ?)`
-    ).bind(auth.user.username, result.meta.last_row_id,
-           JSON.stringify({ ticker: tick, name })).run();
-
-    const company = await env.DB.prepare('SELECT * FROM fdx_companies WHERE id = ?')
-      .bind(result.meta.last_row_id).first();
-    return json(company, { status: 201 });
-  } catch (err) {
-    if (String(err.message).toUpperCase().includes('UNIQUE')) {
-      return json({ error: 'Ticker already exists.' }, { status: 409 });
-    }
-    console.error('Create company error:', err);
-    return json({ error: 'Server error.' }, { status: 500 });
-  }
-}
-
 // ── PUT /api/exchange/admin/companies/:id ─────────────────────────
 export async function updateCompany(request, env, id) {
   const auth = await requireAdmin(request, env);
@@ -407,9 +343,17 @@ export async function listAllCompanies(request, env) {
   const auth = await requireAdmin(request, env);
   if (auth.error) return auth.error;
 
-  const { results } = await env.DB.prepare(
-    'SELECT * FROM fdx_companies ORDER BY ticker ASC'
-  ).all();
+  const url = new URL(request.url);
+  const status = url.searchParams.get('status');
+
+  const baseSelect = `SELECT c.*, o.name AS owner_name
+     FROM fdx_companies c
+     LEFT JOIN banking_accounts ba ON ba.key = c.linked_bank_account
+     LEFT JOIN banking_accounts o  ON o.key = ba.owner_key`;
+
+  const { results } = status
+    ? await env.DB.prepare(`${baseSelect} WHERE c.status = ? ORDER BY c.ticker ASC`).bind(status).all()
+    : await env.DB.prepare(`${baseSelect} ORDER BY c.ticker ASC`).all();
 
   return json(results || []);
 }
@@ -1095,7 +1039,48 @@ export async function cancelIpo(request, env, id) {
   return json({ ok: true, status: 'delisted' });
 }
 
-// ── POST /api/exchange/admin/companies/ipo/create ─────────────────
+// ── POST /api/exchange/admin/companies/:id/offering ───────────────
+// Takes a private (unlisted) company through the public-offering flow.
+export async function openIpo(request, env, id) {
+  const auth = await requireAdmin(request, env);
+  if (auth.error) return auth.error;
+
+  const company = await env.DB.prepare('SELECT * FROM fdx_companies WHERE id = ?')
+    .bind(Number(id)).first();
+  if (!company) return json({ error: 'Company not found.' }, { status: 404 });
+  if (company.status !== 'private') {
+    return json({ error: 'Only private (unlisted) companies can open an offering.' }, { status: 400 });
+  }
+
+  let body;
+  try { body = await request.json(); }
+  catch { body = {}; }
+
+  const ipoPrice = parseFloat(body.ipo_price);
+  const floatShares = parseInt(body.shares_in_float, 10);
+  if (!Number.isFinite(ipoPrice) || ipoPrice <= 0) {
+    return json({ error: 'A valid ipo_price is required.' }, { status: 400 });
+  }
+  if (!Number.isFinite(floatShares) || floatShares <= 0) {
+    return json({ error: 'A valid shares_in_float is required.' }, { status: 400 });
+  }
+  if (floatShares > company.total_shares) {
+    return json({ error: 'Float shares cannot exceed total shares.' }, { status: 400 });
+  }
+
+  await env.DB.prepare(
+    `UPDATE fdx_companies SET status = 'ipo', ipo_price = ?, shares_in_float = ?,
+       current_price = ?, updated_at = ? WHERE id = ?`
+  ).bind(ipoPrice, floatShares, ipoPrice, nowIso(), Number(id)).run();
+
+  await env.DB.prepare(
+    `INSERT INTO fdx_audit_log (actor, action, entity_type, entity_id, details)
+     VALUES (?, 'OPEN_OFFERING', 'company', ?, ?)`
+  ).bind(auth.user.username, Number(id),
+         JSON.stringify({ ipo_price: ipoPrice, shares_in_float: floatShares })).run();
+
+  return json({ ok: true, status: 'ipo' });
+}
 // ════════════════════════════════════════════════════════════════
 // NEWS INTEGRATION — Times of Regnum exchange feed
 // ════════════════════════════════════════════════════════════════

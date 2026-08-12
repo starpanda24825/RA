@@ -546,9 +546,9 @@
     <div class="banking-subpanel active" id="exp-companies">
       <div class="admin-card">
         <h2>Listed Companies</h2>
-        <button class="a-btn primary" id="exp-new-company-btn" style="margin-bottom:14px;">+ New Company</button>
+        <p style="color:var(--slate-soft);font-size:12.5px;margin:0 0 14px;">Company accounts are created from the Banking → Accounts tab. This view is read-only.</p>
         <table class="a-table">
-          <thead><tr><th>Ticker</th><th>Name</th><th>Sector</th><th>Price</th><th>Status</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Ticker</th><th>Name</th><th>Sector</th><th>Owner</th><th>Price</th><th>Status</th><th>Actions</th></tr></thead>
           <tbody id="exp-companies-tbody"></tbody>
         </table>
       </div>
@@ -643,13 +643,13 @@
     <!-- Offerings sub-panel -->
     <div class="banking-subpanel" id="exp-ipo">
       <div class="admin-card">
-        <h2>Create Offering</h2>
+        <h2>Take Company Public</h2>
+        <p style="color:var(--slate-soft);font-size:12.5px;margin:0 0 12px;">Select a private company to open a public offering. Subscribers are then allocated shares to activate trading.</p>
         <div class="a-form" style="gap:10px;margin-bottom:10px;">
-          <div class="a-field"><label>Ticker</label><input class="a-input" id="exp-ipo-ticker" style="width:100px;"/></div>
-          <div class="a-field"><label>Name</label><input class="a-input" id="exp-ipo-name" style="width:200px;"/></div>
-          <div class="a-field"><label>Sector</label><input class="a-input" id="exp-ipo-sector" style="width:140px;"/></div>
-          <div class="a-field"><label>Offering Price</label><input class="a-input" id="exp-ipo-price" type="number" step="0.01" style="width:100px;"/></div>
-          <button class="a-btn primary" id="exp-ipo-create">Create Offering</button>
+          <div class="a-field"><label>Private Company</label><select class="a-select" id="exp-ipo-company" style="width:220px;"><option value="">Select company…</option></select></div>
+          <div class="a-field"><label>Offering Price</label><input class="a-input" id="exp-ipo-price" type="number" step="0.01" style="width:110px;"/></div>
+          <div class="a-field"><label>Float Shares</label><input class="a-input" id="exp-ipo-float" type="number" style="width:120px;"/></div>
+          <button class="a-btn primary" id="exp-ipo-create">Open Offering</button>
         </div>
         <p id="exp-ipo-create-msg" class="a-msg" style="display:none;"></p>
       </div>

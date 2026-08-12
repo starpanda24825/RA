@@ -34,7 +34,7 @@ window.ExchangeAdmin = (function () {
         btn.classList.add('active');
         document.getElementById('exp-' + btn.dataset.exp).classList.add('active');
         if (btn.dataset.exp === 'reports') loadReports();
-        if (btn.dataset.exp === 'ipo') loadIpos();
+        if (btn.dataset.exp === 'ipo') { loadIpos(); loadPrivateCompanies(); }
       });
     });
 
@@ -45,7 +45,6 @@ window.ExchangeAdmin = (function () {
     if (isAdmin) loadSettings();
 
     // Basic handlers
-    document.getElementById('exp-new-company-btn').addEventListener('click', openNewCompanyForm);
     document.getElementById('exp-div-declare').addEventListener('click', declareDividend);
     document.getElementById('exp-global-halt').addEventListener('click', globalHalt);
     document.getElementById('exp-global-resume').addEventListener('click', globalResume);
@@ -75,6 +74,13 @@ window.ExchangeAdmin = (function () {
 
     // Offering handlers
     document.getElementById('exp-ipo-create').addEventListener('click', createIpo);
+    document.getElementById('exp-ipo-company').addEventListener('change', (e) => {
+      const opt = e.target.selectedOptions && e.target.selectedOptions[0];
+      if (opt && opt.dataset.price) {
+        document.getElementById('exp-ipo-price').value = opt.dataset.price;
+        document.getElementById('exp-ipo-float').value = opt.dataset.float;
+      }
+    });
     document.getElementById('exp-ipo-allocate').addEventListener('click', allocateIpo);
     document.getElementById('exp-ipo-cancel').addEventListener('click', cancelIpo);
     document.getElementById('exp-ipo-subs-close').addEventListener('click', () => {
@@ -92,16 +98,19 @@ window.ExchangeAdmin = (function () {
           <td><span style="font-family:var(--font-mono);color:var(--gold-bright);font-weight:600;">${c.ticker}</span></td>
           <td>${esc(c.name)}</td>
           <td>${c.sector}</td>
+          <td>${esc(c.owner_name || '—')}</td>
           <td>${formatNum(c.current_price)}</td>
           <td>${statusBadge(c.status)}</td>
           <td>
-            <button class="a-btn" data-edit-co="${c.id}">Edit</button>
+            ${c.status === 'private'
+              ? '<span style="color:var(--slate-soft);font-size:12px;">Private — take public via Offerings</span>'
+              : `<button class="a-btn" data-edit-co="${c.id}">Edit</button>
             ${c.status === 'active' ? `<button class="a-btn" data-halt-co="${c.id}">Halt</button>` : ''}
             ${c.status === 'halted' ? `<button class="a-btn primary" data-resume-co="${c.id}">Resume</button>` : ''}
             <button class="a-btn" data-issue-co="${c.id}">+Shares</button>
             <button class="a-btn" data-split-co="${c.id}" data-split-ticker="${c.ticker}">Split</button>
             <button class="a-btn" data-bb-co="${c.id}" data-bb-ticker="${c.ticker}" data-bb-price="${c.current_price}" data-bb-float="${c.shares_in_float}">Buyback</button>
-            ${c.status !== 'delisted' ? `<button class="a-btn danger" data-delist-co="${c.id}" data-delist-ticker="${c.ticker}">Delist</button>` : ''}
+            ${c.status !== 'delisted' ? `<button class="a-btn danger" data-delist-co="${c.id}" data-delist-ticker="${c.ticker}">Delist</button>` : ''}`}
           </td>
         </tr>
       `).join('');
@@ -131,29 +140,6 @@ window.ExchangeAdmin = (function () {
     } catch(e) { alert('Error issuing shares.'); }
   }
 
-  function openNewCompanyForm() {
-    const ticker = prompt('Ticker symbol (1-4 uppercase letters):');
-    if (!ticker || !/^[A-Z]{1,4}$/.test(ticker.toUpperCase())) return alert('Invalid ticker.');
-    const name = prompt('Company name:');
-    if (!name) return;
-    const sector = prompt('Sector (BANKING, TRADE, MINING, AGRICULTURE, SERVICES, MILITARY):');
-    if (!sector) return;
-    const ipoPrice = parseFloat(prompt('Offering price:') || '');
-    if (!ipoPrice || ipoPrice <= 0) return alert('Invalid offering price.');
-
-    createCompany(ticker.toUpperCase(), name, sector, ipoPrice);
-  }
-
-  async function createCompany(ticker, name, sector, ipoPrice) {
-    try {
-      const r = await fetch('/api/exchange/admin/companies', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ticker, name, sector, ipo_price: ipoPrice, total_shares: 1000000, shares_in_float: 750000 }),
-      });
-      if (!r.ok) { const d = await r.json(); alert(d.error); return; }
-      loadCompanies();
-    } catch(e) { alert('Error creating company.'); }
-  }
 
   async function haltCompany(id) {
     const reason = prompt('Halt reason:') || 'Administrative halt';
@@ -535,31 +521,40 @@ window.ExchangeAdmin = (function () {
     } catch(e) { console.error('loadIpos:', e); }
   }
 
+  async function loadPrivateCompanies() {
+    try {
+      const companies = await (await fetch('/api/exchange/admin/companies?status=private')).json();
+      const sel = document.getElementById('exp-ipo-company');
+      if (!sel) return;
+      const current = sel.value;
+      sel.innerHTML = '<option value="">Select private company…</option>' +
+        (companies || []).map(c => `<option value="${c.id}" data-price="${c.ipo_price}" data-float="${c.shares_in_float}">${c.ticker} — ${esc(c.name)}</option>`).join('');
+      sel.value = current;
+    } catch(e) { console.error('loadPrivateCompanies:', e); }
+  }
+
   async function createIpo() {
-    const ticker = document.getElementById('exp-ipo-ticker').value.toUpperCase();
-    const name = document.getElementById('exp-ipo-name').value;
-    const sector = document.getElementById('exp-ipo-sector').value;
+    const companyId = document.getElementById('exp-ipo-company').value;
     const ipoPrice = parseFloat(document.getElementById('exp-ipo-price').value);
+    const floatShares = parseInt(document.getElementById('exp-ipo-float').value);
     const msg = document.getElementById('exp-ipo-create-msg');
 
-    if (!ticker || !name || !sector || !ipoPrice) {
-      msg.textContent = 'All fields required.'; msg.className = 'a-msg error'; msg.style.display = 'block'; return;
-    }
-    if (!/^[A-Z]{1,4}$/.test(ticker)) { msg.textContent = 'Invalid ticker.'; msg.className = 'a-msg error'; msg.style.display = 'block'; return; }
+    if (!companyId) { msg.textContent = 'Select a private company to take public.'; msg.className = 'a-msg error'; msg.style.display = 'block'; return; }
+    if (!ipoPrice || ipoPrice <= 0) { msg.textContent = 'Enter a valid offering price.'; msg.className = 'a-msg error'; msg.style.display = 'block'; return; }
+    if (!floatShares || floatShares <= 0) { msg.textContent = 'Enter a valid float share count.'; msg.className = 'a-msg error'; msg.style.display = 'block'; return; }
 
     try {
-      const r = await fetch('/api/exchange/admin/companies', {
+      const r = await fetch('/api/exchange/admin/companies/' + companyId + '/offering', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ticker, name, sector, ipo_price: ipoPrice, total_shares: 1000000, shares_in_float: 750000, status: 'ipo' }),
+        body: JSON.stringify({ ipo_price: ipoPrice, shares_in_float: floatShares }),
       });
       msg.style.display = 'block';
       if (r.ok) {
-        msg.className = 'a-msg success'; msg.textContent = 'Offering created. Players can now subscribe.';
-        document.getElementById('exp-ipo-ticker').value = '';
-        document.getElementById('exp-ipo-name').value = '';
-        document.getElementById('exp-ipo-sector').value = '';
+        msg.className = 'a-msg success'; msg.textContent = 'Offering opened. Players can now subscribe.';
         document.getElementById('exp-ipo-price').value = '';
+        document.getElementById('exp-ipo-float').value = '';
         loadIpos();
+        loadPrivateCompanies();
         loadCompanies();
       } else {
         const d = await r.json();

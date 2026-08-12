@@ -99,7 +99,8 @@ export async function createAccount(request, env) {
   try { body = await request.json(); }
   catch { return json({ error: 'Invalid request body.' }, { status: 400 }); }
 
-  const { name, color = 16384, type = 'personal', ownerKey = '', shares = 0, tag = '', password, userId } = body;
+  const { name, color = 16384, type = 'personal', ownerKey = '', shares = 0, tag = '', password, userId,
+          ticker, sector, ipoPrice, totalShares, floatShares, listingStatus } = body;
 
   // Patch 8: For personal accounts with a linked web user, the name
   // comes from the web user's username — don't require a separate name.
@@ -149,9 +150,39 @@ export async function createAccount(request, env) {
     passwordHash = await hash(String(password));
   }
 
+  let tickerNorm = '';
+  let sectorNorm = 'SERVICES';
+  let ipoPriceNum = 0;
+  let totalSharesNum = 1000000;
+  let floatSharesNum = 750000;
+  let listingStatusNorm = 'public';
+
   if (type === 'company') {
     const owner = await store.findBankingAccountByKey(env, ownerKey);
     if (!owner) return json({ error: 'Owner account not found.' }, { status: 404 });
+    if (owner.type !== 'personal') {
+      return json({ error: 'Company owner must be a personal account.' }, { status: 400 });
+    }
+
+    tickerNorm = String(ticker || '').toUpperCase().trim();
+    if (!/^[A-Z]{1,4}$/.test(tickerNorm)) {
+      return json({ error: 'A valid ticker (1-4 uppercase letters) is required for company accounts.' }, { status: 400 });
+    }
+    if (sector) sectorNorm = String(sector).trim().toUpperCase();
+
+    ipoPriceNum = parseFloat(ipoPrice);
+    if (!Number.isFinite(ipoPriceNum) || ipoPriceNum <= 0) {
+      return json({ error: 'A positive offering price is required for company accounts.' }, { status: 400 });
+    }
+
+    totalSharesNum = parseInt(totalShares, 10);
+    if (!Number.isFinite(totalSharesNum) || totalSharesNum <= 0) totalSharesNum = 1000000;
+
+    floatSharesNum = parseInt(floatShares, 10);
+    if (!Number.isFinite(floatSharesNum) || floatSharesNum <= 0) floatSharesNum = Math.floor(totalSharesNum * 0.75);
+    if (floatSharesNum > totalSharesNum) floatSharesNum = totalSharesNum;
+
+    if (listingStatus === 'private') listingStatusNorm = 'private';
   }
 
   const treasuryKey = type === 'treasury'
@@ -169,13 +200,35 @@ export async function createAccount(request, env) {
       ownerKey:    type === 'company' ? ownerKey : '',
       treasuryKey,
       passwordHash,
-      shares:      type === 'company' ? (Number(shares) || 0) : 0,
+      shares:      type === 'company' ? totalSharesNum : 0,
       tag:         type === 'treasury' ? String(tag).toUpperCase().slice(0, 4) : '',
     });
 
     // Link the web user to the new personal account
     if (linkedUserId) {
       await store.linkBankingAccountToUser(env, key, linkedUserId);
+    }
+
+    // Company accounts and exchange listings are the same entity: create the
+    // linked fdx_companies row so the bank and the exchange stay in sync.
+    if (type === 'company') {
+      try {
+        await env.DB.prepare(
+          `INSERT INTO fdx_companies
+             (ticker, name, sector, description, logo_emoji, linked_bank_account,
+              total_shares, shares_in_float, ipo_price, current_price, status)
+           VALUES (?, ?, ?, '', '🏢', ?, ?, ?, ?, ?, ?)`
+        ).bind(tickerNorm, String(body.name).trim(), sectorNorm, key,
+               totalSharesNum, floatSharesNum, ipoPriceNum, ipoPriceNum,
+               listingStatusNorm === 'private' ? 'private' : 'active').run();
+      } catch (fdxErr) {
+        // Roll back the bank account so a failed listing never orphans it
+        await store.deleteBankingAccount(env, key);
+        if (String(fdxErr && fdxErr.message || '').toUpperCase().includes('UNIQUE')) {
+          return json({ error: 'Ticker already exists.' }, { status: 409 });
+        }
+        throw fdxErr;
+      }
     }
 
     return json(account, { status: 201 });

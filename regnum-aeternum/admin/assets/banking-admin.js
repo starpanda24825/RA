@@ -213,9 +213,26 @@
       // Company: manual name field
       formHtml += '<div class="a-field" id="bae-company-fields" style="display:none;"><label>Account Name</label><input class="a-input" id="bae-name" style="width:100%;"/></div>';
       formHtml += '<div class="a-field"><label>Color</label><input class="a-input" id="bae-color" type="number" value="16384" style="width:100px;"/></div>';
-      formHtml += '<div class="a-form" id="bae-co-extra" style="gap:10px;display:none;">' +
-        '<div class="a-field"><label>Owner Key</label><input class="a-input" id="bae-ownerkey" style="width:220px;"/></div>' +
-        '<div class="a-field"><label>Shares</label><input class="a-input" id="bae-shares" type="number" value="0" style="width:100px;"/></div>' +
+      formHtml += '<div id="bae-co-extra" style="display:none;flex-direction:column;gap:12px;">' +
+        '<div class="a-field"><label>Owner (personal account)</label>' +
+          '<input class="a-input" id="bae-owner-search" placeholder="Search personal accounts…" autocomplete="off" style="width:100%;margin-bottom:4px;"/>' +
+          '<select class="a-select" id="bae-owner-id" size="5" style="width:100%;font-family:var(--font-mono);font-size:12px;"></select>' +
+        '</div>' +
+        '<div class="a-form" style="gap:10px;">' +
+          '<div class="a-field"><label>Ticker</label><input class="a-input" id="bae-ticker" maxlength="4" style="width:100px;text-transform:uppercase;"/></div>' +
+          '<div class="a-field"><label>Sector</label><select class="a-select" id="bae-sector" style="width:160px;">' +
+            '<option value="BANKING">BANKING</option><option value="TRADE">TRADE</option><option value="MINING">MINING</option>' +
+            '<option value="AGRICULTURE">AGRICULTURE</option><option value="SERVICES" selected>SERVICES</option><option value="MILITARY">MILITARY</option>' +
+          '</select></div>' +
+        '</div>' +
+        '<div class="a-form" style="gap:10px;">' +
+          '<div class="a-field"><label>Offering Price</label><input class="a-input" id="bae-ipo-price" type="number" step="0.01" style="width:110px;"/></div>' +
+          '<div class="a-field"><label>Total Shares</label><input class="a-input" id="bae-total-shares" type="number" value="1000000" style="width:120px;"/></div>' +
+          '<div class="a-field"><label>Float Shares</label><input class="a-input" id="bae-float-shares" type="number" value="750000" style="width:120px;"/></div>' +
+        '</div>' +
+        '<div class="a-field"><label>Listing</label><select class="a-select" id="bae-listing" style="width:160px;">' +
+          '<option value="public">Public (listed)</option><option value="private">Private (unlisted)</option>' +
+        '</select></div>' +
         '</div>';
     } else {
       formHtml += '<div class="a-field"><label>Name</label><input class="a-input" id="bae-name" style="width:100%;" value="' + esc(editing.name) + '"/></div>';
@@ -249,7 +266,10 @@
     var coExtra   = document.getElementById('bae-co-extra');
     var userSearchEl = document.getElementById('bae-user-search');
     var userIdEl = document.getElementById('bae-user-id');
+    var ownerSearchEl = document.getElementById('bae-owner-search');
+    var ownerIdEl = document.getElementById('bae-owner-id');
     var allUsers = [];
+    var allOwnerAccounts = [];
 
     if (typeSel) {
       function toggleTypeFields() {
@@ -270,6 +290,13 @@
         renderUserOptions('');
       });
 
+      // Load personal banking accounts for the company owner dropdown
+      api('/api/banking/admin/accounts?type=personal').then(function (res) {
+        if (!res.ok) return;
+        allOwnerAccounts = res.data || [];
+        renderOwnerOptions('');
+      });
+
       // Populate treasury dropdown (admin only)
       loadTreasuryOptions('bae-treasury');
 
@@ -285,9 +312,27 @@
         }
       }
 
+      function renderOwnerOptions(filter) {
+        var f = (filter || '').toLowerCase();
+        var filtered = allOwnerAccounts.filter(function (a) {
+          return !f || String(a.name).toLowerCase().indexOf(f) !== -1 || String(a.key).indexOf(f) !== -1;
+        });
+        if (ownerIdEl) {
+          ownerIdEl.innerHTML = filtered.map(function (a) {
+            return '<option value="' + esc(a.key) + '">' + esc(a.key) + ' — ' + esc(a.name) + '</option>';
+          }).join('');
+        }
+      }
+
       if (userSearchEl) {
         userSearchEl.addEventListener('input', function () {
           renderUserOptions(userSearchEl.value);
+        });
+      }
+
+      if (ownerSearchEl) {
+        ownerSearchEl.addEventListener('input', function () {
+          renderOwnerOptions(ownerSearchEl.value);
         });
       }
     } else {
@@ -308,9 +353,16 @@
           // Backend uses web username as account name and copies password hash
         } else {
           body.name = document.getElementById('bae-name').value;
-          body.ownerKey = document.getElementById('bae-ownerkey').value;
-          body.shares = Number(document.getElementById('bae-shares').value) || 0;
+          body.ownerKey = ownerIdEl ? ownerIdEl.value : '';
+          body.ticker = document.getElementById('bae-ticker').value;
+          body.sector = document.getElementById('bae-sector').value;
+          body.ipoPrice = Number(document.getElementById('bae-ipo-price').value);
+          body.totalShares = Number(document.getElementById('bae-total-shares').value);
+          body.floatShares = Number(document.getElementById('bae-float-shares').value);
+          body.listingStatus = document.getElementById('bae-listing').value;
           if (!body.name) { msg.show('error', 'Account name is required.'); return; }
+          if (!body.ownerKey) { msg.show('error', 'Please select a personal account as the company owner.'); return; }
+          if (!body.ticker) { msg.show('error', 'Ticker is required.'); return; }
         }
         // Include treasury assignment (admins select; bankers auto-assigned by backend)
         if (isAdmin) {

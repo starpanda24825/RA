@@ -50,6 +50,8 @@ export async function getCompany(request, env, ticker) {
   ).bind(ticker.toUpperCase()).first();
 
   if (!company) return json({ error: 'Company not found.' }, { status: 404 });
+  // Private (unlisted) companies are not exposed on the public market
+  if (company.status === 'private') return json({ error: 'Company not found.' }, { status: 404 });
 
   // Get 52-week high/low
   const yearAgo = new Date(Date.now() - 365 * 86400000).toISOString();

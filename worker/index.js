@@ -276,7 +276,6 @@ export default {
 
         // ---- Fiducia Exchange (Admin) ----
         if (pathname === '/api/exchange/admin/companies' && method === 'GET') return await exchangeAdmin.listAllCompanies(request, env);
-        if (pathname === '/api/exchange/admin/companies' && method === 'POST') return await exchangeAdmin.createCompany(request, env);
         if (pathname === '/api/exchange/admin/dividends' && method === 'POST') return await exchangeAdmin.declareDividend(request, env);
         if (pathname === '/api/exchange/admin/dividends' && method === 'GET') return await exchangeAdmin.listDividends(request, env);
         if (pathname === '/api/exchange/admin/audit' && method === 'GET') return await exchangeAdmin.getAuditLog(request, env);
@@ -328,6 +327,9 @@ export default {
 
         m = pathname.match(/^\/api\/exchange\/admin\/companies\/(\d+)\/ipo\/cancel$/);
         if (m && method === 'POST') return await exchangeAdmin.cancelIpo(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/exchange\/admin\/companies\/(\d+)\/offering$/);
+        if (m && method === 'POST') return await exchangeAdmin.openIpo(request, env, m[1]);
 
         m = pathname.match(/^\/api\/exchange\/admin\/dividends\/(\d+)$/);
         if (m && method === 'DELETE') return await exchangeAdmin.cancelDividend(request, env, m[1]);
