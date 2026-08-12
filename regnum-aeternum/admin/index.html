@@ -12,6 +12,7 @@
 <link rel="stylesheet" href="../assets/styles.css" />
 <link rel="stylesheet" href="assets/legal-builder.css" />
 <link rel="stylesheet" href="assets/banking-admin.css" />
+<link rel="stylesheet" href="assets/newspaper-editor.css" />
 <style>
 #admin-gate { display:none; }
 #admin-app  { display:none; }
@@ -247,6 +248,75 @@
           <button class="a-btn" id="ed-cancel-btn">Cancel</button>
         </div>
         <p id="editor-msg" class="a-msg" style="display:none;"></p>
+      </div>
+    </div>
+
+    <!-- Newspapers -->
+    <div class="admin-card" id="newspapers-list-card">
+      <h2>Times of Regnum — Newspapers</h2>
+      <button class="a-btn primary" id="new-newspaper-btn" style="margin-bottom:16px;">+ New Newspaper</button>
+      <table class="a-table">
+        <thead><tr><th>Title</th><th>Author</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody id="newspapers-tbody"></tbody>
+      </table>
+    </div>
+
+    <div class="admin-card legal-editor" id="newspaper-editor">
+      <h2 id="np-editor-heading">New Newspaper</h2>
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <div class="a-form" style="gap:14px;">
+          <div class="a-field"><label>Slug (lowercase-hyphenated)</label><input class="a-input" id="np-slug" style="width:220px;"/></div>
+          <div class="a-field"><label>Title</label><input class="a-input" id="np-title" style="width:300px;"/></div>
+        </div>
+        <div class="np-editor-wrap">
+          <div class="np-canvas-scroll">
+            <div class="np-zoom-bar">
+              <button class="np-zoom-btn" data-action="zoom-out" title="Zoom out">−</button>
+              <span class="np-zoom-label" id="np-zoom-label">100%</span>
+              <button class="np-zoom-btn" data-action="zoom-reset" title="Reset zoom" style="font-size:10px;">1:1</button>
+              <button class="np-zoom-btn" data-action="zoom-fit" title="Fit to view" style="font-size:10px;">⊡</button>
+              <button class="np-zoom-btn" data-action="zoom-in" title="Zoom in">+</button>
+            </div>
+            <div class="np-canvas-wrap">
+              <div class="np-canvas-zoom-wrap" id="np-canvas-zoom-wrap">
+                <div class="np-canvas" id="np-canvas"></div>
+              </div>
+            </div>
+          </div>
+          <div class="np-sidebar" id="np-sidebar">
+            <div class="np-panel">
+              <div class="np-panel__title">Add Section</div>
+              <div class="np-add-btns">
+                <button class="np-add-btn" data-action="add-section" data-type="banner">+ Banner</button>
+                <button class="np-add-btn" data-action="add-section" data-type="heading">+ Heading</button>
+                <button class="np-add-btn" data-action="add-section" data-type="text">+ Text</button>
+                <button class="np-add-btn" data-action="add-section" data-type="image">+ Image</button>
+                <button class="np-add-btn" data-action="add-section" data-type="quote">+ Quote</button>
+              </div>
+            </div>
+            <div class="np-panel">
+              <div class="np-panel__title">Masthead</div>
+              <div class="np-props">
+                <label>Title</label><input data-masthead-prop="title" value="THE SOCIETY"/>
+                <label>Volume</label><input data-masthead-prop="volume" value="VOL. 1, NO. 1"/>
+                <label>Date</label><input data-masthead-prop="date" value="12 MARCH 2026"/>
+                <label>Website</label><input data-masthead-prop="website" value="REGNUM-AETERNUM.COM"/>
+              </div>
+            </div>
+            <div class="np-panel">
+              <div class="np-panel__title">Layers</div>
+              <div class="np-layers-list"></div>
+            </div>
+            <div class="np-panel">
+              <div class="np-panel__title">Properties</div>
+              <div class="np-props"><p style="color:var(--slate-soft);font-size:12px;">Select a section to edit.</p></div>
+            </div>
+            <button class="np-save-btn" id="np-save-btn">Save Draft</button>
+            <button class="a-btn primary" id="np-publish-btn" style="width:100%;margin-top:6px;">Save &amp; Publish</button>
+            <button class="a-btn" id="np-cancel-btn" style="width:100%;margin-top:4px;">Cancel</button>
+            <p id="np-editor-msg" class="a-msg" style="display:none;"></p>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -634,6 +704,7 @@
 </div>
 
 <script src="assets/legal-builder.js"></script>
+<script src="assets/newspaper-editor.js"></script>
 <script src="assets/banking-admin.js" defer></script>
 <script>
 (async function () {
@@ -687,6 +758,7 @@
 
     loadUsers();
     loadArticles();
+    loadNewspapers();
     loadActs();
     loadCaseLaw();
     loadPlots();
@@ -920,6 +992,104 @@
 
   document.getElementById('ed-save-btn').addEventListener('click', () => saveArticle(false));
   document.getElementById('ed-publish-btn').addEventListener('click', () => saveArticle(true));
+
+  // ── Newspapers management ──────────────────────────────────────
+
+  let editingNpId = null;
+
+  async function loadNewspapers() {
+    const r = await fetch('/api/news/newspapers/all');
+    if (!r.ok) return;
+    const papers = await r.json();
+    const tbody = document.getElementById('newspapers-tbody');
+    tbody.innerHTML = papers.map(p => `
+      <tr>
+        <td>${escapeHtml(p.title)}</td>
+        <td>${escapeHtml(p.author)}</td>
+        <td>${statusPill(p.status)}</td>
+        <td>
+          <button class="a-btn" data-edit-np="${p.id}">Edit</button>
+          ${p.status === 'published'
+            ? `<button class="a-btn" data-unpub-np="${p.id}">Unpublish</button>`
+            : `<button class="a-btn primary" data-pub-np="${p.id}">Publish</button>`}
+          ${userHasRole(me, 'admin') ? `<button class="a-btn danger" data-del-np="${p.id}">Delete</button>` : ''}
+        </td>
+      </tr>
+    `).join('');
+
+    tbody.querySelectorAll('[data-edit-np]').forEach(b => b.addEventListener('click', () => openNpEditor(b.dataset.editNp, true)));
+    tbody.querySelectorAll('[data-pub-np]').forEach(b => b.addEventListener('click', async () => {
+      await fetch('/api/news/newspapers/' + b.dataset.pubNp + '/publish', { method: 'PUT' });
+      loadNewspapers();
+    }));
+    tbody.querySelectorAll('[data-unpub-np]').forEach(b => b.addEventListener('click', async () => {
+      await fetch('/api/news/newspapers/' + b.dataset.unpubNp + '/unpublish', { method: 'PUT' });
+      loadNewspapers();
+    }));
+    tbody.querySelectorAll('[data-del-np]').forEach(b => b.addEventListener('click', async () => {
+      if (!confirm('Delete this newspaper permanently?')) return;
+      await fetch('/api/news/newspapers/' + b.dataset.delNp, { method: 'DELETE' });
+      loadNewspapers();
+    }));
+  }
+
+  function openNpEditor(id, isEdit) {
+    editingNpId = id || null;
+    document.getElementById('np-editor-msg').style.display = 'none';
+    document.getElementById('newspaper-editor').classList.add('active');
+    document.getElementById('np-editor-heading').textContent = isEdit ? 'Edit Newspaper' : 'New Newspaper';
+
+    // Init editor if not already
+    if (!window._npEditorInited) {
+      NewspaperEditor.init(document.getElementById('newspaper-editor'), me);
+      window._npEditorInited = true;
+    }
+
+    if (isEdit) {
+      fetch('/api/news/newspapers/' + id).then(r => r.json()).then(paper => {
+        var layout = typeof paper.layout_json === 'string' ? JSON.parse(paper.layout_json) : paper.layout_json;
+        NewspaperEditor.setData({ id: paper.id, slug: paper.slug, title: paper.title, status: paper.status, layout: layout });
+      });
+    } else {
+      NewspaperEditor.resetNew();
+    }
+    document.getElementById('newspaper-editor').scrollIntoView({ behavior: 'smooth' });
+  }
+
+  document.getElementById('new-newspaper-btn').addEventListener('click', () => openNpEditor(null, false));
+  document.getElementById('np-cancel-btn').addEventListener('click', () => {
+    document.getElementById('newspaper-editor').classList.remove('active');
+  });
+
+  async function saveNewspaper(publish) {
+    var msg = document.getElementById('np-editor-msg');
+    msg.style.display = 'none';
+    var data = NewspaperEditor.getData();
+    if (!data) return;
+    var body = JSON.stringify({ title: data.title, layout: data.layout });
+    var id = editingNpId;
+    var r;
+    if (id) {
+      r = await fetch('/api/news/newspapers/' + id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: body });
+    } else {
+      var slug = document.getElementById('np-slug').value.trim().toLowerCase() || data.title.toLowerCase().replace(/\s+/g,'-');
+      r = await fetch('/api/news/newspapers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slug: slug, title: data.title, layout: data.layout }) });
+      var res = await r.json();
+      id = res.id;
+    }
+    if (!r.ok) {
+      msg.className = 'a-msg error'; msg.style.display = 'block'; msg.textContent = 'Could not save newspaper.';
+      return;
+    }
+    if (publish) await fetch('/api/news/newspapers/' + id + '/publish', { method: 'PUT' });
+    msg.className = 'a-msg success'; msg.style.display = 'block';
+    msg.textContent = publish ? 'Saved and published.' : 'Draft saved.';
+    editingNpId = id;
+    loadNewspapers();
+  }
+
+  document.getElementById('np-save-btn').addEventListener('click', () => saveNewspaper(false));
+  document.getElementById('np-publish-btn').addEventListener('click', () => saveNewspaper(true));
 
   // ── Legal Information System (admin only) ──────────────────────
 

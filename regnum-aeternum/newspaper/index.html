@@ -50,11 +50,70 @@
   color: var(--slate-soft); letter-spacing: 0.04em;
 }
 
+/* Newspaper cards */
+.newspaper-card {
+  background: #f4ecd8;
+  border: 2px solid #8b775a;
+  border-radius: 3px;
+  padding: 18px;
+  margin-bottom: 28px;
+  position: relative;
+  box-shadow: 2px 3px 8px rgba(0,0,0,0.3);
+  font-family: 'Georgia', serif;
+  color: #1a1a1a;
+}
+.newspaper-card__masthead {
+  text-align: center;
+  border-bottom: 3px double #1a1a1a;
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+}
+.newspaper-card__masthead-title {
+  font-size: 28px;
+  font-weight: bold;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  margin: 0;
+}
+.newspaper-card__masthead-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin-top: 4px;
+}
+.newspaper-card__view {
+  display: inline-block;
+  margin-top: 10px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: var(--crimson);
+  color: var(--parchment);
+  border: none;
+  border-radius: 100px;
+  padding: 6px 16px;
+  cursor: pointer;
+}
+.newspaper-card__view:hover { background: var(--crimson-bright); }
+
 .newsempty {
   text-align: center;
   color: var(--parchment-dim);
   font-size: 14.5px;
   padding: 40px 0;
+}
+.section-divider {
+  margin: 50px 0 36px;
+  text-align: center;
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--parchment);
+  border-top: 1px solid var(--slate-line);
+  padding-top: 40px;
 }
 </style>
 </head>
@@ -76,6 +135,11 @@
 
   <div id="article-list">
     <p class="newsempty">Loading dispatches…</p>
+  </div>
+
+  <div class="section-divider">— Newspapers —</div>
+  <div id="newspaper-list">
+    <p class="newsempty">Loading newspapers…</p>
   </div>
 
   <p style="text-align:center;margin-top:24px;">
@@ -119,6 +183,34 @@
   } catch (e) {
     // No backend reachable yet (e.g. viewing the static files directly) — fall back gracefully.
     listEl.innerHTML = '<p class="newsempty">The realm\'s newspaper. Dispatches and notices, published by the Crown, will appear here. The first edition is being set.</p>';
+  }
+
+  // Load newspapers
+  var npListEl = document.getElementById('newspaper-list');
+  try {
+    var r2 = await fetch('/api/news/newspapers');
+    if (r2.ok) {
+      var papers = await r2.json();
+      if (papers.length) {
+        npListEl.innerHTML = papers.map(function(p) {
+          var layout = typeof p.layout_json === 'string' ? JSON.parse(p.layout_json) : p.layout_json;
+          var mh = layout.masthead || {};
+          return '<a class="newspaper-card" href="view.html?id='+p.id+'">'+
+            '<div class="newspaper-card__masthead">'+
+              '<div class="newspaper-card__masthead-title">'+escapeHtml(mh.title||p.title)+'</div>'+
+              '<div class="newspaper-card__masthead-row"><span>'+escapeHtml(mh.volume||'')+'</span><span>'+escapeHtml(mh.website||'')+'</span><span>'+escapeHtml(mh.date||'')+'</span></div>'+
+            '</div>'+
+            '<div style="text-align:center;"><span class="newspaper-card__view">Read Edition</span></div>'+
+          '</a>';
+        }).join('');
+      } else {
+        npListEl.innerHTML = '<p class="newsempty">No editions have been published yet.</p>';
+      }
+    } else {
+      npListEl.innerHTML = '<p class="newsempty">No editions published yet.</p>';
+    }
+  } catch(e) {
+    npListEl.innerHTML = '<p class="newsempty">Newspapers will appear here when published.</p>';
   }
 })();
 </script>

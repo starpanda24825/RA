@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Times of Regnum — Edition</title>
+<link rel="icon" href="../assets/logo.webp" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant:wght@500;600;700&family=Cormorant+SC:wght@500;600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/styles.css" />
+<style>
+.np-viewer-wrap { max-width:860px; margin:40px auto 80px; padding:0 var(--edge); display:flex; justify-content:center; }
+.np-page {
+  position: relative;
+  background: #f4ecd8;
+  box-shadow: 0 4px 28px rgba(0,0,0,0.45);
+  border-radius: 3px;
+  font-family: 'Georgia',serif;
+  color: #1a1a1a;
+  overflow: hidden;
+}
+/* Lined paper effect */
+.np-page::before {
+  content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background: repeating-linear-gradient(0deg, transparent, transparent 28px, rgba(139,119,90,0.05) 29px);
+  border-radius: 3px;
+}
+.np-masthead { position: absolute; left: 50%; transform: translateX(-50%); text-align: center; z-index: 5; }
+.np-masthead__title { font-weight: bold; font-size: 18px; letter-spacing: 0.02em; text-transform: uppercase; margin: 0; }
+.np-masthead__rules { height: 2px; background: #1a1a1a; margin: 3px 0; }
+.np-masthead__row { display: flex; justify-content: space-between; gap: 12px; font-size: 8px; letter-spacing: 0.04em; text-transform: uppercase; padding: 2px 4px 0; }
+.np-section { position: absolute; overflow: hidden; z-index: 1; box-sizing: border-box; }
+.np-section--banner { display: flex; align-items: center; justify-content: center; }
+.np-section--banner::before, .np-section--banner::after { content: ""; position: absolute; left: 0; right: 0; height: 1px; background: #1a1a1a; }
+.np-section--banner::before { top: 0; } .np-section--banner::after { bottom: 0; }
+.np-banner-text { font-weight: bold; font-size: 14px; letter-spacing: 0.06em; text-transform: uppercase; text-align: center; width: 100%; }
+.np-section--heading { font-weight: bold; font-size: 16px; line-height: 1.2; text-transform: uppercase; letter-spacing: 0.02em; padding: 6px 8px; }
+.np-section--text { font-size: 12px; line-height: 1.5; padding: 6px 8px; white-space: pre-wrap; }
+.np-section--quote { font-style: italic; font-size: 13px; padding: 10px 14px; border-top: 2px double #1a1a1a; border-bottom: 2px double #1a1a1a; text-align: center; display: flex; align-items: center; justify-content: center; }
+.np-section--image { display: flex; align-items: center; justify-content: center; }
+.np-section--image img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.newsempty { text-align: center; color: var(--parchment-dim); font-size: 14.5px; padding: 80px 0; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a href="../" style="display:flex;align-items:center;gap:14px;">
+    <img class="topbar__crest" src="../assets/logo.webp" alt="Crest of Regnum Aeternum" />
+    <span class="topbar__name">Regnum Aeternum</span>
+  </a>
+  <span class="topbar__tag">Times of Regnum</span>
+</header>
+
+<main>
+  <div class="np-viewer-wrap" id="np-viewer-wrap">
+    <p class="newsempty">Loading edition…</p>
+  </div>
+  <p style="text-align:center;margin-bottom:40px;">
+    <a href="./" style="color:var(--gold-bright);font-family:var(--font-mono);font-size:12px;letter-spacing:0.06em;text-transform:uppercase;">&larr; All Editions</a>
+  </p>
+</main>
+
+<script>
+(function(){
+  function escapeHtml(s){return String(s==null?'':s).replace(/[&<>\"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c];});}
+  function getParam(n){var m=(window.location.search||'').match(new RegExp('[?&]'+n+'=([^&]*)'));return m?decodeURIComponent(m[1].replace(/\+/g,' ')):null;}
+
+  var id = getParam('id');
+  if (!id) { document.getElementById('np-viewer-wrap').innerHTML = '<p class="newsempty">No edition specified.</p>'; return; }
+
+  fetch('/api/news/newspapers/' + id).then(function(r){ return r.ok?r.json():null; }).then(function(paper){
+    if (!paper) { document.getElementById('np-viewer-wrap').innerHTML = '<p class="newsempty">Edition not found.</p>'; return; }
+    document.title = (paper.title||'Edition') + ' — Times of Regnum';
+    var layout = typeof paper.layout_json === 'string' ? JSON.parse(paper.layout_json) : paper.layout_json;
+    var L = layout;
+    var wrap = document.getElementById('np-viewer-wrap');
+
+    var pageEl = document.createElement('div');
+    pageEl.className = 'np-page';
+    pageEl.style.cssText = 'width:'+L.pageWidth+'px;height:'+L.pageHeight+'px;';
+
+    // Masthead
+    var mh = L.masthead || {};
+    var mhEl = document.createElement('div');
+    mhEl.className = 'np-masthead';
+    mhEl.style.cssText = 'top:'+(mh.y||8)+'px;width:'+((mh.w||L.pageWidth-20))+'px;';
+    mhEl.innerHTML = '<div class="np-masthead__title">'+escapeHtml(mh.title)+'</div>'+
+      '<div class="np-masthead__rules"></div><div class="np-masthead__rules"></div>'+
+      '<div class="np-masthead__row"><span>'+escapeHtml(mh.volume)+'</span><span>'+escapeHtml(mh.website)+'</span><span>'+escapeHtml(mh.date)+'</span></div>';
+    pageEl.appendChild(mhEl);
+
+    // Sections
+    var sorted = (L.sections||[]).slice().sort(function(a,b){return a.z-b.z;});
+    sorted.forEach(function(s){
+      var el = document.createElement('div');
+      el.className = 'np-section np-section--'+s.type;
+      el.style.cssText = 'left:'+s.x+'px;top:'+s.y+'px;width:'+s.w+'px;height:'+s.h+'px;z-index:'+s.z+';';
+      if (s.type==='banner') {
+        el.innerHTML = '<span class="np-banner-text">'+escapeHtml(s.text||'BREAKING NEWS')+'</span>';
+      } else if (s.type==='heading') {
+        el.innerHTML = escapeHtml(s.text||'');
+      } else if (s.type==='quote') {
+        el.innerHTML = escapeHtml(s.text||'');
+      } else if (s.type==='text') {
+        el.innerHTML = escapeHtml(s.text||'');
+      } else if (s.type==='image' && s.src) {
+        el.innerHTML = '<img src="'+s.src+'" alt="" />';
+      }
+      pageEl.appendChild(el);
+    });
+
+    wrap.innerHTML = '';
+    wrap.appendChild(pageEl);
+  }).catch(function(){
+    document.getElementById('np-viewer-wrap').innerHTML = '<p class="newsempty">Unable to load this edition.</p>';
+  });
+})();
+</script>
+<script src="../assets/auth-widget.js" defer></script>
+</body>
+</html>

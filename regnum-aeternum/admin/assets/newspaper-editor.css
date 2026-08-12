@@ -1,0 +1,405 @@
+/* ============================================================
+   REGNUM AETERNUM — Admin: Newspaper Editor
+   Vintage newspaper layout editor with drag-to-resize sections,
+   layers management, and image upload.
+   ============================================================ */
+
+/* ---------- Editor wrapper ---------- */
+
+.np-editor-wrap {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+/* ---------- Canvas area ---------- */
+
+.np-canvas-scroll {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 20px;
+  background: var(--ink-soft);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* Zoom bar */
+.np-zoom-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  flex-shrink: 0;
+}
+.np-zoom-btn {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1;
+  width: 28px;
+  height: 28px;
+  background: var(--ink-elevated);
+  border: 1px solid var(--slate-line);
+  color: var(--parchment-dim);
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.np-zoom-btn:hover { border-color: var(--gold-dim); color: var(--parchment); }
+.np-zoom-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--slate-soft);
+  min-width: 42px;
+  text-align: center;
+}
+
+.np-canvas-wrap {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.np-canvas-zoom-wrap {
+  flex-shrink: 0;
+}
+.np-canvas {
+  position: relative;
+  background: #f4ecd8;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+  border-radius: 3px;
+  flex-shrink: 0;
+  transform-origin: top center;
+  transition: transform 0.2s ease;
+}
+.np-canvas::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg, transparent, transparent 28px, rgba(139,119,90,0.06) 29px
+  );
+  pointer-events: none;
+  z-index: 0;
+  border-radius: 3px;
+}
+
+/* ---------- Masthead ---------- */
+
+.np-masthead {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  z-index: 5;
+  pointer-events: none;
+}
+.np-masthead__title {
+  font-family: 'Georgia', serif;
+  font-weight: bold;
+  font-size: 18px;
+  letter-spacing: 0.02em;
+  color: #1a1a1a;
+  margin: 0;
+  text-transform: uppercase;
+}
+.np-masthead__rules {
+  height: 2px;
+  background: #1a1a1a;
+  margin: 3px 0;
+}
+.np-masthead__rules + .np-masthead__rules { margin-top: 0; }
+.np-masthead__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-family: 'Georgia', serif;
+  font-size: 8px;
+  letter-spacing: 0.04em;
+  color: #1a1a1a;
+  text-transform: uppercase;
+  padding: 2px 4px 0;
+}
+
+/* ---------- Sections ---------- */
+
+.np-section {
+  position: absolute;
+  border: 1px solid transparent;
+  cursor: move;
+  z-index: 1;
+  min-width: 40px;
+  min-height: 20px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.np-section:hover {
+  border-color: rgba(201,162,39,0.4) !important;
+  box-shadow: 0 0 0 1px rgba(201,162,39,0.25);
+}
+.np-section--selected {
+  border-color: var(--gold-bright) !important;
+  box-shadow: 0 0 0 2px rgba(201,162,39,0.4);
+  z-index: 999 !important;
+}
+
+/* Section type styles */
+.np-section--banner {
+  background: transparent;
+  border: none !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.np-section--banner .np-banner-text {
+  font-family: 'Georgia', serif;
+  font-weight: bold;
+  font-size: 14px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #1a1a1a;
+  width: 100%;
+  text-align: center;
+}
+.np-section--banner::before,
+.np-section--banner::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: #1a1a1a;
+}
+.np-section--banner::before { top: 0; }
+.np-section--banner::after { bottom: 0; }
+
+.np-section--heading .np-heading-text,
+.np-section--quote .np-quote-text,
+.np-section--text .np-text-area {
+  width: 100%;
+  height: 100%;
+  font-family: 'Georgia', serif;
+  color: #1a1a1a;
+  background: transparent;
+  border: none;
+  outline: none;
+  resize: none;
+  padding: 6px 8px;
+  line-height: 1.5;
+  font-size: 12px;
+  box-sizing: border-box;
+}
+.np-section--heading .np-heading-text {
+  font-weight: bold;
+  font-size: 16px;
+  line-height: 1.2;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.np-section--quote .np-quote-text {
+  font-style: italic;
+  font-size: 13px;
+  padding: 10px 14px;
+  border-top: 2px double #1a1a1a;
+  border-bottom: 2px double #1a1a1a;
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.np-section--image {
+  background: rgba(139,119,90,0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed rgba(139,119,90,0.3);
+}
+.np-section--image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.np-section--image .np-image-placeholder {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: rgba(139,119,90,0.5);
+  text-align: center;
+  pointer-events: none;
+}
+
+/* ---------- Resize handles ---------- */
+
+.np-handle {
+  position: absolute;
+  z-index: 1000;
+  background: transparent;
+}
+.np-handle--n  { top: -4px; left: 4px; right: 4px; height: 8px; cursor: n-resize; }
+.np-handle--s  { bottom: -4px; left: 4px; right: 4px; height: 8px; cursor: s-resize; }
+.np-handle--e  { right: -4px; top: 4px; bottom: 4px; width: 8px; cursor: e-resize; }
+.np-handle--w  { left: -4px; top: 4px; bottom: 4px; width: 8px; cursor: w-resize; }
+.np-handle--nw { top: -4px; left: -4px; width: 10px; height: 10px; cursor: nw-resize; }
+.np-handle--ne { top: -4px; right: -4px; width: 10px; height: 10px; cursor: ne-resize; }
+.np-handle--sw { bottom: -4px; left: -4px; width: 10px; height: 10px; cursor: sw-resize; }
+.np-handle--se { bottom: -4px; right: -4px; width: 10px; height: 10px; cursor: se-resize; }
+
+.np-section--selected .np-handle {
+  background: var(--gold-bright);
+  border-radius: 1px;
+  opacity: 0.9;
+}
+.np-section--selected .np-handle--n,
+.np-section--selected .np-handle--s { height: 4px; top: -2px; }
+.np-section--selected .np-handle--s { top: auto; bottom: -2px; }
+.np-section--selected .np-handle--e,
+.np-section--selected .np-handle--w { width: 4px; left: -2px; }
+.np-section--selected .np-handle--e { left: auto; right: -2px; }
+.np-section--selected .np-handle--nw,
+.np-section--selected .np-handle--ne,
+.np-section--selected .np-handle--sw,
+.np-section--selected .np-handle--se { width: 8px; height: 8px; top: -4px; left: -4px; }
+.np-section--selected .np-handle--ne { left: auto; right: -4px; }
+.np-section--selected .np-handle--sw { top: auto; bottom: -4px; }
+.np-section--selected .np-handle--se { top: auto; left: auto; bottom: -4px; right: -4px; }
+
+/* ---------- Toolbar / sidebar ---------- */
+
+.np-sidebar {
+  width: 240px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.np-panel {
+  background: var(--ink-elevated);
+  border: 1px solid var(--slate-line);
+  border-radius: 9px;
+  padding: 12px;
+}
+.np-panel__title {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--slate-soft);
+  margin: 0 0 10px;
+}
+
+/* Layers list */
+.np-layers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.np-layer-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 7px;
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--parchment-dim);
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.np-layer-item:hover { background: var(--ink-soft); }
+.np-layer-item--selected { background: rgba(201,162,39,0.1); border-color: var(--gold-dim); color: var(--gold-bright); }
+.np-layer-item__type {
+  font-size: 9px;
+  text-transform: uppercase;
+  color: var(--slate-soft);
+  width: 40px;
+  flex-shrink: 0;
+}
+.np-layer-item__btns {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+}
+.np-layer-item__btn {
+  background: none;
+  border: none;
+  color: var(--slate-soft);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.np-layer-item__btn:hover { color: var(--parchment); background: var(--ink-soft); }
+
+/* Section properties */
+.np-props { display: flex; flex-direction: column; gap: 8px; }
+.np-props label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--slate-soft);
+}
+.np-props input, .np-props textarea, .np-props select {
+  font-family: var(--font-body);
+  font-size: 12px;
+  color: var(--parchment);
+  background: var(--ink-soft);
+  border: 1px solid var(--slate-line);
+  border-radius: 6px;
+  padding: 6px 8px;
+  width: 100%;
+}
+.np-props textarea { min-height: 60px; resize: vertical; }
+.np-props input:focus, .np-props textarea:focus, .np-props select:focus {
+  outline: none;
+  border-color: var(--gold-dim);
+}
+
+/* Add section buttons */
+.np-add-btns { display: flex; flex-wrap: wrap; gap: 4px; }
+.np-add-btn {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: none;
+  border: 1px solid var(--slate-line);
+  color: var(--parchment-dim);
+  border-radius: 100px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.np-add-btn:hover { border-color: var(--gold-dim); color: var(--parchment); }
+
+.np-save-btn {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: var(--crimson);
+  border: 1px solid var(--crimson-bright);
+  color: var(--parchment);
+  border-radius: 8px;
+  padding: 10px 0;
+  cursor: pointer;
+  width: 100%;
+}
+.np-save-btn:hover { background: var(--crimson-bright); }
+.np-save-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+.np-msg {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  margin: 0;
+  display: none;
+}
+.np-msg.error { color: #e3a3a3; }
+.np-msg.success { color: var(--teal-bright); }

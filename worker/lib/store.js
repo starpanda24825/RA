@@ -997,3 +997,61 @@ export async function listCCTokens(env) {
   return results;
 }
 
+// ---------- newspapers ----------
+
+export async function listPublishedNewspapers(env) {
+  const { results } = await env.DB.prepare(
+    "SELECT * FROM newspapers WHERE status = 'published' ORDER BY published_at DESC"
+  ).all();
+  return results;
+}
+
+export async function listAllNewspapers(env) {
+  const { results } = await env.DB.prepare(
+    'SELECT id, slug, title, author, status, created_at, published_at FROM newspapers ORDER BY created_at DESC'
+  ).all();
+  return results;
+}
+
+export async function findNewspaperById(env, id) {
+  return env.DB.prepare('SELECT * FROM newspapers WHERE id = ?').bind(Number(id)).first();
+}
+
+export async function findNewspaperBySlug(env, slug) {
+  return env.DB.prepare('SELECT * FROM newspapers WHERE slug = ?').bind(slug).first();
+}
+
+export async function insertNewspaper(env, { slug, title, author, layoutJson }) {
+  const now = nowIso();
+  try {
+    const result = await env.DB.prepare(
+      'INSERT INTO newspapers (slug, title, author, status, layout_json, created_at, updated_at, published_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)'
+    ).bind(slug, title, author, 'draft', layoutJson, now, now).run();
+    return findNewspaperById(env, result.meta.last_row_id);
+  } catch (err) {
+    if (String(err && err.message || '').toUpperCase().includes('UNIQUE')) {
+      const e = new Error('A newspaper with that slug already exists.');
+      e.code = 'DUPLICATE';
+      throw e;
+    }
+    throw err;
+  }
+}
+
+export async function updateNewspaper(env, id, fields) {
+  const sets = [];
+  const binds = [];
+  if (fields.title !== undefined)      { sets.push('title = ?');      binds.push(fields.title); }
+  if (fields.layoutJson !== undefined) { sets.push('layout_json = ?'); binds.push(fields.layoutJson); }
+  if (fields.status !== undefined)     { sets.push('status = ?');      binds.push(fields.status); }
+  if (fields.published_at !== undefined) { sets.push('published_at = ?'); binds.push(fields.published_at); }
+  sets.push('updated_at = ?');
+  binds.push(nowIso(), Number(id));
+  await env.DB.prepare(`UPDATE newspapers SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
+  return findNewspaperById(env, id);
+}
+
+export async function deleteNewspaperById(env, id) {
+  await env.DB.prepare('DELETE FROM newspapers WHERE id = ?').bind(Number(id)).run();
+}
+

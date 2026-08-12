@@ -65,6 +65,22 @@ export default {
         m = pathname.match(/^\/api\/news\/articles\/(\d+)\/unpublish$/);
         if (m && method === 'PUT') return await news.unpublish(request, env, m[1]);
 
+        // ---- Times of Regnum: Newspapers ----
+        if (pathname === '/api/news/newspapers' && method === 'GET') return await news.listNewspapersPublished(request, env);
+        if (pathname === '/api/news/newspapers/all' && method === 'GET') return await news.listNewspapersAll(request, env);
+        if (pathname === '/api/news/newspapers' && method === 'POST') return await news.createNewspaper(request, env);
+
+        m = pathname.match(/^\/api\/news\/newspapers\/(\d+)$/);
+        if (m && method === 'GET') return await news.getNewspaper(request, env, m[1]);
+        if (m && method === 'PUT') return await news.updateNewspaper(request, env, m[1]);
+        if (m && method === 'DELETE') return await news.removeNewspaper(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/news\/newspapers\/(\d+)\/publish$/);
+        if (m && method === 'PUT') return await news.publishNewspaper(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/news\/newspapers\/(\d+)\/unpublish$/);
+        if (m && method === 'PUT') return await news.unpublishNewspaper(request, env, m[1]);
+
         // ---- Legal Information System ----
         if (pathname === '/api/legal/data' && method === 'GET') return await legal.getPublicData(request, env);
 
