@@ -264,10 +264,7 @@ img { max-width: 100%; display: block; }
   transform: translateX(-100%);
 }
 
-/* Start visible on load — first slogan slides in instantly */
-.hero__slogan[data-slogan="0"] {
-  transform: translateX(0);
-}
+
 
 .hero__lede {
   max-width: 540px;

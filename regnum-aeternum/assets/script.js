@@ -39,16 +39,21 @@
   var interval = 5000; // ms per slogan
   var timer = null;
 
+  // Make the first slogan visible on load (equivalent to --active).
+  slogans[0].classList.add('hero__slogan--active');
+
   function advance() {
     var prev = current;
     current = (current + 1) % total;
 
     // Exit the current slogan to the left
     slogans[prev].classList.add('hero__slogan--exit');
+    slogans[prev].classList.remove('hero__slogan--active');
+
     // Bring the next slogan in from the right
     slogans[current].classList.add('hero__slogan--active');
 
-    // Clean up the exit class after the transition so the element
+    // Clean up after the transition so the exiting slogan
     // resets to its off-screen-right position for the next cycle.
     var exiting = slogans[prev];
     setTimeout(function () {
@@ -56,7 +61,7 @@
     }, 750);
   }
 
-  // Start the cycle — first slogan is already visible via CSS.
+  // Start the cycle.
   timer = setInterval(advance, interval);
 
   // Pause while the tab is hidden to save CPU.
