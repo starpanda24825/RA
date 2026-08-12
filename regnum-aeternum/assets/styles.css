@@ -231,7 +231,10 @@ img { max-width: 100%; display: block; }
 .hero__slogans {
   position: relative;
   overflow: hidden;
-  height: 2em;
+  width: 100%;
+  align-self: stretch;
+  flex-shrink: 0;
+  min-height: 1.6em;
   margin: 18px 0 0;
   font-family: var(--font-caps);
   font-size: clamp(15px, 2vw, 19px);
@@ -247,21 +250,25 @@ img { max-width: 100%; display: block; }
   width: 100%;
   white-space: nowrap;
   text-align: center;
-  transform: translateX(100%);
+  /* All slogans start off-screen LEFT (-100%).
+     They slide in left→right to centre, then exit left→right off the right side. */
+  transform: translateX(-100%);
   will-change: transform;
 }
 
 .hero__slogan--active,
 .hero__slogan--exit {
-  transition: transform 0.7s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform 0.8s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .hero__slogan--active {
+  /* Centre of the container */
   transform: translateX(0);
 }
 
 .hero__slogan--exit {
-  transform: translateX(-100%);
+  /* Off-screen RIGHT — continues the left→right journey */
+  transform: translateX(100%);
 }
 
 

@@ -24,9 +24,9 @@
 })();
 
 // ---------- Hero slogan cycler ----------
-// Replaces the static "Regnum quod non cadit" with five slogans that
-// cycle continuously: each slides in from the right, holds, then slides
-// out to the left while the next enters.
+// Cycles five slogans continuously: each slides in left-to-right,
+// holds for 10 seconds, then continues left-to-right off-screen
+// while the next enters.
 (function () {
   var container = document.getElementById('hero-slogans');
   if (!container) return;
@@ -36,33 +36,34 @@
 
   var current = 0;
   var total = slogans.length;
-  var interval = 5000; // ms per slogan
+  var HOLD = 10000;   // ms each slogan stays visible
+  var TRANSITION = 850; // ms for the slide (matches CSS 0.8s + buffer)
   var timer = null;
 
-  // Make the first slogan visible on load (equivalent to --active).
+  // Make the first slogan visible on load.
   slogans[0].classList.add('hero__slogan--active');
 
   function advance() {
     var prev = current;
     current = (current + 1) % total;
 
-    // Exit the current slogan to the left
+    // Exit current slogan: continue left-to-right off the right side
     slogans[prev].classList.add('hero__slogan--exit');
     slogans[prev].classList.remove('hero__slogan--active');
 
-    // Bring the next slogan in from the right
+    // Enter next slogan: slide in left-to-right from the left side
     slogans[current].classList.add('hero__slogan--active');
 
-    // Clean up after the transition so the exiting slogan
-    // resets to its off-screen-right position for the next cycle.
+    // After the slide finishes, strip --exit so the element snaps
+    // back to its off-screen-left start position for the next cycle.
     var exiting = slogans[prev];
     setTimeout(function () {
       exiting.classList.remove('hero__slogan--exit');
-    }, 750);
+    }, TRANSITION);
   }
 
-  // Start the cycle.
-  timer = setInterval(advance, interval);
+  // Start cycling.
+  timer = setInterval(advance, HOLD);
 
   // Pause while the tab is hidden to save CPU.
   document.addEventListener('visibilitychange', function () {
@@ -70,7 +71,7 @@
       clearInterval(timer);
       timer = null;
     } else if (!timer) {
-      timer = setInterval(advance, interval);
+      timer = setInterval(advance, HOLD);
     }
   });
 })();
