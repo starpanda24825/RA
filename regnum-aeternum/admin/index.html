@@ -13,6 +13,7 @@
 <link rel="stylesheet" href="assets/legal-builder.css" />
 <link rel="stylesheet" href="assets/banking-admin.css" />
 <link rel="stylesheet" href="assets/newspaper-editor.css" />
+<link rel="stylesheet" href="../exchange/assets/exchange.css" />
 <style>
 #admin-gate { display:none; }
 #admin-app  { display:none; }
@@ -188,6 +189,7 @@
     <button class="admin-tab" data-tab="news" id="tab-btn-news">Times of Regnum</button>
     <button class="admin-tab" data-tab="legal" id="tab-btn-legal">Legal Information System</button>
     <button class="admin-tab" data-tab="land" id="tab-btn-land">Land Registry</button>
+    <button class="admin-tab" data-tab="exchange" id="tab-btn-exchange">Fiducia Exchange</button>
     <button class="admin-tab" data-tab="banking" id="tab-btn-banking">Fiducia Banking System</button>
   </div>
 
@@ -528,6 +530,222 @@
     </div>
   </div>
 
+  <!-- EXCHANGE PANEL -->
+  <div class="admin-panel" id="panel-exchange">
+    <div class="banking-subnav">
+      <button class="banking-subnav__btn active" data-exp="companies">Companies</button>
+      <button class="banking-subnav__btn" data-exp="dividends">Dividends</button>
+      <button class="banking-subnav__btn" data-exp="oversight">Oversight</button>
+      <button class="banking-subnav__btn" data-exp="audit">Audit Log</button>
+      <button class="banking-subnav__btn" data-exp="ipo" id="exp-nav-ipo">IPOs</button>
+      <button class="banking-subnav__btn" data-exp="reports" id="exp-nav-reports">Reports</button>
+      <button class="banking-subnav__btn" data-exp="settings" id="exp-nav-settings">Settings</button>
+    </div>
+
+    <!-- Companies sub-panel -->
+    <div class="banking-subpanel active" id="exp-companies">
+      <div class="admin-card">
+        <h2>Listed Companies</h2>
+        <button class="a-btn primary" id="exp-new-company-btn" style="margin-bottom:14px;">+ New Company</button>
+        <table class="a-table">
+          <thead><tr><th>Ticker</th><th>Name</th><th>Sector</th><th>Price</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="exp-companies-tbody"></tbody>
+        </table>
+      </div>
+
+      <!-- Stock Split Modal (inline card) -->
+      <div class="admin-card legal-editor" id="exp-split-card">
+        <h2 id="exp-split-heading">Stock Split</h2>
+        <div class="a-form" style="gap:10px;align-items:center;">
+          <div class="a-field"><label>Company</label><input class="a-input" id="exp-split-ticker" disabled style="width:120px;"/></div>
+          <div class="a-field"><label>Ratio</label>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <input class="a-input" id="exp-split-num" type="number" min="1" style="width:70px;" placeholder="2"/>
+              <span style="font-size:18px;">:</span>
+              <input class="a-input" id="exp-split-den" type="number" min="1" style="width:70px;" placeholder="1"/>
+            </div>
+          </div>
+          <button class="a-btn primary" id="exp-split-execute">Execute Split</button>
+          <button class="a-btn" id="exp-split-cancel">Cancel</button>
+        </div>
+        <p id="exp-split-msg" class="a-msg" style="display:none;"></p>
+      </div>
+
+      <!-- Delist card -->
+      <div class="admin-card legal-editor" id="exp-delist-card">
+        <h2>Delist Company</h2>
+        <div class="a-form" style="gap:10px;align-items:center;">
+          <div class="a-field"><label>Company</label><input class="a-input" id="exp-delist-ticker" disabled style="width:120px;"/></div>
+          <div class="a-field"><label>Reason</label><input class="a-input" id="exp-delist-reason" style="width:300px;" placeholder="Reason for delisting"/></div>
+          <button class="a-btn danger" id="exp-delist-execute">Delist</button>
+          <button class="a-btn" id="exp-delist-cancel">Cancel</button>
+        </div>
+        <p id="exp-delist-msg" class="a-msg" style="display:none;"></p>
+      </div>
+
+      <!-- Buyback card -->
+      <div class="admin-card legal-editor" id="exp-buyback-card">
+        <h2>Buy Back Shares</h2>
+        <div class="a-form" style="gap:10px;align-items:center;">
+          <div class="a-field"><label>Company</label><input class="a-input" id="exp-bb-ticker" disabled style="width:120px;"/></div>
+          <div class="a-field"><label>Shares</label><input class="a-input" id="exp-bb-count" type="number" min="1" style="width:100px;"/></div>
+          <div class="a-field"><label>Est. Cost</label><span id="exp-bb-estimate" style="font-family:var(--font-mono);font-size:13px;color:var(--parchment-dim);">—</span></div>
+          <button class="a-btn danger" id="exp-bb-execute">Buy Back</button>
+          <button class="a-btn" id="exp-bb-cancel">Cancel</button>
+        </div>
+        <p id="exp-bb-msg" class="a-msg" style="display:none;"></p>
+      </div>
+    </div>
+
+    <!-- Dividends sub-panel -->
+    <div class="banking-subpanel" id="exp-dividends">
+      <div class="admin-card">
+        <h2>Declare Dividend</h2>
+        <div class="a-form" style="gap:10px;margin-bottom:16px;">
+          <div class="a-field"><label>Ticker</label><input class="a-input" id="exp-div-ticker" style="width:100px;"/></div>
+          <div class="a-field"><label>Per Share</label><input class="a-input" id="exp-div-amount" type="number" step="0.01" style="width:100px;"/></div>
+          <div class="a-field"><label>Pay Date</label><input class="a-input" id="exp-div-paydate" type="date" style="width:150px;"/></div>
+          <button class="a-btn primary" id="exp-div-declare">Declare</button>
+        </div>
+        <p id="exp-div-msg" class="a-msg" style="display:none;"></p>
+      </div>
+      <div class="admin-card">
+        <h2>Pending Dividends</h2>
+        <table class="a-table">
+          <thead><tr><th>Ticker</th><th>Per Share</th><th>Pay Date</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="exp-dividends-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Oversight sub-panel -->
+    <div class="banking-subpanel" id="exp-oversight">
+      <div class="admin-card">
+        <h2>Market Controls</h2>
+        <div style="display:flex;gap:10px;margin-bottom:16px;">
+          <button class="a-btn danger" id="exp-global-halt">Halt All Trading</button>
+          <button class="a-btn primary" id="exp-global-resume">Resume All Trading</button>
+        </div>
+      </div>
+      <div class="admin-card">
+        <h2>Flagged Orders</h2>
+        <div id="exp-flagged-orders"><p style="color:var(--slate-soft);font-size:13px;">No flagged orders.</p></div>
+      </div>
+      <div class="admin-card">
+        <h2>Halt History</h2>
+        <table class="a-table">
+          <thead><tr><th>Ticker</th><th>Type</th><th>Reason</th><th>Halted</th></tr></thead>
+          <tbody id="exp-halts-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- IPO sub-panel -->
+    <div class="banking-subpanel" id="exp-ipo">
+      <div class="admin-card">
+        <h2>Create IPO</h2>
+        <div class="a-form" style="gap:10px;margin-bottom:10px;">
+          <div class="a-field"><label>Ticker</label><input class="a-input" id="exp-ipo-ticker" style="width:100px;"/></div>
+          <div class="a-field"><label>Name</label><input class="a-input" id="exp-ipo-name" style="width:200px;"/></div>
+          <div class="a-field"><label>Sector</label><input class="a-input" id="exp-ipo-sector" style="width:140px;"/></div>
+          <div class="a-field"><label>IPO Price</label><input class="a-input" id="exp-ipo-price" type="number" step="0.01" style="width:100px;"/></div>
+          <button class="a-btn primary" id="exp-ipo-create">Create IPO</button>
+        </div>
+        <p id="exp-ipo-create-msg" class="a-msg" style="display:none;"></p>
+      </div>
+
+      <div class="admin-card">
+        <h2>Active IPOs</h2>
+        <table class="a-table">
+          <thead><tr><th>Ticker</th><th>Name</th><th>IPO Price</th><th>Float</th><th>Subscribed</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="exp-ipo-tbody"></tbody>
+        </table>
+      </div>
+
+      <!-- IPO Subscriptions viewer -->
+      <div class="admin-card legal-editor" id="exp-ipo-subs-card">
+        <h2 id="exp-ipo-subs-heading">IPO Subscriptions</h2>
+        <div id="exp-ipo-subs-content"></div>
+        <div style="margin-top:14px;display:flex;gap:10px;">
+          <button class="a-btn primary" id="exp-ipo-allocate">Allocate Shares &amp; Activate</button>
+          <button class="a-btn danger" id="exp-ipo-cancel">Cancel IPO</button>
+          <button class="a-btn" id="exp-ipo-subs-close">Close</button>
+        </div>
+        <p id="exp-ipo-subs-msg" class="a-msg" style="display:none;"></p>
+      </div>
+
+      <div class="admin-card">
+        <h2>Past IPOs</h2>
+        <table class="a-table">
+          <thead><tr><th>Ticker</th><th>Name</th><th>IPO Price</th><th>Current</th><th>Return</th></tr></thead>
+          <tbody id="exp-ipo-past-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Reports sub-panel -->
+    <div class="banking-subpanel" id="exp-reports">
+      <div class="admin-card">
+        <h2>File Company Report</h2>
+        <div style="display:flex;flex-direction:column;gap:12px;">
+          <div class="a-form" style="gap:10px;">
+            <div class="a-field"><label>Ticker</label><input class="a-input" id="exp-rep-ticker" style="width:100px;"/></div>
+            <div class="a-field"><label>Type</label>
+              <select class="a-select" id="exp-rep-type" style="width:130px;">
+                <option value="QUARTERLY">Quarterly</option>
+                <option value="ANNUAL">Annual</option>
+                <option value="SPECIAL">Special</option>
+              </select>
+            </div>
+            <div class="a-field"><label>Period</label><input class="a-input" id="exp-rep-period" style="width:120px;" placeholder="Q3 Year 3"/></div>
+          </div>
+          <div class="a-field"><label>Headline</label><input class="a-input" id="exp-rep-headline" style="width:100%;"/></div>
+          <div class="a-field">
+            <label>Body (markdown)</label>
+            <textarea class="a-textarea" id="exp-rep-body" style="min-height:140px;"></textarea>
+          </div>
+          <div class="a-form" style="gap:10px;">
+            <div class="a-field"><label>Δ Earnings</label><input class="a-input" id="exp-rep-earnings" type="number" step="0.01" style="width:120px;"/></div>
+            <div class="a-field"><label>Δ Revenue</label><input class="a-input" id="exp-rep-revenue" type="number" step="0.01" style="width:120px;"/></div>
+            <div class="a-field"><label>Δ Assets</label><input class="a-input" id="exp-rep-assets" type="number" step="0.01" style="width:120px;"/></div>
+          </div>
+          <button class="a-btn primary" id="exp-rep-submit">File Report</button>
+          <p id="exp-rep-msg" class="a-msg" style="display:none;"></p>
+        </div>
+      </div>
+      <div class="admin-card">
+        <h2>Filed Reports</h2>
+        <table class="a-table">
+          <thead><tr><th>Ticker</th><th>Type</th><th>Headline</th><th>Filed By</th><th>Date</th><th>Actions</th></tr></thead>
+          <tbody id="exp-reports-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Audit Log sub-panel -->
+    <div class="banking-subpanel" id="exp-audit">
+      <div class="admin-card">
+        <h2>Audit Log</h2>
+        <table class="a-table">
+          <thead><tr><th>Actor</th><th>Action</th><th>Entity</th><th>Time</th></tr></thead>
+          <tbody id="exp-audit-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Settings sub-panel -->
+    <div class="banking-subpanel" id="exp-settings">
+      <div class="admin-card">
+        <h2>Market Settings</h2>
+        <div id="exp-settings-form" style="display:flex;flex-direction:column;gap:10px;">
+          <p style="color:var(--slate-soft);font-size:13px;">Loading settings...</p>
+        </div>
+        <button class="a-btn primary" id="exp-settings-save" style="margin-top:14px;">Save Settings</button>
+        <p id="exp-settings-msg" class="a-msg" style="display:none;"></p>
+      </div>
+    </div>
+  </div>
+
   <!-- BANKING PANEL -->
   <div class="admin-panel" id="panel-banking">
     <div class="banking-subnav">
@@ -706,6 +924,7 @@
 <script src="assets/legal-builder.js"></script>
 <script src="assets/newspaper-editor.js"></script>
 <script src="assets/banking-admin.js" defer></script>
+<script src="assets/exchange-admin.js" defer></script>
 <script>
 (async function () {
   'use strict';
@@ -739,6 +958,7 @@
     document.getElementById('tab-btn-news').style.display = hasStaffAccess ? '' : 'none';
     document.getElementById('tab-btn-legal').style.display = isAdmin ? '' : 'none';
     document.getElementById('tab-btn-land').style.display = isAdmin ? '' : 'none';
+    document.getElementById('tab-btn-exchange').style.display = (isAdmin || isBanker) ? '' : 'none';
     document.getElementById('tab-btn-banking').style.display = (isAdmin || isBanker) ? '' : 'none';
 
     // Show/hide admin-only banking sub-tabs
@@ -763,6 +983,7 @@
     loadCaseLaw();
     loadPlots();
     if (typeof BankingAdmin !== 'undefined') BankingAdmin.init(me);
+    if (typeof ExchangeAdmin !== 'undefined') ExchangeAdmin.init(me);
   }
 
   document.getElementById('login-form').addEventListener('submit', async (e) => {

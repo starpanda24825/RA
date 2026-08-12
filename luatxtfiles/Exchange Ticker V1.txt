@@ -1,0 +1,128 @@
+-- ============================================================
+-- Regnum Aeternum — Exchange Ticker V1
+-- Passive wall-mounted display. No interaction.
+-- Scrolls through all active stocks with live prices.
+-- Designed for a monitor peripheral on the exchange floor.
+-- ============================================================
+
+local API_BASE = "https://YOUR_WORKER_DOMAIN/api/exchange/cc"
+local MONITOR_SIDE = "right"  -- Which side the monitor is connected to
+
+-- ↑↑↑ SET YOUR WORKER DOMAIN AND MONITOR SIDE ABOVE ↑↑↑
+
+local monitor = peripheral.wrap(MONITOR_SIDE)
+if not monitor then
+  print("No monitor found on " .. MONITOR_SIDE .. " side.")
+  return
+end
+
+monitor.setTextScale(0.5)
+local w, h = monitor.getSize()
+
+local function httpGet(endpoint)
+  local url = API_BASE .. endpoint
+  local ok, resp = pcall(http.get, url)
+  if not ok or not resp then return nil end
+  local body = resp.readAll()
+  resp.close()
+  local ok2, data = pcall(textutils.unserializeJSON, body)
+  if not ok2 then return nil end
+  return data
+end
+
+local function fmt(num, decimals)
+  decimals = decimals or 2
+  if num == nil then return "---" end
+  return string.format("%." .. decimals .. "f", num)
+end
+
+local function fmtChg(ch, chp)
+  if ch == 0 or ch == nil then return " 0.00" end
+  local arrow = ch > 0 and "+" or ""
+  return string.format("%s%s %s%%", arrow, fmt(ch), fmt(chp or 0, 1))
+end
+
+-- Draw the header bar
+local function drawHeader()
+  monitor.setBackgroundColor(colors.black)
+  monitor.clear()
+  monitor.setTextColor(colors.gray)
+  monitor.setCursorPos(2, 1)
+  monitor.write("FDX")
+  monitor.setTextColor(colors.white)
+  monitor.write(" EXCHANGE")
+end
+
+-- Draw a row of tickers
+local function drawRow(stocks, startIdx)
+  local x = 1
+  local y = 3  -- start below header
+  local maxPerRow = math.floor(w / 16)  -- ~16 chars per ticker block
+
+  for i = startIdx, math.min(startIdx + maxPerRow - 1, #stocks) do
+    local s = stocks[i]
+    if x + 15 <= w then
+      -- Reset to default colors before each ticker block
+      monitor.setTextColor(colors.yellow)
+      monitor.setCursorPos(x, y)
+      monitor.write(s.t)
+      monitor.setTextColor(colors.white)
+      monitor.setCursorPos(x, y + 1)
+      monitor.write(fmt(s.p))
+      if s.ch > 0 then
+        monitor.setTextColor(colors.green)
+      elseif s.ch < 0 then
+        monitor.setTextColor(colors.red)
+      else
+        monitor.setTextColor(colors.gray)
+      end
+      monitor.setCursorPos(x, y + 2)
+      monitor.write(fmtChg(s.ch, s.chp))
+      x = x + 16
+    end
+  end
+  monitor.setTextColor(colors.white)  -- reset after row
+
+  -- Fill remaining rows
+  if y + 4 <= h then
+    local nextStart = startIdx + maxPerRow
+    if nextStart <= #stocks then
+      drawRow(stocks, nextStart)
+    end
+  end
+end
+
+-- Main loop
+while true do
+  local idxData = httpGet("/index")
+  local marketData = httpGet("/market")
+
+  monitor.setBackgroundColor(colors.black)
+  monitor.clear()
+
+  -- Draw index banner
+  monitor.setCursorPos(1, 1)
+  monitor.setTextColor(colors.gray)
+  monitor.write("FDX COMPOSITE")
+  monitor.setCursorPos(1, 2)
+  if idxData and idxData.success then
+    local idx = idxData.response
+    monitor.setTextColor(colors.yellow)
+    monitor.write(fmt(idx.idx))
+    monitor.setTextColor(colors.gray)
+    monitor.write("  A" .. idx.adv .. " D" .. idx.dec .. " U" .. idx.unc)
+  else
+    monitor.setTextColor(colors.white)
+    monitor.write("----")
+  end
+
+  -- Draw ticker rows
+  if marketData and marketData.success then
+    local stocks = marketData.response or {}
+    if #stocks > 0 then
+      drawRow(stocks, 1)
+    end
+  end
+
+  sleep(30)  -- Refresh every 30 seconds
+end

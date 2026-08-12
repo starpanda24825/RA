@@ -17,12 +17,60 @@ import * as dynmap from './routes/dynmap.js';
 import * as banking from './routes/banking.js';
 import * as bankingAdmin from './routes/banking-admin.js';
 import * as bankingCC from './routes/banking-cc.js';
+import * as exchange from './routes/exchange.js';
+import * as exchangeAdmin from './routes/exchange-admin.js';
+import * as exchangeCC from './routes/exchange-cc.js';
+import { runMarketTick, syncFundamentalsFromBank } from './lib/market-engine.js';
 import * as store from './lib/store.js';
 
 function json(data, init = {}) {
   const headers = new Headers(init.headers || {});
   headers.set('Content-Type', 'application/json');
   return new Response(JSON.stringify(data), { ...init, headers });
+}
+
+async function doDividendPayments(db) {
+  const now = new Date().toISOString().split('T')[0];
+  const { results: dividends } = await db.prepare(
+    "SELECT * FROM fdx_dividends WHERE status = 'pending' AND pay_date <= ?"
+  ).bind(now).all();
+
+  for (const div of (dividends || [])) {
+    const { results: holders } = await db.prepare(
+      'SELECT account_id, quantity FROM fdx_portfolios WHERE company_id = ? AND quantity > 0'
+    ).bind(div.company_id).all();
+
+    let totalPaid = 0;
+    for (const holder of (holders || [])) {
+      const amount = Math.round(holder.quantity * div.dividend_per_share * 100) / 100;
+      if (amount <= 0) continue;
+
+      // Credit the holder's banking account
+      const account = await db.prepare(
+        'SELECT balance FROM banking_accounts WHERE key = ?'
+      ).bind(holder.account_id).first();
+      if (!account) continue;
+
+      const newBalance = Math.round((account.balance + amount) * 100) / 100;
+      try {
+        await db.batch([
+          db.prepare('UPDATE banking_accounts SET balance = ?, updated_at = ? WHERE key = ?')
+            .bind(newBalance, new Date().toISOString(), holder.account_id),
+          db.prepare(
+            'INSERT INTO banking_transactions (from_key, to_key, amount, from_balance_after, to_balance_after, description, initiated_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+          ).bind('__dividends__', holder.account_id, amount, 0, newBalance, 'DIVIDEND: ' + div.dividend_per_share + '/share',
+                 'system:cron', new Date().toISOString()),
+        ]);
+        totalPaid = Math.round((totalPaid + amount) * 100) / 100;
+      } catch (err) {
+        console.error('Dividend payment error for', holder.account_id, err.message);
+      }
+    }
+
+    await db.prepare(
+      "UPDATE fdx_dividends SET status = 'paid', total_paid = ? WHERE id = ?"
+    ).bind(totalPaid, div.id).run();
+  }
 }
 
 export default {
@@ -180,6 +228,131 @@ export default {
         m = pathname.match(/^\/api\/banking\/admin\/cc-tokens\/(\d+)$/);
         if (m && method === 'DELETE') return await bankingAdmin.revokeCCToken(request, env, m[1]);
 
+        // ---- Fiducia Exchange (Public) ----
+        if (pathname === '/api/exchange/market' && method === 'GET') return await exchange.getMarket(request, env);
+        if (pathname === '/api/exchange/index' && method === 'GET') return await exchange.getIndex(request, env);
+        if (pathname === '/api/exchange/sectors' && method === 'GET') return await exchange.getSectors(request, env);
+        if (pathname === '/api/exchange/orders' && method === 'GET') return await exchange.getMyOrders(request, env);
+        if (pathname === '/api/exchange/orders' && method === 'POST') return await exchange.placeOrder(request, env);
+        if (pathname === '/api/exchange/trades' && method === 'GET') return await exchange.getMyTrades(request, env);
+        if (pathname === '/api/exchange/portfolio' && method === 'GET') return await exchange.getMyPortfolio(request, env);
+        if (pathname === '/api/exchange/watchlist' && method === 'GET') return await exchange.getWatchlist(request, env);
+
+        m = pathname.match(/^\/api\/exchange\/companies\/([A-Z]+)$/);
+        if (m && method === 'GET') return await exchange.getCompany(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/exchange\/companies\/([A-Z]+)\/candles$/);
+        if (m && method === 'GET') return await exchange.getCompanyCandles(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/exchange\/companies\/([A-Z]+)\/orderbook$/);
+        if (m && method === 'GET') return await exchange.getOrderBook(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/exchange\/companies\/([A-Z]+)\/trades$/);
+        if (m && method === 'GET') return await exchange.getCompanyTrades(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/exchange\/companies\/([A-Z]+)\/shareholders$/);
+        if (m && method === 'GET') return await exchange.getCompanyShareholders(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/exchange\/companies\/([A-Z]+)\/reports$/);
+        if (m && method === 'GET') return await exchange.getCompanyReports(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/exchange\/orders\/(\d+)$/);
+        if (m && method === 'DELETE') return await exchange.cancelOrder(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/exchange\/watchlist\/([A-Z]+)$/);
+        if (m && method === 'POST') return await exchange.addToWatchlist(request, env, m[1]);
+        if (m && method === 'DELETE') return await exchange.removeFromWatchlist(request, env, m[1]);
+
+        // ---- Fiducia Exchange: IPO ----
+        if (pathname === '/api/exchange/ipo' && method === 'GET') return await exchange.listIpos(request, env);
+        if (pathname === '/api/exchange/ipo/my' && method === 'GET') return await exchange.getMyIpoSubscriptions(request, env);
+
+        m = pathname.match(/^\/api\/exchange\/ipo\/(\d+)\/subscribe$/);
+        if (m && method === 'POST') return await exchange.subscribeToIpo(request, env, m[1]);
+        if (m && method === 'DELETE') return await exchange.cancelIpoSubscription(request, env, m[1]);
+
+        // ---- Fiducia Exchange: News Feed ----
+        if (pathname === '/api/exchange/news-feed' && method === 'GET') return await exchangeAdmin.getNewsFeed(request, env);
+
+        // ---- Fiducia Exchange (Admin) ----
+        if (pathname === '/api/exchange/admin/companies' && method === 'GET') return await exchangeAdmin.listAllCompanies(request, env);
+        if (pathname === '/api/exchange/admin/companies' && method === 'POST') return await exchangeAdmin.createCompany(request, env);
+        if (pathname === '/api/exchange/admin/dividends' && method === 'POST') return await exchangeAdmin.declareDividend(request, env);
+        if (pathname === '/api/exchange/admin/dividends' && method === 'GET') return await exchangeAdmin.listDividends(request, env);
+        if (pathname === '/api/exchange/admin/audit' && method === 'GET') return await exchangeAdmin.getAuditLog(request, env);
+        if (pathname === '/api/exchange/admin/halts' && method === 'GET') return await exchangeAdmin.getHaltHistory(request, env);
+        if (pathname === '/api/exchange/admin/flagged/orders' && method === 'GET') return await exchangeAdmin.getFlaggedOrders(request, env);
+        if (pathname === '/api/exchange/admin/flagged/trades' && method === 'GET') return await exchangeAdmin.getFlaggedTrades(request, env);
+        if (pathname === '/api/exchange/admin/settings' && method === 'GET') return await exchangeAdmin.getSettings(request, env);
+        if (pathname === '/api/exchange/admin/settings' && method === 'PUT') return await exchangeAdmin.updateSettings(request, env);
+        if (pathname === '/api/exchange/admin/reports' && method === 'GET') return await exchangeAdmin.getReports(request, env);
+        if (pathname === '/api/exchange/admin/reports' && method === 'POST') return await exchangeAdmin.createReport(request, env);
+        if (pathname === '/api/exchange/admin/halt' && method === 'POST') return await exchangeAdmin.globalHalt(request, env);
+        if (pathname === '/api/exchange/admin/resume' && method === 'POST') return await exchangeAdmin.globalResume(request, env);
+
+        m = pathname.match(/^\/api\/exchange\/admin\/reports\/(\d+)$/);
+        if (m && method === 'PUT') return await exchangeAdmin.updateReport(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/exchange\/admin\/company\/([A-Z]+)$/);
+        if (m && method === 'GET') return await exchangeAdmin.getCompanyByTicker(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/exchange\/admin\/companies\/(\d+)$/);
+        if (m && method === 'PUT') return await exchangeAdmin.updateCompany(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/exchange\/admin\/companies\/(\d+)\/fundamentals$/);
+        if (m && method === 'PUT') return await exchangeAdmin.updateFundamentals(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/exchange\/admin\/companies\/(\d+)\/halt$/);
+        if (m && method === 'POST') return await exchangeAdmin.haltCompany(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/exchange\/admin\/companies\/(\d+)\/resume$/);
+        if (m && method === 'POST') return await exchangeAdmin.resumeCompany(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/exchange\/admin\/companies\/(\d+)\/shares\/issue$/);
+        if (m && method === 'POST') return await exchangeAdmin.issueShares(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/exchange\/admin\/companies\/(\d+)\/shares\/buyback$/);
+        if (m && method === 'POST') return await exchangeAdmin.buybackShares(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/exchange\/admin\/companies\/(\d+)\/split$/);
+        if (m && method === 'POST') return await exchangeAdmin.stockSplit(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/exchange\/admin\/companies\/(\d+)\/delist$/);
+        if (m && method === 'POST') return await exchangeAdmin.delistCompany(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/exchange\/admin\/companies\/(\d+)\/ipo\/subscriptions$/);
+        if (m && method === 'GET') return await exchangeAdmin.getIpoSubscriptions(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/exchange\/admin\/companies\/(\d+)\/ipo\/allocate$/);
+        if (m && method === 'POST') return await exchangeAdmin.allocateIpo(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/exchange\/admin\/companies\/(\d+)\/ipo\/cancel$/);
+        if (m && method === 'POST') return await exchangeAdmin.cancelIpo(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/exchange\/admin\/dividends\/(\d+)$/);
+        if (m && method === 'DELETE') return await exchangeAdmin.cancelDividend(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/exchange\/admin\/flagged\/orders\/(\d+)\/dismiss$/);
+        if (m && method === 'POST') return await exchangeAdmin.dismissFlaggedOrder(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/exchange\/admin\/flagged\/trades\/(\d+)\/dismiss$/);
+        if (m && method === 'POST') return await exchangeAdmin.dismissFlaggedTrade(request, env, m[1]);
+
+        // ---- Fiducia Exchange: ComputerCraft Bridge ----
+        if (pathname === '/api/exchange/cc/market' && method === 'GET') return await exchangeCC.ccMarket(request, env);
+        if (pathname === '/api/exchange/cc/index' && method === 'GET') return await exchangeCC.ccIndex(request, env);
+        if (pathname === '/api/exchange/cc/portfolio' && method === 'POST') return await exchangeCC.ccPortfolio(request, env);
+        if (pathname === '/api/exchange/cc/orders' && method === 'POST') return await exchangeCC.ccPlaceOrder(request, env);
+        if (pathname === '/api/exchange/cc/orders/list' && method === 'POST') return await exchangeCC.ccMyOrders(request, env);
+        if (pathname === '/api/exchange/cc/orders/cancel' && method === 'POST') return await exchangeCC.ccCancelOrder(request, env);
+        if (pathname === '/api/exchange/cc/trades' && method === 'POST') return await exchangeCC.ccMyTrades(request, env);
+
+        m = pathname.match(/^\/api\/exchange\/cc\/quote\/([A-Z]+)$/);
+        if (m && method === 'GET') return await exchangeCC.ccQuote(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/exchange\/cc\/orderbook\/([A-Z]+)$/);
+        if (m && method === 'GET') return await exchangeCC.ccOrderBook(request, env, m[1]);
+
         // ---- Banking: ComputerCraft Bridge ----
         if (pathname === '/api/banking/cc/server-data' && method === 'POST') return await bankingCC.ccServerData(request, env);
         if (pathname === '/api/banking/cc/client-data' && method === 'POST') return await bankingCC.ccClientData(request, env);
@@ -219,22 +392,114 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
-    // Check if taxes are due; apply if so
-    const settings = await store.getBankingSettings(env);
-    if (!settings.tax_enabled) return;
+    const cron = event.cron;
+    const now = new Date();
 
-    const lastRun = settings.tax_last_run_at ? new Date(settings.tax_last_run_at) : new Date(0);
-    const msPerDay = 86400000;
-    const dueAt = new Date(lastRun.getTime() + settings.tax_period_days * msPerDay);
+    if (cron === '*/5 * * * *') {
+      // 5-minute market tick
+      try {
+        await runMarketTick(env.DB);
+      } catch (err) {
+        console.error('Market tick error:', err);
+      }
+    }
 
-    if (new Date() >= dueAt) {
-      await store.applyTaxes(env, 'system:cron');
+    if (cron === '0 * * * *') {
+      // Hourly fundamental sync
+      try {
+        await syncFundamentalsFromBank(env.DB);
+      } catch (err) {
+        console.error('Fundamental sync error:', err);
+      }
+    }
+
+    if (cron === '0 20 * * *') {
+      // End-of-day settlement
+      try {
+        const now = new Date().toISOString();
+        // Expire ALL DAY orders (buy and sell). No fund release needed:
+        // reservations are virtual — getAvailableBalance subtracts open order
+        // costs from balance; when an order expires, the reservation
+        // disappears automatically.
+        await env.DB.prepare(
+          `UPDATE fdx_orders SET status = 'expired', cancelled_at = ?
+           WHERE time_in_force = 'DAY' AND status IN ('open','partial')`
+        ).bind(now).run();
+
+        // Store prev_close, reset day stats for all active companies
+        await env.DB.prepare(
+          `UPDATE fdx_companies SET prev_close_price = current_price,
+             day_high = NULL, day_low = NULL, day_volume = 0,
+             updated_at = ?
+           WHERE status = 'active'`
+        ).bind(now).run();
+
+        // Pay any dividends due today
+        await doDividendPayments(env.DB);
+      } catch (err) {
+        console.error('EOD settlement error:', err);
+      }
+    }
+
+    if (cron === '0 8 * * *') {
+      // Market open — close previous day's 1d candles and open fresh ones
+      try {
+        const now = new Date();
+        const { results: companies } = await env.DB.prepare(
+          "SELECT * FROM fdx_companies WHERE status = 'active'"
+        ).all();
+
+        for (const co of (companies || [])) {
+          const price = co.current_price || co.ipo_price || 0;
+          if (price <= 0) continue;
+
+          // Insert a new 1d candle using today's market-open time as open_time
+          const today = new Date(now);
+          today.setUTCHours(8, 0, 0, 0);
+          const openTime = today.toISOString();
+
+          // Only insert if no candle exists for this open time
+          const existing = await env.DB.prepare(
+            "SELECT id FROM fdx_candles WHERE company_id = ? AND interval = '1d' AND open_time = ?"
+          ).bind(co.id, openTime).first();
+
+          if (!existing) {
+            await env.DB.prepare(
+              `INSERT INTO fdx_candles (company_id, interval, open_time, open, high, low, close, volume, trade_count)
+               VALUES (?, '1d', ?, ?, ?, ?, ?, 0, 0)`
+            ).bind(co.id, openTime, price, price, price, price).run();
+          }
+        }
+
+        console.log('Market open at 08:00 UTC — new 1d candles created');
+      } catch (err) {
+        console.error('Market open error:', err);
+      }
+    }
+
+    // Always run tax check on any cron trigger
+    try {
+      const settings = await store.getBankingSettings(env);
+      if (settings.tax_enabled) {
+        const lastRun = settings.tax_last_run_at ? new Date(settings.tax_last_run_at) : new Date(0);
+        const msPerDay = 86400000;
+        const dueAt = new Date(lastRun.getTime() + settings.tax_period_days * msPerDay);
+        if (now >= dueAt) {
+          await store.applyTaxes(env, 'system:cron');
+        }
+      }
+    } catch (err) {
+      console.error('Tax check error:', err);
     }
 
     // Insert value history snapshots for all companies
-    const companies = await store.listBankingAccounts(env, { type: 'company' });
-    for (const co of companies) {
-      await store.insertCompanyValueSnapshot(env, co.key, co.balance);
+    try {
+      const companies = await store.listBankingAccounts(env, { type: 'company' });
+      for (const co of companies) {
+        await store.insertCompanyValueSnapshot(env, co.key, co.balance);
+      }
+    } catch (err) {
+      console.error('Value snapshot error:', err);
     }
   },
 };

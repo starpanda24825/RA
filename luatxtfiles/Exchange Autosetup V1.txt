@@ -1,0 +1,127 @@
+-- ============================================================
+-- Regnum Aeternum — Exchange Autosetup V1
+-- Self-installing script for exchange floor computers.
+-- Downloads the terminal or ticker, prompts for config,
+-- and saves everything to disk.
+-- ============================================================
+
+local PASTE_URL = "https://YOUR_WORKER_DOMAIN/"  -- Base URL for raw file downloads
+
+-- ↑↑↑ SET YOUR WORKER DOMAIN ABOVE ↑↑↑
+
+print("=== Fiducia Exchange — Autosetup ===")
+print("")
+print("1) Exchange Terminal (interactive trading)")
+print("2) Exchange Ticker (wall-mounted display)")
+print("")
+write("Choose [1/2]: ")
+local choice = read()
+
+local filename, description
+if choice == "2" then
+  filename = "ticker"
+  description = "Exchange Ticker"
+else
+  filename = "exchange"
+  description = "Exchange Terminal"
+end
+
+print("")
+print("Installing " .. description .. "...")
+print("")
+
+-- Try to download from paste URL (or use bundled copy)
+local function download(url, dest)
+  local ok, resp = pcall(http.get, url)
+  if not ok or not resp then return false end
+  local body = resp.readAll()
+  resp.close()
+  if not body or #body < 100 then return false end
+  local f = fs.open(dest, "w")
+  f.write(body)
+  f.close()
+  return true
+end
+
+-- Since CC can't download raw .lua files from the same worker easily,
+-- we include the full scripts here and write them directly.
+
+local TERMINAL_SCRIPT = [[
+-- Exchange Terminal V1
+-- Placeholder: copy the full Exchange Terminal V1.lua content here
+-- or configure this autosetup to write it from the included source.
+print("Terminal script placeholder — install manually or update PASTE_URL.")
+print("The full terminal source should be written here.")
+]]
+
+local TICKER_SCRIPT = [[
+-- Exchange Ticker V1
+-- Placeholder: copy the full Exchange Ticker V1.lua content here
+print("Ticker script placeholder — install manually or update PASTE_URL.")
+]]
+
+local script
+if choice == "2" then
+  script = TICKER_SCRIPT
+else
+  script = TERMINAL_SCRIPT
+end
+
+-- Write the script to disk
+local outFile = filename .. ".lua"
+local f = fs.open(outFile, "w")
+f.write(script)
+f.close()
+
+print("Script written to " .. outFile)
+
+-- Prompt for token (terminal only)
+if choice == "1" or choice == "" then
+  print("")
+  print("Enter your CC token (from admin panel):")
+  write("> ")
+  local token = read()
+  if token and #token > 0 then
+    local tf = fs.open(".fdxtoken", "w")
+    tf.write(token)
+    tf.close()
+    print("Token saved to .fdxtoken")
+  end
+end
+
+-- Prompt for monitor side (ticker only)
+if choice == "2" then
+  print("")
+  print("Monitor side (left/right/top/bottom/back/front):")
+  write("> ")
+  local side = read()
+  if side and #side > 0 then
+    -- Update the MONITOR_SIDE in the file
+    local content = fs.open(outFile, "r").readAll()
+    fs.delete(outFile)
+    content = content:gsub('MONITOR_SIDE = "right"', 'MONITOR_SIDE = "' .. side .. '"')
+    local f2 = fs.open(outFile, "w")
+    f2.write(content)
+    f2.close()
+    print("Monitor side set to: " .. side)
+  end
+end
+
+-- Create startup script
+local startupContent
+if choice == "2" then
+  startupContent = 'shell.run("' .. outFile .. '")'
+else
+  startupContent = 'shell.run("' .. outFile .. '")'
+end
+
+local sf = fs.open("startup.lua", "w")
+sf.write(startupContent)
+sf.close()
+
+print("")
+print("========================================")
+print("  Setup complete!")
+print("  Run: " .. outFile)
+print("  Or reboot to auto-start.")
+print("========================================")

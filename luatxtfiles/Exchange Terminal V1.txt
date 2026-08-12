@@ -1,0 +1,432 @@
+-- ============================================================
+-- Regnum Aeternum — Exchange Terminal V1
+-- Full interactive trading terminal for the Fiducia Exchange.
+-- Resembles a Bloomberg terminal. Uses HTTP Bearer auth.
+-- Place on a computer with a modem (for HTTP) on the exchange floor.
+-- ============================================================
+
+local API_BASE = "https://YOUR_WORKER_DOMAIN/api/exchange/cc"
+local MACHINE_ID = os.getComputerID()
+local TOKEN_FILE = ".fdxtoken"
+local TOKEN = nil
+
+-- ↑↑↑ SET YOUR WORKER DOMAIN ABOVE ↑↑↑
+
+-- ── helpers ───────────────────────────────────────────────────────
+
+local function loadToken()
+  if fs.exists(TOKEN_FILE) then
+    local f = fs.open(TOKEN_FILE, "r")
+    TOKEN = f.readAll():gsub("%s+", "")
+    f.close()
+  end
+end
+
+local function saveToken(t)
+  local f = fs.open(TOKEN_FILE, "w")
+  f.write(t)
+  f.close()
+  TOKEN = t
+end
+
+local function httpGet(endpoint)
+  local url = API_BASE .. endpoint
+  local headers = { ["Authorization"] = "Bearer " .. TOKEN }
+  local ok, resp = pcall(http.get, url, headers)
+  if not ok or not resp then return nil, "HTTP request failed" end
+  local body = resp.readAll()
+  resp.close()
+  local ok2, data = pcall(textutils.unserializeJSON, body)
+  if not ok2 then return nil, "JSON parse error" end
+  return data, nil
+end
+
+local function httpPost(endpoint, body)
+  local url = API_BASE .. endpoint
+  local headers = {
+    ["Content-Type"] = "application/json",
+    ["Authorization"] = "Bearer " .. TOKEN
+  }
+  local payload = textutils.serializeJSON(body)
+  local ok, resp = pcall(http.post, url, payload, headers)
+  if not ok or not resp then return nil, "HTTP request failed" end
+  local rbody = resp.readAll()
+  resp.close()
+  local ok2, data = pcall(textutils.unserializeJSON, rbody)
+  if not ok2 then return nil, "JSON parse error" end
+  return data, nil
+end
+
+local function fmt(num, decimals)
+  decimals = decimals or 2
+  if num == nil then return "---" end
+  return string.format("%." .. decimals .. "f", num)
+end
+
+local function fmtChg(ch, chp)
+  if ch == 0 then return "  0.00" end
+  local arrow = ch > 0 and "▲" or "▼"
+  return string.format("%s %s (%s%%)", arrow, fmt(math.abs(ch)), fmt(math.abs(chp or 0), 1))
+end
+
+local function colorChg(ch)
+  if ch > 0 then term.setTextColor(colors.green)
+  elseif ch < 0 then term.setTextColor(colors.red)
+  else term.setTextColor(colors.white) end
+end
+
+local function padRight(s, len)
+  s = tostring(s)
+  if #s >= len then return s:sub(1, len) end
+  return s .. string.rep(" ", len - #s)
+end
+
+local function padLeft(s, len)
+  s = tostring(s)
+  if #s >= len then return s:sub(1, len) end
+  return string.rep(" ", len - #s) .. s
+end
+
+-- ── setup / auth ──────────────────────────────────────────────────
+
+local function setupToken()
+  term.clear()
+  term.setCursorPos(1, 1)
+  print("=== Fiducia Exchange Terminal Setup ===")
+  print("")
+  print("Computer ID: " .. MACHINE_ID)
+  print("")
+  write("Enter your CC token: ")
+  local t = read()
+  if not t or #t < 8 then
+    print("Invalid token. Ask an admin to issue one.")
+    sleep(2)
+    return false
+  end
+  saveToken(t)
+  print("Token saved. Testing...")
+  local data, err = httpGet("/index")
+  if not data or not data.success then
+    print("Token validation failed. " .. (err or "Invalid token"))
+    fs.delete(TOKEN_FILE)
+    TOKEN = nil
+    sleep(3)
+    return false
+  end
+  print("Token valid! Terminal ready.")
+  sleep(1)
+  return true
+end
+
+-- ── screens ───────────────────────────────────────────────────────
+
+local function screenMarket()
+  term.clear()
+  term.setCursorPos(1, 1)
+  print("=== FDX Market Overview ===")
+
+  local data, err = httpGet("/index")
+  if data and data.success then
+    local idx = data.response
+    term.setTextColor(colors.yellow)
+    print(string.format("FDX Index: %s  [▲%d ▼%d =%d]", fmt(idx.idx), idx.adv, idx.dec, idx.unc))
+    term.setTextColor(colors.white)
+  end
+
+  print("")
+  local data2, err2 = httpGet("/market")
+  if not data2 or not data2.success then
+    print("  Error: " .. (err2 or "Failed to load"))
+    return
+  end
+
+  print("TICKER  PRICE      CHANGE          VOL     STATUS")
+  print("------  ---------  --------------  ------  ------")
+  local rows = data2.response or {}
+  for _, r in ipairs(rows) do
+    colorChg(r.ch)
+    local line = string.format("%-6s  %9s  %-14s  %5d  %s",
+      r.t, fmt(r.p), fmtChg(r.ch, r.chp), r.v or 0, r.st)
+    print(line)
+  end
+  term.setTextColor(colors.white)
+  print("")
+  print("[Q] Quote  [O] Orders  [P] Portfolio  [T] Trades  [ESC] Exit")
+end
+
+local function screenQuote()
+  term.clear()
+  term.setCursorPos(1, 1)
+  print("=== Stock Quote ===")
+  write("Enter ticker: ")
+  local ticker = read():upper()
+  if ticker == "" then return end
+
+  local data, err = httpGet("/quote/" .. ticker)
+  if not data or not data.success then
+    print("Error: " .. (err or data and "Not found" or "Unknown"))
+    sleep(2)
+    return
+  end
+
+  local q = data.response
+  term.clear()
+  term.setCursorPos(1, 1)
+  print(string.format("=== %s — %s ===", q.t, q.n))
+  print("")
+
+  term.setTextColor(colors.yellow)
+  print(string.format("Price: %s", fmt(q.p)))
+  colorChg(q.ch)
+  print(string.format("Change: %s", fmtChg(q.ch, q.chp)))
+  term.setTextColor(colors.white)
+
+  print(string.format("Day High: %s  Low: %s  Vol: %d", fmt(q.hi), fmt(q.lo), q.v))
+  print(string.format("Bid: %s  Ask: %s  MktCap: %s", fmt(q.bid), fmt(q.ask), fmt(q.mc)))
+  print("Status: " .. q.st)
+  print("")
+
+  -- Order book
+  local data2, err2 = httpGet("/orderbook/" .. ticker)
+  if data2 and data2.success then
+    local ob = data2.response
+    print("-- Order Book --")
+    term.setTextColor(colors.red)
+    for _, a in ipairs(ob.asks or {}) do
+      print(string.format("  Ask %8s x %d", fmt(a.p), a.q))
+    end
+    term.setTextColor(colors.yellow)
+    print(string.format("       %8s", fmt(ob.p)))
+    term.setTextColor(colors.green)
+    for _, b in ipairs(ob.bids or {}) do
+      print(string.format("  Bid %8s x %d", fmt(b.p), b.q))
+    end
+    term.setTextColor(colors.white)
+  end
+
+  print("")
+  print("[B] Place Buy  [S] Place Sell  [M] Market  [ESC] Back")
+end
+
+local function screenPlaceOrder(side)
+  term.clear()
+  term.setCursorPos(1, 1)
+  print(string.format("=== Place %s Order ===", side))
+  write("Ticker: ")
+  local ticker = read():upper()
+  if ticker == "" then return end
+
+  write("Account key: ")
+  local account = read()
+  if account == "" then return end
+
+  write("Quantity: ")
+  local qty = tonumber(read())
+  if not qty or qty <= 0 then print("Invalid quantity."); sleep(1); return end
+
+  write("Limit price (blank = MARKET): ")
+  local limitStr = read()
+  local limit = nil
+  local orderType = "MARKET"
+  if limitStr ~= "" then
+    limit = tonumber(limitStr)
+    orderType = "LIMIT"
+  end
+
+  print("")
+  local est = (limit or 0) * qty
+  print(string.format("Est. value: %s", fmt(est)))
+  print("")
+  write("Confirm? [Y/N]: ")
+  if read():upper() ~= "Y" then print("Cancelled."); sleep(1); return end
+
+  local data, err = httpPost("/orders", {
+    account = account,
+    ticker = ticker,
+    side = side,
+    qty = qty,
+    limit = limit,
+    type = orderType
+  })
+
+  if data and data.success then
+    print("Order placed! ID: " .. data.response.id .. " Status: " .. data.response.st)
+  else
+    print("Error: " .. (err or (data and "Failed" or "Unknown")))
+  end
+  sleep(2)
+end
+
+local function screenPortfolio()
+  term.clear()
+  term.setCursorPos(1, 1)
+  print("=== My Portfolio ===")
+  write("Account key: ")
+  local account = read()
+  if account == "" then return end
+
+  local data, err = httpPost("/portfolio", { account = account })
+  if not data or not data.success then
+    print("Error: " .. (err or "Failed"))
+    sleep(2)
+    return
+  end
+
+  term.clear()
+  term.setCursorPos(1, 1)
+  print("=== Portfolio ===")
+  print("")
+  print("TICKER  QTY      AVG COST  PRICE     VALUE     P/L")
+  print("------  -------  --------  --------  --------  ----------")
+  local total = 0
+  local totalPL = 0
+  for _, h in ipairs(data.response or {}) do
+    colorChg(h.pl)
+    print(string.format("%-6s  %7d  %8s  %8s  %8s  %10s",
+      h.t, h.q, fmt(h.avg), fmt(h.p), fmt(h.val), fmt(h.pl)))
+    total = total + h.val
+    totalPL = totalPL + h.pl
+  end
+  term.setTextColor(colors.white)
+  print("------  -------  --------  --------  --------  ----------")
+  print(string.format("Total Value: %s  P/L: %s", fmt(total), fmt(totalPL)))
+  print("")
+  print("[M] Market  [O] Orders  [ESC] Back")
+end
+
+local function screenOrders()
+  term.clear()
+  term.setCursorPos(1, 1)
+  print("=== My Orders ===")
+  write("Account key: ")
+  local account = read()
+  if account == "" then return end
+
+  local data, err = httpPost("/orders/list", { account = account })
+  if not data or not data.success then
+    print("Error: " .. (err or "Failed"))
+    sleep(2)
+    return
+  end
+
+  term.clear()
+  term.setCursorPos(1, 1)
+  print("=== Open Orders ===")
+  print("")
+  print("ID   TICKER  SIDE  TYPE   QTY/FILLED  PRICE   STATUS")
+  print("----  ------  ----  -----  ----------  ------  ------")
+  local openOrders = {}
+  for _, o in ipairs(data.response or {}) do
+    if o.st == "open" or o.st == "partial" then
+      table.insert(openOrders, o)
+    end
+    local sideColor = o.sd == "BUY" and colors.green or colors.red
+    term.setTextColor(sideColor)
+    print(string.format("%-4d  %-6s  %-4s  %-5s  %3d/%-3d    %6s  %s",
+      o.id, o.t, o.sd, o.tp, o.qf, o.q, fmt(o.lp) or "MKT", o.st))
+  end
+  term.setTextColor(colors.white)
+  print("")
+  if #openOrders > 0 then
+    print("[C] Cancel Order  [ESC] Back")
+  else
+    print("[ESC] Back")
+  end
+
+  if #openOrders > 0 then
+    write("[C] Cancel Order or press any other key: ")
+    local _, key = os.pullEvent("key")
+    if key == keys.c then
+      write("Order ID to cancel: ")
+      local id = tonumber(read())
+      if id then
+        local data2, err2 = httpPost("/orders/cancel", { account = account, id = id })
+        if data2 and data2.success then
+          print("Cancelled.")
+        else
+          print("Error: " .. (err2 or "Failed"))
+        end
+        sleep(1)
+      end
+    end
+  else
+    sleep(1.5)
+  end
+end
+
+local function screenTrades()
+  term.clear()
+  term.setCursorPos(1, 1)
+  print("=== Trade History ===")
+  write("Account key: ")
+  local account = read()
+  if account == "" then return end
+
+  local data, err = httpPost("/trades", { account = account })
+  if not data or not data.success then
+    print("Error: " .. (err or "Failed"))
+    sleep(2)
+    return
+  end
+
+  term.clear()
+  term.setCursorPos(1, 1)
+  print("=== Recent Trades ===")
+  print("")
+  print("TICKER  SIDE  QTY     PRICE     TOTAL     TIME")
+  print("------  ----  ------  --------  --------  ----")
+  for _, t in ipairs(data.response or {}) do
+    local sideColor = t.sd == "BUY" and colors.green or colors.red
+    term.setTextColor(sideColor)
+    print(string.format("%-6s  %-4s  %6d  %8s  %8s  %s",
+      t.t, t.sd, t.q, fmt(t.p), fmt(t.tv), t.at:sub(12, 19)))
+  end
+  term.setTextColor(colors.white)
+  print("")
+  print("[ESC] Back")
+end
+
+-- ── main ──────────────────────────────────────────────────────────
+
+local function main()
+  loadToken()
+  if not TOKEN then
+    if not setupToken() then return end
+  end
+
+  -- Initial connectivity check
+  local data, err = httpGet("/index")
+  if not data or not data.success then
+    print("Connection failed. Check token and network.")
+    fs.delete(TOKEN_FILE)
+    TOKEN = nil
+    sleep(3)
+    return
+  end
+
+  while true do
+    screenMarket()
+    local _, key = os.pullEvent("key")
+
+    if key == keys.q then
+      screenQuote()
+    elseif key == keys.o then
+      screenOrders()
+    elseif key == keys.p then
+      screenPortfolio()
+    elseif key == keys.t then
+      screenTrades()
+    elseif key == keys.b then
+      screenPlaceOrder("BUY")
+    elseif key == keys.s then
+      screenPlaceOrder("SELL")
+    elseif key == keys.escape then
+      term.clear()
+      term.setCursorPos(1, 1)
+      print("Fiducia Exchange Terminal closed.")
+      return
+    end
+  end
+end
+
+main()

@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Fiducia Exchange — Regnum Aeternum</title>
+<meta name="description" content="Fiducia Exchange (FDX) — the official stock exchange of Regnum Aeternum. Live market data, company listings, and trading." />
+<link rel="icon" href="../assets/logo.webp" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant:wght@500;600;700&family=Cormorant+SC:wght@500;600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/styles.css" />
+<link rel="stylesheet" href="assets/exchange.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <a href="../" style="display:flex;align-items:center;gap:14px;">
+    <img class="topbar__crest" src="../assets/logo.webp" alt="Crest of Regnum Aeternum" />
+    <span class="topbar__name">Regnum Aeternum</span>
+  </a>
+  <span class="topbar__tag">Fiducia Exchange</span>
+  <a href="ipo/" style="font-family:var(--font-mono);font-size:11px;color:var(--gold-bright);">IPOs</a>
+  <a href="portfolio/" style="margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--gold-bright);">My Portfolio</a>
+</header>
+
+<main class="exchange-wrap">
+  <div class="exchange-header">
+    <div>
+      <h1 class="exchange-title">Fiducia Exchange</h1>
+      <p class="exchange-subtitle">FDX Composite Index — Live Market Data</p>
+    </div>
+  </div>
+
+  <!-- Index Banner -->
+  <div class="idx-banner">
+    <div class="idx-banner__left">
+      <div>
+        <div class="idx-banner__label">FDX Composite Index</div>
+        <div class="idx-banner__value" id="idx-value">—</div>
+        <div id="idx-change"></div>
+      </div>
+      <svg class="idx-banner__sparkline" id="idx-sparkline" viewBox="0 0 260 48" preserveAspectRatio="none"></svg>
+    </div>
+    <div class="idx-banner__stats">
+      <span><span id="idx-advancing">0</span> Advancing</span>
+      <span><span id="idx-declining">0</span> Declining</span>
+    </div>
+  </div>
+
+  <!-- Market Table -->
+  <div class="ex-table-wrap">
+    <table class="ex-table" id="market-table">
+      <thead>
+        <tr>
+          <th data-sort="ticker">Ticker</th>
+          <th data-sort="name">Company</th>
+          <th data-sort="sector">Sector</th>
+          <th data-sort="current_price">Price</th>
+          <th data-sort="changePct">Change</th>
+          <th data-sort="day_volume">Volume</th>
+          <th data-sort="market_cap" class="sorted">Mkt Cap</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="market-tbody">
+        <tr><td colspan="8" class="loading">Loading market data…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Sector Heatmap -->
+  <div class="sector-map" id="sector-grid"></div>
+
+  <!-- Recent Trades -->
+  <div class="recent-trades">
+    <h3>Recent Trades</h3>
+    <div id="recent-trades-list">
+      <div class="loading">Loading…</div>
+    </div>
+  </div>
+</main>
+
+<footer class="footer">
+  <div class="footer__inner">
+    <div class="footer__brand">
+      <img class="footer__crest" src="../assets/logo.webp" alt="" />
+      <div>
+        <div class="footer__name">Regnum Aeternum</div>
+        <div class="footer__motto">Regnum quod non cadit</div>
+      </div>
+    </div>
+    <div class="footer__meta">
+      Maintained by the Office of Civil Administration<br/>
+      © 2026 Regnum Aeternum
+    </div>
+  </div>
+</footer>
+
+<script src="assets/exchange-app.js"></script>
+</body>
+</html>

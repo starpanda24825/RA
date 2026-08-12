@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>IPOs — Fiducia Exchange</title>
+<link rel="icon" href="../../assets/logo.webp" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant:wght@500;600;700&family=Cormorant+SC:wght@500;600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../assets/styles.css" />
+<link rel="stylesheet" href="../assets/exchange.css" />
+<style>
+.ipo-card {
+  background: var(--ink-elevated);
+  border: 1px solid var(--gold-dim);
+  border-radius: 12px;
+  padding: 20px 24px;
+  margin-bottom: 16px;
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.ipo-card__info { flex: 1; min-width: 200px; }
+.ipo-card__ticker { font-family: var(--font-mono); font-size: 14px; font-weight: 600; color: var(--gold-bright); letter-spacing: 0.05em; }
+.ipo-card__name { font-family: var(--font-display); font-size: 20px; font-weight: 600; color: var(--parchment); margin: 2px 0 6px; }
+.ipo-card__meta { font-size: 13px; color: var(--parchment-dim); }
+.ipo-card__meta span { color: var(--parchment); font-family: var(--font-mono); }
+.ipo-card__action {
+  display: flex; flex-direction: column; gap: 8px; align-items: center;
+  min-width: 180px;
+}
+.ipo-sub-form { display: flex; gap: 6px; align-items: center; }
+.ipo-sub-form input {
+  width: 80px; padding: 8px 10px; font-family: var(--font-mono); font-size: 13px;
+  color: var(--parchment); background: var(--ink-soft); border: 1px solid var(--slate-line);
+  border-radius: 7px;
+}
+.ipo-sub-btn {
+  padding: 9px 16px; border: none; border-radius: 8px;
+  font-family: var(--font-mono); font-size: 12px; font-weight: 600;
+  letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer;
+  background: var(--teal-bright); color: var(--ink);
+}
+.ipo-sub-btn:hover { opacity: 0.85; }
+.ipo-cancel-btn {
+  font-family: var(--font-mono); font-size: 10px; color: #e3a3a3;
+  background: none; border: 1px solid rgba(176,64,64,0.4); border-radius: 100px;
+  padding: 3px 10px; cursor: pointer;
+}
+.ipo-oversub {
+  color: var(--crimson-bright); font-family: var(--font-mono); font-size: 11px;
+}
+.ipo-progress {
+  width: 100%; height: 6px; background: var(--ink-soft); border-radius: 3px; overflow: hidden; margin-top: 6px;
+}
+.ipo-progress__bar {
+  height: 100%; background: var(--teal-bright); border-radius: 3px; transition: width 0.3s;
+}
+.ipo-progress__bar.over { background: var(--crimson-bright); }
+.ipo-my-sub {
+  font-family: var(--font-mono); font-size: 11px; color: var(--teal-bright);
+  margin-top: 4px;
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <a href="../../" style="display:flex;align-items:center;gap:14px;">
+    <img class="topbar__crest" src="../../assets/logo.webp" alt="Crest of Regnum Aeternum" />
+    <span class="topbar__name">Regnum Aeternum</span>
+  </a>
+  <span class="topbar__tag">Fiducia Exchange</span>
+  <a href="../" style="margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--slate-soft);">← Market</a>
+  <a href="../portfolio/" style="font-family:var(--font-mono);font-size:11px;color:var(--gold-bright);">Portfolio</a>
+</header>
+
+<main class="exchange-wrap" id="app">
+  <div class="exchange-header">
+    <div>
+      <h1 class="exchange-title">Initial Public Offerings</h1>
+      <p class="exchange-subtitle">Subscribe to upcoming companies before they list</p>
+    </div>
+  </div>
+  <div class="loading">Loading IPOs…</div>
+</main>
+
+<footer class="footer">
+  <div class="footer__inner">
+    <div class="footer__brand">
+      <img class="footer__crest" src="../../assets/logo.webp" alt="" />
+      <div><div class="footer__name">Regnum Aeternum</div><div class="footer__motto">Regnum quod non cadit</div></div>
+    </div>
+    <div class="footer__meta">Maintained by the Office of Civil Administration<br/>© 2026 Regnum Aeternum</div>
+  </div>
+</footer>
+
+<script src="../assets/ipo.js"></script>
+</body>
+</html>
