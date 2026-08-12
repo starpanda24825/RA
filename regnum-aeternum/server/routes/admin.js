@@ -5,7 +5,7 @@ const store   = require('../store');
 
 const router = express.Router();
 
-const VALID_ROLES = ['citizen', 'ballistics', 'editor', 'banker', 'admin'];
+const VALID_ROLES = ['citizen', 'ballistics', 'editor', 'banker', 'admin', 'adapter'];
 
 function hasRole(session, role) {
   return (session.role || '').split(',').map(function(r) { return r.trim(); }).indexOf(role) !== -1;

@@ -257,6 +257,47 @@ export async function deleteLegalCaseBySlug(env, slug) {
   await env.DB.prepare('DELETE FROM legal_case_law WHERE slug = ?').bind(slug).run();
 }
 
+// ---------- legal: drafts (adapter workflow) ----------
+
+export async function listLegalDrafts(env) {
+  const { results } = await env.DB.prepare('SELECT * FROM legal_drafts ORDER BY id DESC').all();
+  return results;
+}
+
+export async function findLegalDraftById(env, id) {
+  return env.DB.prepare('SELECT * FROM legal_drafts WHERE id = ?').bind(Number(id)).first();
+}
+
+export async function insertLegalDraft(env, { kind, targetSlug, title, author, payloadJson }) {
+  const now = nowIso();
+  const result = await env.DB.prepare(
+    `INSERT INTO legal_drafts (kind, target_slug, title, status, author, payload, reviewer_note, reviewed_by, created_at, updated_at)
+     VALUES (?, ?, ?, 'pending', ?, ?, NULL, NULL, ?, ?)`
+  ).bind(kind, targetSlug || null, title, author, payloadJson, now, now).run();
+  return findLegalDraftById(env, result.meta.last_row_id);
+}
+
+export async function updateLegalDraft(env, id, fields) {
+  const sets = [];
+  const binds = [];
+  if (fields.kind !== undefined)          { sets.push('kind = ?');          binds.push(fields.kind); }
+  if (fields.targetSlug !== undefined)    { sets.push('target_slug = ?');    binds.push(fields.targetSlug || null); }
+  if (fields.title !== undefined)         { sets.push('title = ?');          binds.push(fields.title); }
+  if (fields.status !== undefined)        { sets.push('status = ?');         binds.push(fields.status); }
+  if (fields.payload !== undefined)       { sets.push('payload = ?');        binds.push(fields.payload); }
+  if (fields.reviewerNote !== undefined)  { sets.push('reviewer_note = ?');  binds.push(fields.reviewerNote || null); }
+  if (fields.reviewedBy !== undefined)    { sets.push('reviewed_by = ?');    binds.push(fields.reviewedBy || null); }
+  if (!sets.length) return findLegalDraftById(env, id);
+  sets.push('updated_at = ?');
+  binds.push(nowIso(), Number(id));
+  await env.DB.prepare(`UPDATE legal_drafts SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
+  return findLegalDraftById(env, id);
+}
+
+export async function deleteLegalDraftById(env, id) {
+  await env.DB.prepare('DELETE FROM legal_drafts WHERE id = ?').bind(Number(id)).run();
+}
+
 // ---------- land registry: plots ----------
 
 export async function listLandPlots(env) {

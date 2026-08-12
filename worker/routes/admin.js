@@ -9,7 +9,7 @@ import * as store from '../lib/store.js';
 import { getCurrentUser, USERNAME_RE, hasRole } from './auth.js';
 import { hash } from '../lib/passwords.js';
 
-const VALID_ROLES = ['citizen', 'ballistics', 'editor', 'banker', 'admin'];
+const VALID_ROLES = ['citizen', 'ballistics', 'editor', 'banker', 'admin', 'adapter'];
 
 function json(data, init = {}) {
   const headers = new Headers(init.headers || {});

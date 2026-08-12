@@ -146,6 +146,19 @@ export default {
         if (m && method === 'PUT') return await legal.updateCase(request, env, m[1]);
         if (m && method === 'DELETE') return await legal.deleteCase(request, env, m[1]);
 
+        if (pathname === '/api/legal/drafts' && method === 'GET') return await legal.listDrafts(request, env);
+        if (pathname === '/api/legal/drafts' && method === 'POST') return await legal.createDraft(request, env);
+
+        m = pathname.match(/^\/api\/legal\/drafts\/(\d+)$/);
+        if (m && method === 'PUT') return await legal.updateDraft(request, env, m[1]);
+        if (m && method === 'DELETE') return await legal.deleteDraft(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/legal\/drafts\/(\d+)\/request-changes$/);
+        if (m && method === 'POST') return await legal.requestChangesDraft(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/legal\/drafts\/(\d+)\/publish$/);
+        if (m && method === 'POST') return await legal.publishDraft(request, env, m[1]);
+
         // ---- Land Registry System ----
         if (pathname === '/api/landregistry/data' && method === 'GET') return await landregistry.getPublicData(request, env);
         if (pathname === '/api/landregistry/plots' && method === 'GET') return await landregistry.listPlotsAdmin(request, env);

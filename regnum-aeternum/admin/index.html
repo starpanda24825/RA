@@ -114,6 +114,11 @@
 .a-pill--ballistics { color: var(--gold-bright); }
 .a-pill--citizen { color: var(--slate-soft); }
 .a-pill--banker  { color: var(--gold-bright); }
+.a-pill--adapter { color: var(--teal-bright); }
+.a-pill--pending { color: var(--slate-soft); }
+.a-pill--changes_requested { color: var(--gold-bright); }
+.a-pill--published { color: var(--teal-bright); }
+.a-pill--rejected { color: #e3a3a3; }
 
 .role-pill-wrap { display:inline-flex; align-items:center; gap:2px; margin-right:3px; }
 .role-pill-remove {
@@ -154,7 +159,7 @@
     </div>
     <p class="subpage__eyebrow">Crown Authority</p>
     <h1 class="subpage__title">Administration</h1>
-    <p class="subpage__body" id="gate-msg">This area is reserved for the Crown's administrators, editors, and treasury bankers. Sign in to continue.</p>
+    <p class="subpage__body" id="gate-msg">This area is reserved for the Crown's administrators, editors, legal adapters, and treasury bankers. Sign in to continue.</p>
 
     <form id="login-form" style="margin:24px 0 0;display:flex;flex-direction:column;gap:12px;max-width:320px;margin-left:auto;margin-right:auto;">
       <input id="lg-user" class="a-input" type="text"     placeholder="Username" autocomplete="username"  required/>
@@ -207,6 +212,7 @@
             <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;color:var(--parchment-dim);text-transform:none;font-family:var(--font-body);cursor:pointer;"><input type="checkbox" value="ballistics" /> Ballistics Clearance</label>
             <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;color:var(--parchment-dim);text-transform:none;font-family:var(--font-body);cursor:pointer;"><input type="checkbox" value="editor" /> Editor</label>
             <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;color:var(--parchment-dim);text-transform:none;font-family:var(--font-body);cursor:pointer;"><input type="checkbox" value="banker" /> Banker</label>
+            <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;color:var(--parchment-dim);text-transform:none;font-family:var(--font-body);cursor:pointer;"><input type="checkbox" value="adapter" /> Adapter</label>
             <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;color:var(--parchment-dim);text-transform:none;font-family:var(--font-body);cursor:pointer;"><input type="checkbox" value="admin" /> Admin</label>
           </div>
         </div>
@@ -325,6 +331,13 @@
 
   <!-- LEGAL PANEL -->
   <div class="admin-panel" id="panel-legal">
+    <div class="banking-subnav">
+      <button class="banking-subnav__btn active" data-lg="legislation">Legislation</button>
+      <button class="banking-subnav__btn" data-lg="drafts" id="lg-nav-drafts">Draft Review</button>
+    </div>
+
+    <!-- Legislation sub-panel -->
+    <div class="banking-subpanel active" id="lg-legislation">
     <div class="admin-card" id="legal-acts-list-card">
       <h2>Legal Acts</h2>
       <button class="a-btn primary" id="new-act-btn" style="margin-bottom:16px;">+ New Act</button>
@@ -375,9 +388,18 @@
             <pre id="act-json-preview"></pre>
           </details>
         </div>
-        <div style="display:flex;gap:10px;">
+        <div style="display:flex;gap:10px;align-items:center;">
           <button class="a-btn primary" id="act-save-btn">Save</button>
           <button class="a-btn" id="act-cancel-btn">Cancel</button>
+          <span id="act-mode-hint" style="font-size:12px;color:var(--slate-soft);"></span>
+        </div>
+        <div id="act-review-bar" style="display:none;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--slate-line);border-radius:8px;">
+          <label style="font-family:var(--font-mono);font-size:9.5px;letter-spacing:0.1em;text-transform:uppercase;color:var(--slate-soft);">Reviewer note / requested changes</label>
+          <textarea id="act-review-note" class="a-textarea" style="min-height:70px;" placeholder="Describe the changes you are requesting…"></textarea>
+          <div style="display:flex;gap:10px;">
+            <button class="a-btn primary" id="act-publish-btn">Publish</button>
+            <button class="a-btn" id="act-request-changes-btn">Request Changes</button>
+          </div>
         </div>
         <p id="act-editor-msg" class="a-msg" style="display:none;"></p>
       </div>
@@ -413,11 +435,34 @@
           <label>Related Articles (JSON array of {actSlug, number})</label>
           <textarea class="a-textarea" id="case-related" style="font-family:var(--font-mono);font-size:12.5px;min-height:90px;">[]</textarea>
         </div>
-        <div style="display:flex;gap:10px;">
+        <div style="display:flex;gap:10px;align-items:center;">
           <button class="a-btn primary" id="case-save-btn">Save</button>
           <button class="a-btn" id="case-cancel-btn">Cancel</button>
+          <span id="case-mode-hint" style="font-size:12px;color:var(--slate-soft);"></span>
+        </div>
+        <div id="case-review-bar" style="display:none;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--slate-line);border-radius:8px;">
+          <label style="font-family:var(--font-mono);font-size:9.5px;letter-spacing:0.1em;text-transform:uppercase;color:var(--slate-soft);">Reviewer note / requested changes</label>
+          <textarea id="case-review-note" class="a-textarea" style="min-height:70px;" placeholder="Describe the changes you are requesting…"></textarea>
+          <div style="display:flex;gap:10px;">
+            <button class="a-btn primary" id="case-publish-btn">Publish</button>
+            <button class="a-btn" id="case-request-changes-btn">Request Changes</button>
+          </div>
         </div>
         <p id="case-editor-msg" class="a-msg" style="display:none;"></p>
+      </div>
+    </div>
+    </div>
+
+    <!-- Drafts sub-panel -->
+    <div class="banking-subpanel" id="lg-drafts">
+      <div class="admin-card" id="legal-drafts-card">
+        <h2 id="legal-drafts-heading">Draft Review</h2>
+        <p style="color:var(--slate-soft);font-size:12.5px;margin:0 0 14px;" id="legal-drafts-hint"></p>
+        <table class="a-table">
+          <thead><tr><th>Kind</th><th>Title</th><th>Author</th><th>Target</th><th>Status</th><th>Updated</th><th>Actions</th></tr></thead>
+          <tbody id="drafts-tbody"></tbody>
+        </table>
+        <p id="drafts-msg" class="a-msg" style="display:none;"></p>
       </div>
     </div>
   </div>
@@ -952,11 +997,12 @@
     var isAdmin = userHasRole(user, 'admin');
     var isBanker = userHasRole(user, 'banker');
     var isEditor = userHasRole(user, 'editor');
+    var isAdapter = userHasRole(user, 'adapter');
     var hasStaffAccess = isAdmin || isEditor;
 
     document.getElementById('tab-btn-users').style.display = isAdmin ? '' : 'none';
     document.getElementById('tab-btn-news').style.display = hasStaffAccess ? '' : 'none';
-    document.getElementById('tab-btn-legal').style.display = isAdmin ? '' : 'none';
+    document.getElementById('tab-btn-legal').style.display = (isAdmin || isAdapter) ? '' : 'none';
     document.getElementById('tab-btn-land').style.display = isAdmin ? '' : 'none';
     document.getElementById('tab-btn-exchange').style.display = (isAdmin || isBanker) ? '' : 'none';
     document.getElementById('tab-btn-banking').style.display = (isAdmin || isBanker) ? '' : 'none';
@@ -974,6 +1020,12 @@
       document.querySelector('.admin-panel.active').classList.remove('active');
       document.getElementById('tab-btn-banking').classList.add('active');
       document.getElementById('panel-banking').classList.add('active');
+    } else if (isAdapter && !isAdmin) {
+      // Adapters land on the Legal Information System
+      document.querySelector('.admin-tab.active').classList.remove('active');
+      document.querySelector('.admin-panel.active').classList.remove('active');
+      document.getElementById('tab-btn-legal').classList.add('active');
+      document.getElementById('panel-legal').classList.add('active');
     }
 
     loadUsers();
@@ -981,6 +1033,7 @@
     loadNewspapers();
     loadActs();
     loadCaseLaw();
+    loadDrafts();
     loadPlots();
     if (typeof BankingAdmin !== 'undefined') BankingAdmin.init(me);
     if (typeof ExchangeAdmin !== 'undefined') ExchangeAdmin.init(me);
@@ -996,7 +1049,7 @@
     });
     const data = await r.json();
     if (!r.ok) { errEl.textContent = data.error || 'Login failed.'; errEl.style.display = 'block'; return; }
-    if (!(userHasRole(data, 'admin') || userHasRole(data, 'editor') || userHasRole(data, 'banker'))) {
+    if (!(userHasRole(data, 'admin') || userHasRole(data, 'editor') || userHasRole(data, 'banker') || userHasRole(data, 'adapter'))) {
       errEl.textContent = 'This account does not have administrative access.';
       errEl.style.display = 'block';
       await fetch('/api/auth/logout', { method: 'POST' });
@@ -1018,6 +1071,18 @@
       tab.classList.add('active');
       document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
     });
+  });
+
+  // Legal sub-tabs (Legislation / Draft Review)
+  function activateLegalSubpanel(name) {
+    document.querySelectorAll('#panel-legal .banking-subnav__btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('#panel-legal .banking-subpanel').forEach(p => p.classList.remove('active'));
+    const btn = document.querySelector('#panel-legal .banking-subnav__btn[data-lg="' + name + '"]');
+    if (btn) btn.classList.add('active');
+    document.getElementById('lg-' + name).classList.add('active');
+  }
+  document.querySelectorAll('#panel-legal .banking-subnav__btn').forEach(btn => {
+    btn.addEventListener('click', () => activateLegalSubpanel(btn.dataset.lg));
   });
 
   // ── Helpers ─────────────────────────────────────────────────
@@ -1051,7 +1116,7 @@
         <td>
           <select class="a-select role-select" data-id="${u.id}" data-roles="${escapeHtml(u.role)}" style="font-size:11px;padding:4px 8px;">
             <option value="">+ Add role…</option>
-            ${['citizen','ballistics','editor','banker','admin'].map(function(r) { return '<option value="' + r + '">' + roleLabel(r) + '</option>'; }).join('')}
+            ${['citizen','ballistics','editor','banker','adapter','admin'].map(function(r) { return '<option value="' + r + '">' + roleLabel(r) + '</option>'; }).join('')}
           </select>
           <button class="a-btn danger" data-del="${u.id}">Delete</button>
         </td>
@@ -1312,19 +1377,72 @@
   document.getElementById('np-save-btn').addEventListener('click', () => saveNewspaper(false));
   document.getElementById('np-publish-btn').addEventListener('click', () => saveNewspaper(true));
 
-  // ── Legal Information System (admin only) ──────────────────────
+  // ── Legal Information System (admin & adapter) ─────────────────
 
   let actBuilder = null;
+  let actDraftId = null;    // non-null => act editor is working on a DRAFT
+  let caseDraftId = null;   // non-null => case editor is working on a DRAFT
+  let allDrafts = [];
+
+  function isLegalAdmin() { return me && userHasRole(me, 'admin'); }
 
   function actArticleCount(act) {
     return (act.chapters || []).reduce((n, c) => n + (c.articles ? c.articles.length : 0), 0);
   }
 
+  function draftStatusPill(s) {
+    const label = s === 'changes_requested' ? 'Changes Requested' : (s.charAt(0).toUpperCase() + s.slice(1));
+    return `<span class="a-pill a-pill--${s}">${label}</span>`;
+  }
+
+  function ensureActBuilder() {
+    if (actBuilder) return;
+    actBuilder = LegalBuilder.mount(document.getElementById('act-builder-root'), { chapters: [], preamble: [] }, {
+      onChange: (data) => {
+        const pre = document.getElementById('act-json-preview');
+        if (pre) pre.textContent = JSON.stringify(data, null, 2);
+      },
+      getOwnActSlug: () => document.getElementById('act-slug').value.trim().toLowerCase(),
+      getOwnActShortTitle: () => document.getElementById('act-short-title').value || 'This Act'
+    });
+  }
+
+  function fillActEditor(payload, heading) {
+    document.getElementById('act-editor-heading').textContent = heading;
+    document.getElementById('act-slug').value = payload.slug || '';
+    document.getElementById('act-slug').disabled = !!payload.slugLocked;
+    document.getElementById('act-category').value = payload.category || 'act';
+    document.getElementById('act-status').value = payload.status || 'in-force';
+    document.getElementById('act-date-enacted').value = payload.dateEnacted || '';
+    document.getElementById('act-date-inforce').value = payload.dateInForce || '';
+    document.getElementById('act-title').value = payload.title || '';
+    document.getElementById('act-short-title').value = payload.shortTitle || '';
+    document.getElementById('act-aliases').value = (payload.aliases || []).join(', ');
+    actBuilder.setData({ chapters: payload.chapters || [], preamble: payload.preamble || [] });
+  }
+
+  function readActBody() {
+    const builderData = actBuilder.getData();
+    return {
+      slug: document.getElementById('act-slug').value.trim().toLowerCase(),
+      title: document.getElementById('act-title').value,
+      shortTitle: document.getElementById('act-short-title').value,
+      aliases: document.getElementById('act-aliases').value.split(',').map(s => s.trim()).filter(Boolean),
+      category: document.getElementById('act-category').value,
+      status: document.getElementById('act-status').value,
+      dateEnacted: document.getElementById('act-date-enacted').value,
+      dateInForce: document.getElementById('act-date-inforce').value,
+      chapters: builderData.chapters,
+      preamble: builderData.preamble,
+    };
+  }
+
   async function loadActs() {
-    if (!me || !userHasRole(me, 'admin')) return;
+    if (!me || !(userHasRole(me, 'admin') || userHasRole(me, 'adapter'))) return;
     const r = await fetch('/api/legal/acts');
     if (!r.ok) return;
     const acts = await r.json();
+    const admin = isLegalAdmin();
     const tbody = document.getElementById('acts-tbody');
     tbody.innerHTML = acts.map(a => `
       <tr>
@@ -1334,8 +1452,8 @@
         <td>${actArticleCount(a)}</td>
         <td>${(a.chapters || []).length}</td>
         <td>
-          <button class="a-btn" data-edit-act="${escapeHtml(a.slug)}">Edit</button>
-          <button class="a-btn danger" data-del-act="${escapeHtml(a.slug)}">Delete</button>
+          <button class="a-btn" data-edit-act="${escapeHtml(a.slug)}">${admin ? 'Edit' : 'Propose Amendment'}</button>
+          ${admin ? `<button class="a-btn danger" data-del-act="${escapeHtml(a.slug)}">Delete</button>` : ''}
         </td>
       </tr>
     `).join('');
@@ -1351,76 +1469,65 @@
   let editingActSlug = null;
 
   function openActEditor(slug) {
+    actDraftId = null;
     editingActSlug = slug || null;
     document.getElementById('act-editor-msg').style.display = 'none';
+    setActReviewBar(false);
+    document.getElementById('act-mode-hint').textContent = isLegalAdmin() ? '' : 'Draft mode — submitted for admin review, not published.';
+    document.getElementById('act-save-btn').textContent = isLegalAdmin() ? 'Save' : 'Submit Draft';
     document.getElementById('act-editor').classList.add('active');
 
-    if (!actBuilder) {
-      actBuilder = LegalBuilder.mount(document.getElementById('act-builder-root'), { chapters: [], preamble: [] }, {
-        onChange: (data) => {
-          const pre = document.getElementById('act-json-preview');
-          if (pre) pre.textContent = JSON.stringify(data, null, 2);
-        },
-        getOwnActSlug: () => document.getElementById('act-slug').value.trim().toLowerCase(),
-        getOwnActShortTitle: () => document.getElementById('act-short-title').value || 'This Act'
-      });
-    }
+    ensureActBuilder();
 
     if (slug) {
       fetch('/api/legal/acts').then(r => r.json()).then(acts => {
         const act = acts.find(a => a.slug === slug);
         if (!act) return;
-        document.getElementById('act-editor-heading').textContent = 'Edit Act — ' + act.shortTitle;
-        document.getElementById('act-slug').value = act.slug;
-        document.getElementById('act-slug').disabled = true;
-        document.getElementById('act-category').value = act.category;
-        document.getElementById('act-status').value = act.status;
-        document.getElementById('act-date-enacted').value = act.dateEnacted || '';
-        document.getElementById('act-date-inforce').value = act.dateInForce || '';
-        document.getElementById('act-title').value = act.title;
-        document.getElementById('act-short-title').value = act.shortTitle;
-        document.getElementById('act-aliases').value = (act.aliases || []).join(', ');
-        actBuilder.setData({ chapters: act.chapters || [], preamble: act.preamble || [] });
+        fillActEditor({ ...act, slugLocked: true }, 'Edit Act — ' + act.shortTitle);
       });
     } else {
-      document.getElementById('act-editor-heading').textContent = 'New Act';
-      document.getElementById('act-slug').value = '';
-      document.getElementById('act-slug').disabled = false;
-      document.getElementById('act-category').value = 'act';
-      document.getElementById('act-status').value = 'in-force';
-      document.getElementById('act-date-enacted').value = '';
-      document.getElementById('act-date-inforce').value = '';
-      document.getElementById('act-title').value = '';
-      document.getElementById('act-short-title').value = '';
-      document.getElementById('act-aliases').value = '';
-      actBuilder.setData({ chapters: [], preamble: [] });
+      fillActEditor({}, 'New Act');
     }
     document.getElementById('act-editor').scrollIntoView({ behavior: 'smooth' });
+  }
+
+  function setActReviewBar(show) {
+    const bar = document.getElementById('act-review-bar');
+    if (bar) bar.style.display = show ? 'flex' : 'none';
   }
 
   document.getElementById('new-act-btn').addEventListener('click', () => openActEditor(null));
   document.getElementById('act-cancel-btn').addEventListener('click', () => {
     document.getElementById('act-editor').classList.remove('active');
+    setActReviewBar(false);
   });
+
+  async function saveActAsDraft() {
+    const msg = document.getElementById('act-editor-msg');
+    msg.style.display = 'none';
+    const body = readActBody();
+    const isUpdate = !!actDraftId;
+    const url = isUpdate ? '/api/legal/drafts/' + actDraftId : '/api/legal/drafts';
+    const r = await fetch(url, {
+      method: isUpdate ? 'PUT' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'act', targetSlug: editingActSlug || null, title: body.title || 'Untitled Act', payload: body })
+    });
+    const data = await r.json();
+    msg.style.display = 'block';
+    if (!r.ok) { msg.className = 'a-msg error'; msg.textContent = data.error || 'Could not save draft.'; return false; }
+    msg.className = 'a-msg success'; msg.textContent = isUpdate ? 'Draft updated.' : 'Draft submitted for review.';
+    actDraftId = data.id || actDraftId;
+    loadDrafts();
+    return true;
+  }
 
   document.getElementById('act-save-btn').addEventListener('click', async () => {
     const msg = document.getElementById('act-editor-msg');
     msg.style.display = 'none';
+    const body = readActBody();
 
-    const builderData = actBuilder.getData();
-
-    const body = {
-      slug: document.getElementById('act-slug').value.trim().toLowerCase(),
-      title: document.getElementById('act-title').value,
-      shortTitle: document.getElementById('act-short-title').value,
-      aliases: document.getElementById('act-aliases').value.split(',').map(s => s.trim()).filter(Boolean),
-      category: document.getElementById('act-category').value,
-      status: document.getElementById('act-status').value,
-      dateEnacted: document.getElementById('act-date-enacted').value,
-      dateInForce: document.getElementById('act-date-inforce').value,
-      chapters: builderData.chapters,
-      preamble: builderData.preamble,
-    };
+    if (actDraftId || !isLegalAdmin()) { await saveActAsDraft(); return; }
 
     const isNew = !editingActSlug;
     const url = isNew ? '/api/legal/acts' : '/api/legal/acts/' + encodeURIComponent(editingActSlug);
@@ -1429,16 +1536,86 @@
 
     msg.style.display = 'block';
     if (!r.ok) { msg.className = 'a-msg error'; msg.textContent = data.error || 'Could not save act.'; return; }
-    msg.className = 'a-msg success'; msg.textContent = 'Saved.';
+    msg.className = 'a-msg success'; msg.textContent = 'Saved & published.';
     editingActSlug = body.slug;
     loadActs();
   });
 
+  document.getElementById('act-publish-btn').addEventListener('click', async () => {
+    const msg = document.getElementById('act-editor-msg');
+    msg.style.display = 'none';
+    if (!actDraftId) return;
+    if (!(await saveActAsDraft())) return;
+    const r = await fetch('/api/legal/drafts/' + actDraftId + '/publish', { method: 'POST' });
+    const data = await r.json();
+    msg.style.display = 'block';
+    if (!r.ok) { msg.className = 'a-msg error'; msg.textContent = data.error || 'Could not publish draft.'; return; }
+    msg.className = 'a-msg success'; msg.textContent = 'Published.';
+    document.getElementById('act-editor').classList.remove('active');
+    setActReviewBar(false);
+    loadDrafts();
+    loadActs();
+  });
+
+  document.getElementById('act-request-changes-btn').addEventListener('click', async () => {
+    const msg = document.getElementById('act-editor-msg');
+    msg.style.display = 'none';
+    if (!actDraftId) return;
+    const note = document.getElementById('act-review-note').value.trim();
+    if (!note) { msg.className = 'a-msg error'; msg.style.display = 'block'; msg.textContent = 'Add a note explaining the requested changes.'; return; }
+    const r = await fetch('/api/legal/drafts/' + actDraftId + '/request-changes', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note })
+    });
+    const data = await r.json();
+    msg.style.display = 'block';
+    if (!r.ok) { msg.className = 'a-msg error'; msg.textContent = data.error || 'Could not request changes.'; return; }
+    msg.className = 'a-msg success'; msg.textContent = 'Changes requested.';
+    document.getElementById('act-editor').classList.remove('active');
+    setActReviewBar(false);
+    loadDrafts();
+  });
+
+  function fillCaseEditor(c, heading) {
+    document.getElementById('case-editor-heading').textContent = heading;
+    document.getElementById('case-slug').value = c.slug || '';
+    document.getElementById('case-slug').disabled = !!c.slugLocked;
+    document.getElementById('case-ref').value = c.refNumber || '';
+    document.getElementById('case-date').value = c.date || '';
+    document.getElementById('case-type').value = c.type || 'Judgment';
+    document.getElementById('case-title').value = c.title || '';
+    document.getElementById('case-court').value = c.court || '';
+    document.getElementById('case-chamber').value = c.chamber || '';
+    document.getElementById('case-subject').value = c.subject || '';
+    document.getElementById('case-summary').value = c.summary || '';
+    document.getElementById('case-fulltext').value = c.fullText || '';
+    document.getElementById('case-related').value = JSON.stringify(c.relatedArticles || [], null, 2);
+  }
+
+  function readCaseBody() {
+    let relatedArticles;
+    try { relatedArticles = JSON.parse(document.getElementById('case-related').value); }
+    catch (e) { throw new Error('Related Articles is not valid JSON: ' + e.message); }
+    return {
+      slug: document.getElementById('case-slug').value.trim().toLowerCase(),
+      title: document.getElementById('case-title').value,
+      refNumber: document.getElementById('case-ref').value,
+      date: document.getElementById('case-date').value,
+      type: document.getElementById('case-type').value,
+      court: document.getElementById('case-court').value,
+      chamber: document.getElementById('case-chamber').value,
+      subject: document.getElementById('case-subject').value,
+      summary: document.getElementById('case-summary').value,
+      fullText: document.getElementById('case-fulltext').value,
+      relatedArticles: relatedArticles,
+    };
+  }
+
   async function loadCaseLaw() {
-    if (!me || !userHasRole(me, 'admin')) return;
+    if (!me || !(userHasRole(me, 'admin') || userHasRole(me, 'adapter'))) return;
     const r = await fetch('/api/legal/case-law');
     if (!r.ok) return;
     const cases = await r.json();
+    const admin = isLegalAdmin();
     const tbody = document.getElementById('cases-tbody');
     tbody.innerHTML = cases.map(c => `
       <tr>
@@ -1446,8 +1623,8 @@
         <td>${escapeHtml(c.refNumber)}</td>
         <td>${escapeHtml(c.date || '')}</td>
         <td>
-          <button class="a-btn" data-edit-case="${escapeHtml(c.slug)}">Edit</button>
-          <button class="a-btn danger" data-del-case="${escapeHtml(c.slug)}">Delete</button>
+          <button class="a-btn" data-edit-case="${escapeHtml(c.slug)}">${admin ? 'Edit' : 'Propose Amendment'}</button>
+          ${admin ? `<button class="a-btn danger" data-del-case="${escapeHtml(c.slug)}">Delete</button>` : ''}
         </td>
       </tr>
     `).join('');
@@ -1463,72 +1640,67 @@
   let editingCaseSlug = null;
 
   function openCaseEditor(slug) {
+    caseDraftId = null;
     editingCaseSlug = slug || null;
     document.getElementById('case-editor-msg').style.display = 'none';
+    setCaseReviewBar(false);
+    document.getElementById('case-mode-hint').textContent = isLegalAdmin() ? '' : 'Draft mode — submitted for admin review, not published.';
+    document.getElementById('case-save-btn').textContent = isLegalAdmin() ? 'Save' : 'Submit Draft';
     document.getElementById('case-editor').classList.add('active');
 
     if (slug) {
       fetch('/api/legal/case-law').then(r => r.json()).then(cases => {
         const c = cases.find(x => x.slug === slug);
         if (!c) return;
-        document.getElementById('case-editor-heading').textContent = 'Edit Case — ' + c.refNumber;
-        document.getElementById('case-slug').value = c.slug;
-        document.getElementById('case-slug').disabled = true;
-        document.getElementById('case-ref').value = c.refNumber;
-        document.getElementById('case-date').value = c.date || '';
-        document.getElementById('case-type').value = c.type || '';
-        document.getElementById('case-title').value = c.title;
-        document.getElementById('case-court').value = c.court || '';
-        document.getElementById('case-chamber').value = c.chamber || '';
-        document.getElementById('case-subject').value = c.subject || '';
-        document.getElementById('case-summary').value = c.summary || '';
-        document.getElementById('case-fulltext').value = c.fullText || '';
-        document.getElementById('case-related').value = JSON.stringify(c.relatedArticles || [], null, 2);
+        fillCaseEditor({ ...c, slugLocked: true }, 'Edit Case — ' + c.refNumber);
       });
     } else {
-      document.getElementById('case-editor-heading').textContent = 'New Case';
-      document.getElementById('case-slug').value = '';
-      document.getElementById('case-slug').disabled = false;
-      document.getElementById('case-ref').value = '';
-      document.getElementById('case-date').value = '';
-      document.getElementById('case-type').value = 'Judgment';
-      document.getElementById('case-title').value = '';
-      document.getElementById('case-court').value = 'Supreme Court of Regnum Aeternum';
-      document.getElementById('case-chamber').value = '';
-      document.getElementById('case-subject').value = '';
-      document.getElementById('case-summary').value = '';
-      document.getElementById('case-fulltext').value = '';
-      document.getElementById('case-related').value = '[]';
+      fillCaseEditor({}, 'New Case');
     }
     document.getElementById('case-editor').scrollIntoView({ behavior: 'smooth' });
+  }
+
+  function setCaseReviewBar(show) {
+    const bar = document.getElementById('case-review-bar');
+    if (bar) bar.style.display = show ? 'flex' : 'none';
   }
 
   document.getElementById('new-case-btn').addEventListener('click', () => openCaseEditor(null));
   document.getElementById('case-cancel-btn').addEventListener('click', () => {
     document.getElementById('case-editor').classList.remove('active');
+    setCaseReviewBar(false);
   });
+
+  async function saveCaseAsDraft() {
+    const msg = document.getElementById('case-editor-msg');
+    msg.style.display = 'none';
+    let body;
+    try { body = readCaseBody(); }
+    catch (e) { msg.className = 'a-msg error'; msg.style.display = 'block'; msg.textContent = e.message; return false; }
+    const isUpdate = !!caseDraftId;
+    const url = isUpdate ? '/api/legal/drafts/' + caseDraftId : '/api/legal/drafts';
+    const r = await fetch(url, {
+      method: isUpdate ? 'PUT' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'case', targetSlug: editingCaseSlug || null, title: body.title || 'Untitled Case', payload: body })
+    });
+    const data = await r.json();
+    msg.style.display = 'block';
+    if (!r.ok) { msg.className = 'a-msg error'; msg.textContent = data.error || 'Could not save draft.'; return false; }
+    msg.className = 'a-msg success'; msg.textContent = isUpdate ? 'Draft updated.' : 'Draft submitted for review.';
+    caseDraftId = data.id || caseDraftId;
+    loadDrafts();
+    return true;
+  }
 
   document.getElementById('case-save-btn').addEventListener('click', async () => {
     const msg = document.getElementById('case-editor-msg');
     msg.style.display = 'none';
+    let body;
+    try { body = readCaseBody(); }
+    catch (e) { msg.className = 'a-msg error'; msg.style.display = 'block'; msg.textContent = e.message; return; }
 
-    let relatedArticles;
-    try { relatedArticles = JSON.parse(document.getElementById('case-related').value); }
-    catch (e) { msg.className = 'a-msg error'; msg.style.display = 'block'; msg.textContent = 'Related Articles is not valid JSON: ' + e.message; return; }
-
-    const body = {
-      slug: document.getElementById('case-slug').value.trim().toLowerCase(),
-      title: document.getElementById('case-title').value,
-      refNumber: document.getElementById('case-ref').value,
-      date: document.getElementById('case-date').value,
-      type: document.getElementById('case-type').value,
-      court: document.getElementById('case-court').value,
-      chamber: document.getElementById('case-chamber').value,
-      subject: document.getElementById('case-subject').value,
-      summary: document.getElementById('case-summary').value,
-      fullText: document.getElementById('case-fulltext').value,
-      relatedArticles: relatedArticles,
-    };
+    if (caseDraftId || !isLegalAdmin()) { await saveCaseAsDraft(); return; }
 
     const isNew = !editingCaseSlug;
     const url = isNew ? '/api/legal/case-law' : '/api/legal/case-law/' + encodeURIComponent(editingCaseSlug);
@@ -1537,10 +1709,153 @@
 
     msg.style.display = 'block';
     if (!r.ok) { msg.className = 'a-msg error'; msg.textContent = data.error || 'Could not save case.'; return; }
-    msg.className = 'a-msg success'; msg.textContent = 'Saved.';
+    msg.className = 'a-msg success'; msg.textContent = 'Saved & published.';
     editingCaseSlug = body.slug;
     loadCaseLaw();
   });
+
+  document.getElementById('case-publish-btn').addEventListener('click', async () => {
+    const msg = document.getElementById('case-editor-msg');
+    msg.style.display = 'none';
+    if (!caseDraftId) return;
+    if (!(await saveCaseAsDraft())) return;
+    const r = await fetch('/api/legal/drafts/' + caseDraftId + '/publish', { method: 'POST' });
+    const data = await r.json();
+    msg.style.display = 'block';
+    if (!r.ok) { msg.className = 'a-msg error'; msg.textContent = data.error || 'Could not publish draft.'; return; }
+    msg.className = 'a-msg success'; msg.textContent = 'Published.';
+    document.getElementById('case-editor').classList.remove('active');
+    setCaseReviewBar(false);
+    loadDrafts();
+    loadCaseLaw();
+  });
+
+  document.getElementById('case-request-changes-btn').addEventListener('click', async () => {
+    const msg = document.getElementById('case-editor-msg');
+    msg.style.display = 'none';
+    if (!caseDraftId) return;
+    const note = document.getElementById('case-review-note').value.trim();
+    if (!note) { msg.className = 'a-msg error'; msg.style.display = 'block'; msg.textContent = 'Add a note explaining the requested changes.'; return; }
+    const r = await fetch('/api/legal/drafts/' + caseDraftId + '/request-changes', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note })
+    });
+    const data = await r.json();
+    msg.style.display = 'block';
+    if (!r.ok) { msg.className = 'a-msg error'; msg.textContent = data.error || 'Could not request changes.'; return; }
+    msg.className = 'a-msg success'; msg.textContent = 'Changes requested.';
+    document.getElementById('case-editor').classList.remove('active');
+    setCaseReviewBar(false);
+    loadDrafts();
+  });
+
+  // ---- draft review ----
+
+  async function loadDrafts() {
+    if (!me || !(userHasRole(me, 'admin') || userHasRole(me, 'adapter'))) return;
+    const r = await fetch('/api/legal/drafts');
+    if (!r.ok) return;
+    allDrafts = await r.json();
+    const admin = isLegalAdmin();
+    const tbody = document.getElementById('drafts-tbody');
+    const list = admin ? allDrafts : allDrafts.filter(d => d.author === me.username);
+    document.getElementById('legal-drafts-heading').textContent = admin ? 'Draft Review' : 'My Drafts';
+    document.getElementById('lg-nav-drafts').textContent = admin ? 'Draft Review' : 'My Drafts';
+    document.getElementById('legal-drafts-hint').textContent = admin
+      ? 'Review adapter-submitted drafts: request changes, edit, or publish. Procedures for review, voting, and justifications follow the internal regulations adopted by the People\'s Chamber.'
+      : 'Drafts you have submitted for admin review. Reviewer notes appear below each draft.';
+    tbody.innerHTML = list.map(d => `
+      <tr>
+        <td>${escapeHtml(d.kind)}</td>
+        <td>${escapeHtml(d.title)}</td>
+        <td>${escapeHtml(d.author)}</td>
+        <td>${escapeHtml(d.target_slug || '— (new)')}</td>
+        <td>${draftStatusPill(d.status)}</td>
+        <td>${escapeHtml((d.updated_at || '').slice(0, 10))}</td>
+        <td>
+          ${admin ? `<button class="a-btn" data-review-draft="${d.id}">Review</button>` : ''}
+          ${admin ? `<button class="a-btn primary" data-publish-draft="${d.id}">Publish</button>` : ''}
+          ${admin ? `<button class="a-btn" data-rc-draft="${d.id}">Request Changes</button>` : ''}
+          ${(!admin && d.author === me.username) ? `<button class="a-btn" data-edit-draft="${d.id}">Edit</button>` : ''}
+          ${(admin || d.author === me.username) ? `<button class="a-btn danger" data-del-draft="${d.id}">Delete</button>` : ''}
+        </td>
+      </tr>
+      ${d.reviewer_note ? `<tr><td colspan="7" style="color:var(--gold-bright);font-size:12px;">&#8594; Review: ${escapeHtml(d.reviewer_note)}</td></tr>` : ''}
+    `).join('') || '<tr><td colspan="7" style="color:var(--slate-soft);">No drafts.</td></tr>';
+
+    tbody.querySelectorAll('[data-publish-draft]').forEach(b => b.addEventListener('click', async () => {
+      if (!confirm('Publish this draft now? It will become publicly visible.')) return;
+      const r = await fetch('/api/legal/drafts/' + b.dataset.publishDraft + '/publish', { method: 'POST' });
+      const data = await r.json();
+      const m = document.getElementById('drafts-msg');
+      m.style.display = 'block';
+      if (!r.ok) { m.className = 'a-msg error'; m.textContent = data.error || 'Could not publish.'; }
+      else { m.className = 'a-msg success'; m.textContent = 'Published.'; loadActs(); loadCaseLaw(); }
+      loadDrafts();
+    }));
+
+    tbody.querySelectorAll('[data-rc-draft]').forEach(b => b.addEventListener('click', async () => {
+      const note = prompt('Describe the requested changes:');
+      if (note === null) return;
+      if (!note.trim()) { alert('A note is required.'); return; }
+      const r = await fetch('/api/legal/drafts/' + b.dataset.rcDraft + '/request-changes', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note })
+      });
+      const data = await r.json();
+      const m = document.getElementById('drafts-msg');
+      m.style.display = 'block';
+      if (!r.ok) { m.className = 'a-msg error'; m.textContent = data.error || 'Could not request changes.'; }
+      else { m.className = 'a-msg success'; m.textContent = 'Changes requested.'; }
+      loadDrafts();
+    }));
+
+    tbody.querySelectorAll('[data-review-draft]').forEach(b => b.addEventListener('click', () => openDraftReview(b.dataset.reviewDraft)));
+    tbody.querySelectorAll('[data-edit-draft]').forEach(b => b.addEventListener('click', () => openDraftReview(b.dataset.editDraft)));
+    tbody.querySelectorAll('[data-del-draft]').forEach(b => b.addEventListener('click', async () => {
+      if (!confirm('Delete this draft?')) return;
+      await fetch('/api/legal/drafts/' + b.dataset.delDraft, { method: 'DELETE' });
+      loadDrafts();
+    }));
+  }
+
+  function openDraftReview(id) {
+    const d = allDrafts.find(x => String(x.id) === String(id));
+    if (!d) return;
+    activateLegalSubpanel('legislation');
+    if (d.kind === 'act') {
+      actDraftId = d.id;
+      editingActSlug = d.target_slug || null;
+      document.getElementById('act-editor-msg').style.display = 'none';
+      document.getElementById('act-save-btn').textContent = 'Save Draft';
+      document.getElementById('act-editor').classList.add('active');
+      ensureActBuilder();
+      if (isLegalAdmin()) {
+        setActReviewBar(true);
+        document.getElementById('act-review-note').value = d.reviewer_note || '';
+        document.getElementById('act-mode-hint').textContent = 'Reviewing draft';
+      } else {
+        setActReviewBar(false);
+        document.getElementById('act-mode-hint').textContent = d.reviewer_note ? 'Reviewer: ' + d.reviewer_note : 'Editing your draft';
+      }
+      fillActEditor({ ...(d.payload || {}), slugLocked: !!d.target_slug }, (d.target_slug ? 'Proposed Amendment — ' : 'Proposed New Act — ') + d.title);
+      document.getElementById('act-editor').scrollIntoView({ behavior: 'smooth' });
+    } else {
+      caseDraftId = d.id;
+      editingCaseSlug = d.target_slug || null;
+      document.getElementById('case-editor-msg').style.display = 'none';
+      document.getElementById('case-save-btn').textContent = 'Save Draft';
+      document.getElementById('case-editor').classList.add('active');
+      if (isLegalAdmin()) {
+        setCaseReviewBar(true);
+        document.getElementById('case-review-note').value = d.reviewer_note || '';
+        document.getElementById('case-mode-hint').textContent = 'Reviewing draft';
+      } else {
+        setCaseReviewBar(false);
+        document.getElementById('case-mode-hint').textContent = d.reviewer_note ? 'Reviewer: ' + d.reviewer_note : 'Editing your draft';
+      }
+      fillCaseEditor({ ...(d.payload || {}), slugLocked: !!d.target_slug }, (d.target_slug ? 'Proposed Amendment — ' : 'Proposed New Case — ') + d.title);
+      document.getElementById('case-editor').scrollIntoView({ behavior: 'smooth' });
+    }
+  }
 
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -1783,7 +2098,7 @@
   // Managed entirely by banking-admin.js (lazy-loaded module)
   // ── Boot ──────────────────────────────────────────────────────
   const user = await checkAuth();
-  if (user && (userHasRole(user, 'admin') || userHasRole(user, 'editor') || userHasRole(user, 'banker'))) showApp(user);
+  if (user && (userHasRole(user, 'admin') || userHasRole(user, 'editor') || userHasRole(user, 'banker') || userHasRole(user, 'adapter'))) showApp(user);
   else showGate(user ? 'This account does not have administrative access.' : undefined);
 
 })();
