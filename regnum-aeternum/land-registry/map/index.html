@@ -182,8 +182,8 @@ body.is-resizing-panel { cursor: row-resize; }
 
     <div class="mapsource-popover" id="mapsource-popover">
       <div class="mapsource-popover__head"><span>Map Source</span><button class="mapsource-popover__close" id="mapsource-close">✕</button></div>
-      <p style="font-size:12px;color:var(--parchment-dim);margin:0;">Paste a DynMap base URL — the world and map are detected automatically from its public configuration.</p>
-      <div class="ms-field"><label>DynMap Base URL</label><input class="ms-input" id="ms-baseurl" type="text" placeholder="https://your-server.example.com"/></div>
+      <p style="font-size:12px;color:var(--parchment-dim);margin:0;">Paste a BlueMap base URL — the map is detected automatically from its public configuration.</p>
+      <div class="ms-field"><label>BlueMap Base URL</label><input class="ms-input" id="ms-baseurl" type="text" placeholder="http://your-server.example.com"/></div>
       <p class="mapsource-popover__err" id="ms-err" style="display:none;"></p>
       <p class="mapsource-popover__ok" id="ms-ok" style="display:none;"></p>
       <div style="display:flex;gap:8px;">
@@ -243,7 +243,7 @@ import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/cont
 
   /* ════════════════════════════════════════════════════════════
      This page shows registered land plots two ways:
-       - 2D: the real DynMap tiles (same auto-discovery as the
+       - 2D: the real BlueMap tiles (same auto-discovery as the
          Ballistic Calculator) with each plot drawn as its actual
          quadrilateral footprint. If two or more plots share the
          EXACT same footprint at different heights (one built over
@@ -294,7 +294,7 @@ import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/cont
   // ════════════════════════════════════════════════════════════
   // 1. LOAD CONFIG + DATA
   // ════════════════════════════════════════════════════════════
-  var CFG = { dynmapBaseUrl: 'https://mc.westeroscraft.com', autoDetect: true, world: '', prefix: '', defaultMcX: 0, defaultMcZ: 0, defaultZoom: -3, useProxy: false };
+  var CFG = { bluemapBaseUrl: 'http://regnumaeternum.enderman.cloud:50500', autoDetect: true, mapId: '', defaultMcX: 0, defaultMcZ: 0, defaultZoom: -3, useProxy: true };
   try {
     var cfgResp = await fetch('../assets/mapconfig.json');
     if (cfgResp.ok) CFG = Object.assign({}, CFG, await cfgResp.json());
@@ -324,7 +324,7 @@ import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/cont
   }
 
   // ════════════════════════════════════════════════════════════
-  // 2. DYNMAP AUTO-DISCOVERY (same approach as the Ballistic
+  // 2. BLUEMAP AUTO-DISCOVERY (same approach as the Ballistic
   //    Calculator's ballistics/index.html — see its section 2b for
   //    the full rationale. Re-implemented here rather than imported
   //    since this is a plain script, not a module shared between
@@ -334,82 +334,83 @@ import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/cont
     try { var r = await fetch(url, { mode: 'cors', credentials: 'omit' }); return r.ok ? await r.json() : null; }
     catch (e) { return null; }
   }
-  function normalizeImageFormat(fmt) {
-    if (!fmt) return 'png';
-    var s = String(fmt).toLowerCase();
-    return s === 'default' ? 'png' : (s.split('-')[0] || 'png');
+  function normalizeBlueMap(id, m) {
+    var lowres = (m && m.lowres) || {};
+    var startPos = Array.isArray(m && m.startPos)
+      ? { x: Number(m.startPos[0]) || 0, z: Number(m.startPos[1]) || 0 }
+      : { x: 0, z: 0 };
+    return {
+      id: id, name: (m && m.name) || id, startPos: startPos,
+      tileSize: (Array.isArray(lowres.tileSize) && lowres.tileSize[0]) || 500,
+      lodFactor: lowres.lodFactor || 5, lodCount: lowres.lodCount || 3
+    };
   }
-  function parseDynmapConfig(data) {
-    if (!data || !Array.isArray(data.worlds)) return null;
-    var worlds = data.worlds.map(function (w) {
-      if (!w || !w.name) return null;
-      var maps = (Array.isArray(w.maps) ? w.maps : []).map(function (m) {
-        if (!m) return null;
-        var prefix = m.prefix || m.name;
-        if (!prefix) return null;
-        var fmtRaw = m['image-format'] || m.imageformat || m.imageFormat || m.format || m.tileformat;
-        var zoomInRaw = m.mapzoomin != null ? m.mapzoomin : m.mapZoomIn;
-        return { name: m.name || prefix, title: m.title || m.name || prefix, prefix: prefix, imageFormat: normalizeImageFormat(fmtRaw), mapZoomIn: Number(zoomInRaw) || 0 };
-      }).filter(Boolean);
-      if (!maps.length) return null;
-      var center = (w.center && typeof w.center === 'object') ? { x: Number(w.center.x) || 0, z: Number(w.center.z) || 0 } : null;
-      var zoomOutRaw = w.extrazoomout != null ? w.extrazoomout : w.extraZoomOut;
-      return { name: w.name, title: w.title || w.name, center: center, extraZoomOut: Number(zoomOutRaw) || 0, maps: maps };
-    }).filter(Boolean);
-    return worlds.length ? { worlds: worlds } : null;
+  function parseBlueMapConfig(data) {
+    if (!data || !Array.isArray(data.maps) || !data.maps.length) return null;
+    return { maps: data.maps.filter(function (m) { return m && m.id; }) };
   }
-  async function discoverDynmapConfig(baseUrl) {
+  async function discoverBlueMapConfig(baseUrl) {
     var base = String(baseUrl || '').trim().replace(/\/$/, '');
     if (!base) return null;
-    var raw = await fetchJSONSafe(base + '/up/configuration');
-    if (!raw) raw = await fetchJSONSafe('/api/dynmap-config');
-    return parseDynmapConfig(raw);
+    var raw = null;
+    try {
+      var settings = await fetchJSONSafe(base + '/settings.json');
+      if (settings && Array.isArray(settings.maps)) {
+        var maps = [];
+        for (var i = 0; i < settings.maps.length; i++) {
+          var m = await fetchJSONSafe(base + '/maps/' + encodeURIComponent(settings.maps[i]) + '/settings.json');
+          if (m) maps.push(normalizeBlueMap(settings.maps[i], m));
+        }
+        if (maps.length) raw = { maps: maps };
+      }
+    } catch (e) { raw = null; }
+    if (!raw) raw = await fetchJSONSafe('/api/bluemap-config');
+    return parseBlueMapConfig(raw);
   }
   function pickMapInfo(discovered, opts) {
     opts = opts || {};
-    function findWorld(name) {
-      if (!name) return null;
-      var n = String(name).toLowerCase();
-      return discovered.worlds.filter(function (w) { return w.name.toLowerCase() === n || w.title.toLowerCase() === n; })[0] || null;
+    function findMap(id) {
+      if (!id) return null;
+      var n = String(id).toLowerCase();
+      return discovered.maps.filter(function (m) { return m.id.toLowerCase() === n || m.name.toLowerCase() === n; })[0] || null;
     }
-    function findMap(world, name) {
-      if (!world || !name) return null;
-      var n = String(name).toLowerCase();
-      return world.maps.filter(function (m) { return m.prefix.toLowerCase() === n || m.name.toLowerCase() === n; })[0] || null;
-    }
-    var world = findWorld(opts.overrideWorld) || findWorld(opts.hintWorld) || discovered.worlds[0];
-    var map_ = findMap(world, opts.overrideMap) || findMap(world, opts.hintMap) || world.maps[0];
-    return { world: world.name, prefix: map_.prefix, imageFormat: map_.imageFormat || 'png', extraZoomOut: world.extraZoomOut || 0, mapZoomIn: map_.mapZoomIn || 0, center: world.center, worlds: discovered.worlds, source: opts.isOverride ? 'override' : 'auto' };
+    var map_ = findMap(opts.overrideMap) || findMap(opts.hintMap) || discovered.maps[0];
+    return { mapId: map_.id, name: map_.name, startPos: map_.startPos, tileSize: map_.tileSize, lodFactor: map_.lodFactor, lodCount: map_.lodCount, maps: discovered.maps, source: opts.isOverride ? 'override' : 'auto' };
   }
   function manualMapInfo() {
-    return { world: CFG.world || 'world', prefix: CFG.prefix || 'flat', imageFormat: 'png', extraZoomOut: 5, mapZoomIn: 2, center: null, worlds: [], source: 'manual' };
+    return { mapId: CFG.mapId || 'world', name: CFG.mapId || 'world', startPos: { x: 0, z: 0 }, tileSize: 500, lodFactor: 5, lodCount: 3, maps: [], source: 'manual' };
   }
 
   var MS_OVERRIDE_KEY = 'ra-landmap-source-override';
   var savedOverride = null;
   try { savedOverride = JSON.parse(localStorage.getItem(MS_OVERRIDE_KEY) || 'null'); } catch (e) {}
-  var activeBaseUrl = (savedOverride && savedOverride.baseUrl) || CFG.dynmapBaseUrl;
+  var activeBaseUrl = (savedOverride && savedOverride.baseUrl) || CFG.bluemapBaseUrl;
   var lastDiscovered = null;
   if (CFG.autoDetect !== false) {
-    try { lastDiscovered = await discoverDynmapConfig(activeBaseUrl); } catch (e) { console.warn('DynMap auto-detect failed.', e); }
+    try { lastDiscovered = await discoverBlueMapConfig(activeBaseUrl); } catch (e) { console.warn('BlueMap auto-detect failed.', e); }
   }
   var MAPINFO = lastDiscovered
-    ? pickMapInfo(lastDiscovered, { hintWorld: CFG.world, overrideWorld: savedOverride && savedOverride.world, overrideMap: savedOverride && savedOverride.prefix, isOverride: !!savedOverride })
-    : manualMapInfo();
-  CFG.dynmapBaseUrl = activeBaseUrl;
+    ? pickMapInfo(lastDiscovered, { hintMap: CFG.mapId, overrideMap: savedOverride && savedOverride.mapId, isOverride: !!savedOverride })
+    : (function () {
+        if (savedOverride && savedOverride.mapId) {
+          var mi = manualMapInfo(); mi.mapId = savedOverride.mapId; mi.source = 'override'; return mi;
+        }
+        return manualMapInfo();
+      })();
+  CFG.bluemapBaseUrl = activeBaseUrl;
 
-  // World filter dropdown: union of DynMap-discovered worlds and any
-  // distinct plot.world values, so a plot in a world the DynMap
-  // hasn't surfaced (yet, or at all) is still selectable.
+  // World filter dropdown: union of BlueMap map IDs and any distinct
+  // plot.world values, so a plot in a world the BlueMap hasn't
+  // surfaced (yet, or at all) is still selectable.
   (function populateWorldFilter() {
     var names = {};
-    (MAPINFO.worlds || []).forEach(function (w) { names[w.name] = true; });
+    (MAPINFO.maps || []).forEach(function (m) { names[m.id] = true; });
     plotWorlds().forEach(function (w) { names[w] = true; });
     var opts = Object.keys(names);
     filterWorldEl.innerHTML = '<option value="">All</option>' + opts.map(function (w) {
       return '<option value="' + escapeHtml(w) + '">' + escapeHtml(w) + '</option>';
     }).join('');
-    var pref = qs('world') || MAPINFO.world;
+    var pref = qs('world') || MAPINFO.mapId;
     if (pref && opts.indexOf(pref) !== -1) filterWorldEl.value = pref;
   })();
 
@@ -419,8 +420,20 @@ import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/cont
   function mcToLL(x, z) { return L.latLng(-z, x); }
   function llToMc(ll) { return { x: Math.round(ll.lng), z: Math.round(-ll.lat) }; }
 
-  var DynMapLayer = L.GridLayer.extend({
-    options: { tileSize: 128, updateWhenIdle: true, attribution: 'Map data: DynMap' },
+  function blueMapPathFromCoords(x, z) {
+    function split(n) {
+      var s = '';
+      if (n < 0) { n = -n; s += '-'; }
+      var d = String(n);
+      for (var i = 0; i < d.length; i++) s += d.charAt(i) + '/';
+      return s;
+    }
+    var t = 'x' + split(x) + 'z' + split(z);
+    return t.substring(0, t.length - 1);
+  }
+
+  var BlueMapLayer = L.GridLayer.extend({
+    options: { tileSize: 500, updateWhenIdle: true, attribution: 'Map data: BlueMap' },
     createTile: function (coords, done) {
       var img = document.createElement('img');
       img.onload = function () { done(null, img); };
@@ -429,25 +442,21 @@ import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/cont
       return img;
     },
     _tileUrl: function (coords) {
-      var zoomOut = Math.max(0, -coords.z);
-      var zoomPrefix = zoomOut > 0 ? new Array(zoomOut + 1).join('z') + '_' : '';
-      var folder = (coords.x >> 5) + '_' + (coords.y >> 5);
-      var ext = MAPINFO.imageFormat || 'png';
-      var tilePath = '/tiles/' + encodeURIComponent(MAPINFO.world) + '/' + encodeURIComponent(MAPINFO.prefix) + '/' + folder + '/' + zoomPrefix + coords.x + '_' + coords.y + '.' + ext;
+      var tilePath = '/maps/' + encodeURIComponent(MAPINFO.mapId) + '/tiles/1/' + blueMapPathFromCoords(coords.x, coords.y) + '.png';
       if (CFG.useProxy) return '/api/maptile?path=' + encodeURIComponent(tilePath);
-      return CFG.dynmapBaseUrl.replace(/\/$/, '') + tilePath;
+      return CFG.bluemapBaseUrl.replace(/\/$/, '') + tilePath;
     }
   });
 
-  var initialX = MAPINFO.center ? MAPINFO.center.x : CFG.defaultMcX;
-  var initialZ = MAPINFO.center ? MAPINFO.center.z : CFG.defaultMcZ;
+  var initialX = MAPINFO.startPos ? MAPINFO.startPos.x : CFG.defaultMcX;
+  var initialZ = MAPINFO.startPos ? MAPINFO.startPos.z : CFG.defaultMcZ;
 
   var map2d = L.map('map2d', {
     crs: L.CRS.Simple, center: mcToLL(initialX, initialZ), zoom: CFG.defaultZoom,
-    minZoom: -MAPINFO.extraZoomOut, maxZoom: Math.max(0, MAPINFO.mapZoomIn), zoomSnap: 0.5, zoomDelta: 0.5
+    minZoom: -5, maxZoom: 2, zoomSnap: 0.5, zoomDelta: 0.5
   });
-  var dynmapLayer = new DynMapLayer({ maxNativeZoom: 0, minNativeZoom: -MAPINFO.extraZoomOut });
-  dynmapLayer.addTo(map2d);
+  var bluemapLayer = new BlueMapLayer({ maxNativeZoom: 0, minNativeZoom: 0 });
+  bluemapLayer.addTo(map2d);
 
   var cursorEl = document.getElementById('cursor-coords');
   map2d.on('mousemove', function (e) { var mc = llToMc(e.latlng); cursorEl.textContent = 'X ' + mc.x + '  Z ' + mc.z; });
@@ -689,14 +698,14 @@ import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/cont
     sourcePill.classList.remove('ok', 'err');
     if (MAPINFO.source === 'auto' || MAPINFO.source === 'override') {
       sourcePill.classList.add('ok');
-      sourcePill.textContent = 'Map: ' + MAPINFO.world + ' / ' + MAPINFO.prefix;
+      sourcePill.textContent = 'Map: ' + MAPINFO.name + ' (' + MAPINFO.mapId + ')';
     } else {
       sourcePill.classList.add('err');
       sourcePill.textContent = 'Map not detected — click to configure';
     }
   }
   updateSourcePill();
-  function togglePopover() { msPopover.classList.toggle('is-open'); if (msPopover.classList.contains('is-open')) document.getElementById('ms-baseurl').value = CFG.dynmapBaseUrl; }
+  function togglePopover() { msPopover.classList.toggle('is-open'); if (msPopover.classList.contains('is-open')) document.getElementById('ms-baseurl').value = CFG.bluemapBaseUrl; }
   document.getElementById('btn-mapsource').addEventListener('click', togglePopover);
   sourcePill.addEventListener('click', togglePopover);
   document.getElementById('mapsource-close').addEventListener('click', function () { msPopover.classList.remove('is-open'); });
@@ -704,18 +713,16 @@ import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/cont
     var errEl = document.getElementById('ms-err'), okEl = document.getElementById('ms-ok');
     errEl.style.display = 'none'; okEl.style.display = 'none';
     var newBase = document.getElementById('ms-baseurl').value.trim().replace(/\/$/, '');
-    if (!newBase) { errEl.textContent = 'Enter a DynMap base URL.'; errEl.style.display = 'block'; return; }
-    var discovered = await discoverDynmapConfig(newBase);
-    CFG.dynmapBaseUrl = newBase;
+    if (!newBase) { errEl.textContent = 'Enter a BlueMap base URL.'; errEl.style.display = 'block'; return; }
+    var discovered = await discoverBlueMapConfig(newBase);
+    CFG.bluemapBaseUrl = newBase;
     lastDiscovered = discovered;
-    if (!discovered) { errEl.textContent = "Couldn't reach that DynMap."; errEl.style.display = 'block'; return; }
+    if (!discovered) { errEl.textContent = "Couldn't reach that BlueMap."; errEl.style.display = 'block'; return; }
     MAPINFO = pickMapInfo(discovered, { isOverride: true });
-    try { localStorage.setItem(MS_OVERRIDE_KEY, JSON.stringify({ baseUrl: CFG.dynmapBaseUrl, world: MAPINFO.world, prefix: MAPINFO.prefix })); } catch (e) {}
-    map2d.setMinZoom(-MAPINFO.extraZoomOut); map2d.setMaxZoom(Math.max(0, MAPINFO.mapZoomIn));
-    dynmapLayer.options.minNativeZoom = -MAPINFO.extraZoomOut;
-    dynmapLayer.redraw();
-    if (MAPINFO.center) map2d.setView(mcToLL(MAPINFO.center.x, MAPINFO.center.z), CFG.defaultZoom);
-    okEl.textContent = 'Detected ' + discovered.worlds.length + ' world(s).'; okEl.style.display = 'block';
+    try { localStorage.setItem(MS_OVERRIDE_KEY, JSON.stringify({ baseUrl: CFG.bluemapBaseUrl, mapId: MAPINFO.mapId })); } catch (e) {}
+    bluemapLayer.redraw();
+    if (MAPINFO.startPos) map2d.setView(mcToLL(MAPINFO.startPos.x, MAPINFO.startPos.z), CFG.defaultZoom);
+    okEl.textContent = 'Detected ' + discovered.maps.length + ' map(s).'; okEl.style.display = 'block';
     updateSourcePill();
   });
   document.getElementById('ms-reset').addEventListener('click', function () { try { localStorage.removeItem(MS_OVERRIDE_KEY); } catch (e) {} location.reload(); });
@@ -850,7 +857,7 @@ import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/cont
           corners: pickerCorners,
           yLower: parseFloat(document.getElementById('picker-ylower').value),
           yUpper: parseFloat(document.getElementById('picker-yupper').value),
-          world: filterWorldEl.value || MAPINFO.world
+          world: filterWorldEl.value || MAPINFO.mapId
         };
         window.opener.postMessage({ type: 'land-plot-corners', payload: payload }, window.location.origin);
         var msg = document.getElementById('picker-msg');

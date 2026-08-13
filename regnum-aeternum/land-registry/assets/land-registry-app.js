@@ -3,7 +3,7 @@
    Shared application logic for the public-facing pages (search/
    browse hub, single-record view, not-found). The cadastral map
    has its own script (land-registry/map/assets is self-contained,
-   see map/index.html) since its DynMap/3D logic doesn't overlap
+   see map/index.html) since its BlueMap/3D logic doesn't overlap
    with this file.
 
    Register number format: DIVISION/8-DIGIT-BOOK-NUMBER/1-DIGIT

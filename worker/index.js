@@ -13,7 +13,7 @@ import { listUsersRoute, createUserRoute, updateUserRoute, deleteUserRoute } fro
 import * as news from './routes/news.js';
 import * as legal from './routes/legal.js';
 import * as landregistry from './routes/landregistry.js';
-import * as dynmap from './routes/dynmap.js';
+import * as bluemap from './routes/bluemap.js';
 import * as banking from './routes/banking.js';
 import * as bankingAdmin from './routes/banking-admin.js';
 import * as bankingCC from './routes/banking-cc.js';
@@ -392,9 +392,9 @@ export default {
         if (pathname === '/api/banking/cc/top-companies' && method === 'POST') return await bankingCC.ccTopCompanies(request, env);
         if (pathname === '/api/banking/cc/apply-taxes' && method === 'POST') return await bankingCC.ccApplyTaxes(request, env);
 
-        // ---- Ballistic Calculator: DynMap proxy ----
-        if (pathname === '/api/dynmap-config' && method === 'GET') return await dynmap.getConfig(request, env);
-        if (pathname === '/api/maptile' && method === 'GET') return await dynmap.getTile(request, env);
+        // ---- Ballistic Calculator / Land Registry: BlueMap proxy ----
+        if (pathname === '/api/bluemap-config' && method === 'GET') return await bluemap.getConfig(request, env);
+        if (pathname === '/api/maptile' && method === 'GET') return await bluemap.getTile(request, env);
 
         return json({ error: 'Not found.' }, { status: 404 });
       } catch (err) {

@@ -60,46 +60,39 @@ signup — every account is created by an admin.
 I built this from the values you gave me, but a few things depend on your
 actual live server and I couldn't verify them without access to it:
 
-### DynMap source (world, map, tile path)
+### BlueMap source (map ID, tile path)
 `regnum-aeternum/ballistics/assets/shells.json` has a `map` block:
 
 ```json
 "map": {
-  "dynmapBaseUrl": "https://mc.westeroscraft.com",
+  "bluemapBaseUrl": "http://regnumaeternum.enderman.cloud:50500",
   "autoDetect": true,
-  "world": "",
-  "prefix": "",
+  "mapId": "",
   ...
 }
 ```
 
-You shouldn't need to fill in `world`/`prefix` by hand anymore. On load, the
-calculator fetches `{dynmapBaseUrl}/up/configuration` — the same public JSON
-endpoint DynMap's own web UI uses to bootstrap itself — and reads off every
-world and map defined on it (along with each map's tile-path prefix, image
-format, and how many zoom levels it has). As long as `dynmapBaseUrl` points
-at a real DynMap, that's the only thing you need to set.
+You shouldn't need to fill in `mapId` by hand. On load, the calculator
+fetches `{bluemapBaseUrl}/settings.json` (the same public JSON BlueMap's own
+web UI uses to bootstrap itself), then each map's
+`{bluemapBaseUrl}/maps/{id}/settings.json`, and reads off every map defined
+on it. As long as `bluemapBaseUrl` points at a real BlueMap, that's the only
+thing you need to set.
 
-If detection picks the wrong world/map (a server can have more than one of
-each), or can't reach the DynMap at all (some DynMaps block cross-site
-requests to `/up/configuration` — tiles themselves usually aren't affected,
-since plain image loads aren't subject to CORS), open the **Map Source**
-button on the Ballistic Calculator's map and either pick the right one from
-the dropdowns or type the exact world name / map prefix in by hand. That
-choice is remembered in the browser, so you only need to do it once.
+If detection picks the wrong map (a server can have more than one), or can't
+reach the BlueMap at all, open the **Map Source** button on the Ballistic
+Calculator's map and either pick the right map from the dropdown or type its
+exact ID in by hand. That choice is remembered in the browser, so you only
+need to do it once.
 
-If detection still fails because of cross-site blocking, the backend can
-fetch the configuration server-side instead (server-to-server requests
-aren't subject to browser CORS at all) — that's the `/api/dynmap-config`
-route already wired up in `server/server.js` (and `worker/routes/dynmap.js`
-if you're running the Cloudflare Worker build). Just make sure the
-`DYNMAP_BASE_URL` you set there (in `.env`, or in `wrangler.jsonc`'s `vars`)
-matches `shells.json`'s `dynmapBaseUrl`.
-
-If your DynMap blocks cross-origin tile loading too (rare — plain `<img>`
-tile requests usually aren't CORS-restricted, but some hosts add hotlink
-protection), set `"useProxy": true` in `shells.json` and the same backend
-will fetch tiles server-side as well.
+The BlueMap host is plain HTTP (no TLS), so on the HTTPS site the browser
+blocks direct cross-origin fetches of its JSON and tiles as mixed content.
+The backend fetches both server-side instead — the `/api/bluemap-config` and
+`/api/maptile` routes already wired up in `server/server.js` (and
+`worker/routes/bluemap.js` if you're running the Cloudflare Worker build).
+Make sure the `BLUEMAP_BASE_URL` you set there (in `.env`, or in
+`wrangler.jsonc`'s `vars`) matches `shells.json`'s `bluemapBaseUrl`, and
+leave `"useProxy": true` in `shells.json` so tiles go through that proxy.
 
 ### Ballistics physics — confirm these against in-game testing
 The constants you gave me are wired in as-is:
@@ -150,5 +143,5 @@ no separate static host needed, the same process serves everything.
   scrolls internally once there's less room, and the chosen height is
   remembered for next time. Double-click the handle to reset it.
 - The pill in the top-right of the map ("Detected: ..." / "Map not
-  detected...") shows which DynMap world/map the calculator is using.
+  detected...") shows which BlueMap map the calculator is using.
   Click it (or the "Map Source" button in the toolbar) to see or change it.

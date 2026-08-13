@@ -1,10 +1,9 @@
 {
-  "dynmapBaseUrl": "https://mc.westeroscraft.com",
+  "bluemapBaseUrl": "http://regnumaeternum.enderman.cloud:50500",
   "autoDetect": true,
-  "world": "",
-  "prefix": "",
+  "mapId": "",
   "defaultMcX": 0,
   "defaultMcZ": 0,
   "defaultZoom": -3,
-  "useProxy": false
+  "useProxy": true
 }

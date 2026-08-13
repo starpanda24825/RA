@@ -14,7 +14,7 @@
 		"nodejs_compat"
 	],
 	"vars": {
-		"DYNMAP_BASE_URL": "https://mc.westeroscraft.com"
+		"BLUEMAP_BASE_URL": "http://regnumaeternum.enderman.cloud:50500"
 	},
 	"d1_databases": [
 		{

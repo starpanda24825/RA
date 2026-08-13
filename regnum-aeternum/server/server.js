@@ -39,18 +39,22 @@ app.use('/api/auth',  authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/news',  newsRoutes);
 
-// ── DynMap tile proxy (optional — use if the DynMap server blocks CORS)
-//    Frontend requests: GET /api/maptile?path=/tiles/world/flat/z2/3_1.png
-const DYNMAP_BASE = (process.env.DYNMAP_BASE_URL || 'https://mc.westeroscraft.com').replace(/\/$/, '');
+// ── BlueMap tile proxy (the BlueMap host is plain HTTP, so tiles must be
+//    fetched server-side to avoid mixed-content blocking on the HTTPS site).
+//    Frontend requests: GET /api/maptile?path=/maps/world/tiles/1/x0/z0.png
+const BLUEMAP_BASE = (process.env.BLUEMAP_BASE_URL || 'http://regnumaeternum.enderman.cloud:50500').replace(/\/$/, '');
 
 app.get('/api/maptile', (req, res) => {
   const tilePath = req.query.path;
-  if (!tilePath || !tilePath.startsWith('/tiles/')) {
+  if (!tilePath || !tilePath.startsWith('/maps/')) {
     return res.status(400).send('Invalid tile path');
   }
-  const url = DYNMAP_BASE + tilePath;
+  const url = BLUEMAP_BASE + tilePath;
   const lib = url.startsWith('https') ? https : http;
   const request = lib.get(url, (upstreamRes) => {
+    if (upstreamRes.statusCode === 204 || upstreamRes.statusCode === 404) {
+      return res.status(upstreamRes.statusCode).end();
+    }
     res.set('Content-Type', upstreamRes.headers['content-type'] || 'image/png');
     res.set('Cache-Control', 'public, max-age=60');
     upstreamRes.pipe(res);
@@ -58,23 +62,59 @@ app.get('/api/maptile', (req, res) => {
   request.on('error', () => res.status(502).send('Tile unavailable'));
 });
 
-// ── DynMap configuration proxy (same purpose as the tile proxy
-//    above, but for the one-off /up/configuration fetch the
-//    Ballistic Calculator's auto-detect feature makes on load).
-//    Always targets this server's own configured DYNMAP_BASE_URL —
-//    never a client-supplied URL — so it can't be abused as an
-//    open proxy. Keep DYNMAP_BASE_URL in sync with
-//    ballistics/assets/shells.json's "dynmapBaseUrl" so the two
-//    agree on which DynMap is being described.
-app.get('/api/dynmap-config', (req, res) => {
-  const url = DYNMAP_BASE + '/up/configuration';
-  const lib = url.startsWith('https') ? https : http;
-  const request = lib.get(url, (upstreamRes) => {
-    res.set('Content-Type', 'application/json');
-    res.set('Cache-Control', 'public, max-age=60');
-    upstreamRes.pipe(res);
+// ── BlueMap configuration proxy (same purpose as the tile proxy above,
+//    but for the config discovery the map pages make on load). Fetches
+//    settings.json + each map's settings.json server-side and returns a
+//    combined {maps:[...]} payload. Always targets this server's own
+//    configured BLUEMAP_BASE_URL — never a client-supplied URL — so it
+//    can't be abused as an open proxy. Keep BLUEMAP_BASE_URL in sync with
+//    ballistics/assets/shells.json's "bluemapBaseUrl" and
+//    land-registry/assets/mapconfig.json.
+app.get('/api/bluemap-config', (req, res) => {
+  const base = BLUEMAP_BASE;
+  const lib = base.startsWith('https') ? https : http;
+
+  const getJson = (path) => new Promise((resolve, reject) => {
+    const rq = lib.get(base + path, (upstreamRes) => {
+      let body = '';
+      upstreamRes.on('data', (d) => { body += d; });
+      upstreamRes.on('end', () => {
+        if (upstreamRes.statusCode !== 200) return reject(new Error('bad status ' + upstreamRes.statusCode));
+        try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
+      });
+    });
+    rq.on('error', reject);
   });
-  request.on('error', () => res.status(502).json({ error: 'DynMap configuration unavailable.' }));
+
+  (async () => {
+    try {
+      const settings = await getJson('/settings.json');
+      const ids = Array.isArray(settings.maps) ? settings.maps : [];
+      const maps = [];
+      for (const id of ids) {
+        try {
+          const m = await getJson('/maps/' + encodeURIComponent(id) + '/settings.json');
+          const lowres = m.lowres || {};
+          const startPos = Array.isArray(m.startPos)
+            ? { x: Number(m.startPos[0]) || 0, z: Number(m.startPos[1]) || 0 }
+            : { x: 0, z: 0 };
+          maps.push({
+            id,
+            name: m.name || id,
+            startPos,
+            tileSize: (Array.isArray(lowres.tileSize) && lowres.tileSize[0]) || 500,
+            lodFactor: lowres.lodFactor || 5,
+            lodCount: lowres.lodCount || 3,
+          });
+        } catch (e) { /* skip this map */ }
+      }
+      res.set('Content-Type', 'application/json');
+      res.set('Cache-Control', 'public, max-age=60');
+      res.json({ maps });
+    } catch (e) {
+      res.status(502).json({ error: 'BlueMap configuration unavailable.' });
+    }
+  })();
 });
 
 // ── Block direct access to the backend's own folder before static

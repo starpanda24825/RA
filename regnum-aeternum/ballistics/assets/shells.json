@@ -18,13 +18,12 @@
     "maxCharges":          6
   },
   "map": {
-    "dynmapBaseUrl":  "https://mc.westeroscraft.com",
+    "bluemapBaseUrl": "http://regnumaeternum.enderman.cloud:50500",
     "autoDetect":     true,
-    "world":          "",
-    "prefix":         "",
+    "mapId":          "",
     "defaultMcX":     784,
     "defaultMcZ":     359,
     "defaultZoom":    -2,
-    "useProxy":       false
+    "useProxy":       true
   }
 }
