@@ -428,7 +428,7 @@ export async function generateAccountKey(env) {
 
 // password_hash is intentionally excluded from all public-facing SELECTs.
 // Use findBankingAccountByKeyWithHash only for internal password verification.
-const ACCOUNT_COLS = 'id, key, name, balance, color, type, owner_key, treasury_key, shares, tag, frozen, cumulative, user_id, created_at, updated_at';
+const ACCOUNT_COLS = 'id, key, name, balance, color, type, owner_key, treasury_key, shares, tag, frozen, cumulative, user_id, state_owned, created_at, updated_at';
 
 export async function listBankingAccounts(env, filters = {}) {
   const { type, treasuryKey, frozen, search } = filters;
@@ -468,18 +468,19 @@ export async function findBankingAccountsByTreasury(env, treasuryKey) {
 export async function insertBankingAccount(env, {
   key, name, balance = 0, color = 16384, type = 'personal',
   ownerKey = '', treasuryKey = '', passwordHash = '', shares = 0, tag = '',
+  stateOwned = 0,
 }) {
   const now = nowIso();
   await env.DB.prepare(
     `INSERT INTO banking_accounts
-       (key, name, balance, color, type, owner_key, treasury_key, password_hash, shares, tag, frozen, cumulative, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`
-  ).bind(key, name, balance, color, type, ownerKey, treasuryKey, passwordHash, shares, String(tag).toUpperCase(), now, now).run();
+       (key, name, balance, color, type, owner_key, treasury_key, password_hash, shares, tag, frozen, cumulative, state_owned, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)`
+  ).bind(key, name, balance, color, type, ownerKey, treasuryKey, passwordHash, shares, String(tag).toUpperCase(), stateOwned ? 1 : 0, now, now).run();
   return findBankingAccountByKey(env, key);
 }
 
 export async function updateBankingAccount(env, key, fields) {
-  const allowed = ['name', 'color', 'frozen', 'shares', 'tag', 'cumulative', 'password_hash', 'treasury_key'];
+  const allowed = ['name', 'color', 'frozen', 'shares', 'tag', 'cumulative', 'password_hash', 'treasury_key', 'state_owned'];
   const sets = [];
   const binds = [];
   for (const [k, v] of Object.entries(fields)) {

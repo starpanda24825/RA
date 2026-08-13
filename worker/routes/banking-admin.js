@@ -67,6 +67,84 @@ function bankerCanAccess(auth, account) {
 }
 
 // ════════════════════════════════════════════════════════════
+// TICKER GENERATION
+// ════════════════════════════════════════════════════════════
+
+const TICKER_STOP_WORDS = new Set([
+  'THE', 'OF', 'AND', 'A', 'AN', 'CO', 'INC', 'LTD', 'LLC', 'CORP',
+  'CORPORATION', 'COMPANY', 'GROUP', 'HOLDINGS', 'INDUSTRIES',
+]);
+
+/**
+ * Derives a 1-4 letter uppercase ticker from a company name: the initials
+ * of up to four significant words, falling back to the first few letters
+ * of a single-word name.
+ */
+function tickerFromName(name) {
+  const words = String(name || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+
+  const significant = words.filter(w => !TICKER_STOP_WORDS.has(w));
+  const pool = significant.length ? significant : words;
+
+  let base = pool.slice(0, 4).map(w => w[0]).join('');
+  if (base.length < 2 && pool.length) {
+    base = pool[0].replace(/[^A-Z]/g, '').slice(0, 4);
+  }
+  if (base.length < 2) base = 'CO';
+  return base.slice(0, 4);
+}
+
+/** Returns the first available ticker starting from the given base. */
+async function findAvailableTicker(env, base) {
+  const { results } = await env.DB.prepare('SELECT ticker FROM fdx_companies').all();
+  const taken = new Set((results || []).map(r => String(r.ticker).toUpperCase()));
+
+  const fits = t => /^[A-Z]{1,4}$/.test(t) && !taken.has(t);
+  if (fits(base)) return base;
+
+  const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+  // Extend the base with a single letter if there is room.
+  if (base.length < 4) {
+    for (const ch of A) {
+      if (fits(base + ch)) return base + ch;
+    }
+  }
+
+  // Otherwise mutate the last letter, then the second-to-last.
+  for (const ch of A) {
+    const cand = base.slice(0, -1) + ch;
+    if (fits(cand)) return cand;
+  }
+  if (base.length >= 2) {
+    for (const ch of A) {
+      const cand = base.slice(0, -2) + ch + base.slice(-1);
+      if (fits(cand)) return cand;
+    }
+  }
+
+  // Last resort: first available 2- or 3-letter combination.
+  for (let i = 0; i < 26; i++) {
+    for (let j = 0; j < 26; j++) {
+      if (fits(A[i] + A[j])) return A[i] + A[j];
+    }
+  }
+  for (let i = 0; i < 26; i++) {
+    for (let j = 0; j < 26; j++) {
+      for (let k = 0; k < 26; k++) {
+        if (fits(A[i] + A[j] + A[k])) return A[i] + A[j] + A[k];
+      }
+    }
+  }
+
+  return base; // unreachable in practice
+}
+
+// ════════════════════════════════════════════════════════════
 // ACCOUNT MANAGEMENT
 // ════════════════════════════════════════════════════════════
 
@@ -100,7 +178,7 @@ export async function createAccount(request, env) {
   catch { return json({ error: 'Invalid request body.' }, { status: 400 }); }
 
   const { name, color = 16384, type = 'personal', ownerKey = '', shares = 0, tag = '', password, userId,
-          ticker, sector, ipoPrice, totalShares, floatShares, listingStatus } = body;
+          sector, ipoPrice, totalShares, publicSharesPct, listingStatus, stateOwned } = body;
 
   // Patch 8: For personal accounts with a linked web user, the name
   // comes from the web user's username — don't require a separate name.
@@ -164,25 +242,35 @@ export async function createAccount(request, env) {
       return json({ error: 'Company owner must be a personal account.' }, { status: 400 });
     }
 
-    tickerNorm = String(ticker || '').toUpperCase().trim();
-    if (!/^[A-Z]{1,4}$/.test(tickerNorm)) {
-      return json({ error: 'A valid ticker (1-4 uppercase letters) is required for company accounts.' }, { status: 400 });
-    }
+    // Ticker is generated automatically from the company name.
+    tickerNorm = await findAvailableTicker(env, tickerFromName(body.name));
     if (sector) sectorNorm = String(sector).trim().toUpperCase();
 
-    ipoPriceNum = parseFloat(ipoPrice);
-    if (!Number.isFinite(ipoPriceNum) || ipoPriceNum <= 0) {
-      return json({ error: 'A positive offering price is required for company accounts.' }, { status: 400 });
-    }
+    if (listingStatus === 'private') listingStatusNorm = 'private';
 
     totalSharesNum = parseInt(totalShares, 10);
     if (!Number.isFinite(totalSharesNum) || totalSharesNum <= 0) totalSharesNum = 1000000;
 
-    floatSharesNum = parseInt(floatShares, 10);
-    if (!Number.isFinite(floatSharesNum) || floatSharesNum <= 0) floatSharesNum = Math.floor(totalSharesNum * 0.75);
-    if (floatSharesNum > totalSharesNum) floatSharesNum = totalSharesNum;
+    if (listingStatusNorm === 'private') {
+      // Private companies aren't listed yet: offering price and public shares
+      // are set later when the company is taken public via an offering.
+      ipoPriceNum = 0;
+      floatSharesNum = 0;
+    } else {
+      ipoPriceNum = parseFloat(ipoPrice);
+      if (!Number.isFinite(ipoPriceNum) || ipoPriceNum <= 0) {
+        return json({ error: 'A positive offering price is required for company accounts.' }, { status: 400 });
+      }
 
-    if (listingStatus === 'private') listingStatusNorm = 'private';
+      // Public shares is a percentage of total shares; round up to a whole
+      // number if a fractional value was supplied, then to whole shares.
+      const pct = Math.ceil(parseFloat(publicSharesPct));
+      if (!Number.isFinite(pct) || pct <= 0 || pct > 100) {
+        return json({ error: 'Public shares must be a percentage between 1 and 100.' }, { status: 400 });
+      }
+      floatSharesNum = Math.ceil(totalSharesNum * pct / 100);
+      if (floatSharesNum > totalSharesNum) floatSharesNum = totalSharesNum;
+    }
   }
 
   const treasuryKey = type === 'treasury'
@@ -202,6 +290,7 @@ export async function createAccount(request, env) {
       passwordHash,
       shares:      type === 'company' ? totalSharesNum : 0,
       tag:         type === 'treasury' ? String(tag).toUpperCase().slice(0, 4) : '',
+      stateOwned:  type === 'company' && listingStatusNorm !== 'private' && !!stateOwned ? 1 : 0,
     });
 
     // Link the web user to the new personal account
@@ -268,6 +357,14 @@ export async function updateAccount(request, env, key) {
   if (body.color !== undefined) fields.color = Number(body.color) || account.color;
   if (body.shares !== undefined && account.type === 'company') {
     fields.shares = Math.max(0, Number(body.shares) || 0);
+  }
+  if (body.stateOwned !== undefined && account.type === 'company') {
+    const newVal = !!body.stateOwned;
+    // Removing state ownership (unticking) is restricted to admins.
+    if (!newVal && account.state_owned && !auth.isAdmin) {
+      return json({ error: 'Only admins can remove state ownership from a company.' }, { status: 403 });
+    }
+    fields.state_owned = newVal ? 1 : 0;
   }
   if (body.tag !== undefined && account.type === 'treasury') {
     fields.tag = String(body.tag).toUpperCase().slice(0, 4);

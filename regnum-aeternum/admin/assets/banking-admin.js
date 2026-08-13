@@ -38,6 +38,19 @@
     return '<span class="account-type-pill account-type-pill--' + t + '">' + t + '</span>';
   }
 
+  // Mirrors tickerFromName() in worker/routes/banking-admin.js (preview only).
+  var TICKER_STOP = ['THE', 'OF', 'AND', 'A', 'AN', 'CO', 'INC', 'LTD', 'LLC', 'CORP',
+    'CORPORATION', 'COMPANY', 'GROUP', 'HOLDINGS', 'INDUSTRIES'];
+  function tickerFromName(name) {
+    var words = String(name || '').toUpperCase().replace(/[^A-Z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
+    var significant = words.filter(function (w) { return TICKER_STOP.indexOf(w) === -1; });
+    var pool = significant.length ? significant : words;
+    var base = pool.slice(0, 4).map(function (w) { return w[0]; }).join('');
+    if (base.length < 2 && pool.length) base = pool[0].replace(/[^A-Z]/g, '').slice(0, 4);
+    if (base.length < 2) base = 'CO';
+    return base.slice(0, 4);
+  }
+
   function msgEl(id) { var e = document.getElementById(id); return { show: function (cls, text) { e.className = 'a-msg ' + cls; e.textContent = text; e.style.display = 'block'; }, hide: function () { e.style.display = 'none'; } }; }
 
   /* ── State ─────────────────────────────────────────────────── */
@@ -211,7 +224,7 @@
         '<select class="a-select" id="bae-user-id" size="5" style="width:100%;font-family:var(--font-mono);font-size:12px;"></select>' +
         '</div>';
       // Company: manual name field
-      formHtml += '<div class="a-field" id="bae-company-fields" style="display:none;"><label>Account Name</label><input class="a-input" id="bae-name" style="width:100%;"/></div>';
+      formHtml += '<div class="a-field" id="bae-company-fields" style="display:none;"><label>Account Name</label><input class="a-input" id="bae-name" style="width:100%;"/><div id="bae-ticker-hint" style="font-size:11px;color:var(--slate-soft);"></div></div>';
       formHtml += '<div class="a-field"><label>Color</label><input class="a-input" id="bae-color" type="number" value="16384" style="width:100px;"/></div>';
       formHtml += '<div id="bae-co-extra" style="display:none;flex-direction:column;gap:12px;">' +
         '<div class="a-field"><label>Owner (personal account)</label>' +
@@ -219,20 +232,22 @@
           '<select class="a-select" id="bae-owner-id" size="5" style="width:100%;font-family:var(--font-mono);font-size:12px;"></select>' +
         '</div>' +
         '<div class="a-form" style="gap:10px;">' +
-          '<div class="a-field"><label>Ticker</label><input class="a-input" id="bae-ticker" maxlength="4" style="width:100px;text-transform:uppercase;"/></div>' +
           '<div class="a-field"><label>Sector</label><select class="a-select" id="bae-sector" style="width:160px;">' +
             '<option value="BANKING">BANKING</option><option value="TRADE">TRADE</option><option value="MINING">MINING</option>' +
             '<option value="AGRICULTURE">AGRICULTURE</option><option value="SERVICES" selected>SERVICES</option><option value="MILITARY">MILITARY</option>' +
           '</select></div>' +
         '</div>' +
         '<div class="a-form" style="gap:10px;">' +
-          '<div class="a-field"><label>Offering Price</label><input class="a-input" id="bae-ipo-price" type="number" step="0.01" style="width:110px;"/></div>' +
+          '<div class="a-field" id="bae-ipo-price-field"><label>Offering Price</label><input class="a-input" id="bae-ipo-price" type="number" step="0.01" style="width:110px;"/></div>' +
           '<div class="a-field"><label>Total Shares</label><input class="a-input" id="bae-total-shares" type="number" value="1000000" style="width:120px;"/></div>' +
-          '<div class="a-field"><label>Float Shares</label><input class="a-input" id="bae-float-shares" type="number" value="750000" style="width:120px;"/></div>' +
+          '<div class="a-field" id="bae-public-shares-field"><label>Public Shares (%)</label><input class="a-input" id="bae-public-shares-pct" type="number" min="1" max="100" value="75" style="width:120px;"/><div id="bae-public-shares-hint" style="font-size:11px;color:var(--slate-soft);"></div></div>' +
         '</div>' +
         '<div class="a-field"><label>Listing</label><select class="a-select" id="bae-listing" style="width:160px;">' +
           '<option value="public">Public (listed)</option><option value="private">Private (unlisted)</option>' +
         '</select></div>' +
+        '<div id="bae-state-owned-field"><label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--parchment-dim);cursor:pointer;">' +
+          '<input type="checkbox" id="bae-state-owned"/> State-owned' +
+        '</label></div>' +
         '</div>';
     } else {
       formHtml += '<div class="a-field"><label>Name</label><input class="a-input" id="bae-name" style="width:100%;" value="' + esc(editing.name) + '"/></div>';
@@ -249,6 +264,11 @@
       }
       if (editing.type === 'company') {
         formHtml += '<div class="a-field"><label>Shares</label><input class="a-input" id="bae-shares" type="number" style="width:100px;" value="' + (editing.shares || 0) + '"/></div>';
+        var soDisabled = !isAdmin && editing.state_owned ? ' disabled' : '';
+        formHtml += '<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--parchment-dim);cursor:pointer;">' +
+          '<input type="checkbox" id="bae-state-owned" ' + (editing.state_owned ? 'checked' : '') + soDisabled + '/> State-owned' +
+          (soDisabled ? ' <span style="color:var(--slate-soft);">(admin-only to untick)</span>' : '') +
+          '</label>';
       }
       formHtml += '<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--parchment-dim);cursor:pointer;">' +
         '<input type="checkbox" id="bae-frozen" ' + (editing.frozen ? 'checked' : '') + '/> Frozen</label>';
@@ -280,6 +300,54 @@
       }
       typeSel.addEventListener('change', toggleTypeFields);
       toggleTypeFields();
+    }
+
+    // Listing status: private companies don't need an offering price, public
+    // shares, or a state-owned flag.
+    var listingSel = document.getElementById('bae-listing');
+    var ipoField = document.getElementById('bae-ipo-price-field');
+    var publicSharesField = document.getElementById('bae-public-shares-field');
+    var stateOwnedField = document.getElementById('bae-state-owned-field');
+    function toggleListingFields() {
+      var isPrivate = listingSel && listingSel.value === 'private';
+      if (ipoField) ipoField.style.display = isPrivate ? 'none' : '';
+      if (publicSharesField) publicSharesField.style.display = isPrivate ? 'none' : '';
+      if (stateOwnedField) stateOwnedField.style.display = isPrivate ? 'none' : '';
+    }
+    if (listingSel) {
+      listingSel.addEventListener('change', toggleListingFields);
+      toggleListingFields();
+    }
+
+    // Live hint: show how many shares the chosen percentage represents
+    var totalSharesEl = document.getElementById('bae-total-shares');
+    var pctEl = document.getElementById('bae-public-shares-pct');
+    var hintEl = document.getElementById('bae-public-shares-hint');
+    function updatePublicSharesHint() {
+      if (!hintEl) return;
+      var total = Number(totalSharesEl && totalSharesEl.value);
+      var pct = Math.ceil(Number(pctEl && pctEl.value));
+      if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(pct) || pct <= 0 || pct > 100) {
+        hintEl.textContent = '';
+        return;
+      }
+      hintEl.textContent = '= ' + Math.ceil(total * pct / 100).toLocaleString() + ' shares';
+    }
+    if (totalSharesEl) totalSharesEl.addEventListener('input', updatePublicSharesHint);
+    if (pctEl) pctEl.addEventListener('input', updatePublicSharesHint);
+    updatePublicSharesHint();
+
+    // Live preview of the auto-generated ticker from the company name
+    var nameEl = document.getElementById('bae-name');
+    var tickerHintEl = document.getElementById('bae-ticker-hint');
+    if (nameEl && tickerHintEl) {
+      function updateTickerHint() {
+        tickerHintEl.textContent = nameEl.value.trim()
+          ? 'Ticker: ' + tickerFromName(nameEl.value)
+          : 'Ticker is auto-generated from the company name.';
+      }
+      nameEl.addEventListener('input', updateTickerHint);
+      updateTickerHint();
     }
 
     // Load web users for the personal account dropdown
@@ -354,15 +422,19 @@
         } else {
           body.name = document.getElementById('bae-name').value;
           body.ownerKey = ownerIdEl ? ownerIdEl.value : '';
-          body.ticker = document.getElementById('bae-ticker').value;
           body.sector = document.getElementById('bae-sector').value;
-          body.ipoPrice = Number(document.getElementById('bae-ipo-price').value);
           body.totalShares = Number(document.getElementById('bae-total-shares').value);
-          body.floatShares = Number(document.getElementById('bae-float-shares').value);
           body.listingStatus = document.getElementById('bae-listing').value;
+          if (body.listingStatus === 'private') {
+            body.ipoPrice = 0;
+            body.publicSharesPct = 0;
+          } else {
+            body.ipoPrice = Number(document.getElementById('bae-ipo-price').value);
+            body.publicSharesPct = Number(document.getElementById('bae-public-shares-pct').value);
+          }
+          body.stateOwned = body.listingStatus !== 'private' && document.getElementById('bae-state-owned').checked;
           if (!body.name) { msg.show('error', 'Account name is required.'); return; }
           if (!body.ownerKey) { msg.show('error', 'Please select a personal account as the company owner.'); return; }
-          if (!body.ticker) { msg.show('error', 'Ticker is required.'); return; }
         }
         // Include treasury assignment (admins select; bankers auto-assigned by backend)
         if (isAdmin) {
@@ -372,7 +444,10 @@
       } else {
         body.name = document.getElementById('bae-name').value;
         body.frozen = document.getElementById('bae-frozen') ? document.getElementById('bae-frozen').checked : false;
-        if (editing.type === 'company') body.shares = Number(document.getElementById('bae-shares').value) || 0;
+        if (editing.type === 'company') {
+          body.shares = Number(document.getElementById('bae-shares').value) || 0;
+          body.stateOwned = document.getElementById('bae-state-owned').checked;
+        }
         if (editing.type === 'treasury') body.tag = document.getElementById('bae-tag').value;
         // Treasury reassignment (admin only)
         if (isAdmin && editing.type !== 'treasury') {
@@ -702,7 +777,7 @@
       var tbody = document.getElementById('ba-companies-tbody');
       tbody.innerHTML = res.data.map(function (c) {
         return '<tr>' +
-          '<td>' + esc(c.name) + '</td>' +
+          '<td>' + esc(c.name) + (c.state_owned ? ' <span class="a-pill a-pill--banker">State</span>' : '') + '</td>' +
           '<td style="font-family:var(--font-mono);">$' + Number(c.balance).toLocaleString() + '</td>' +
           '<td>' + (c.shares || 0) + '</td>' +
           '<td style="font-family:var(--font-mono);">$' + (c.pricePerShare || 0).toFixed(2) + '</td>' +
