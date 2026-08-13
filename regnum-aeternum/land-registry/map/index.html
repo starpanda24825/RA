@@ -435,11 +435,25 @@ import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/cont
   var BlueMapLayer = L.GridLayer.extend({
     options: { tileSize: 500, updateWhenIdle: true, attribution: 'Map data: BlueMap' },
     createTile: function (coords, done) {
-      var img = document.createElement('img');
-      img.onload = function () { done(null, img); };
-      img.onerror = function () { img.style.opacity = '0'; done(null, img); };
+      var size = this.getTileSize().x;
+      var canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      var img = new Image();
+      img.onload = function () {
+        // BlueMap low-res tiles are (tileSize+1) wide and 2×(tileSize+1)
+        // tall: the top half is the colour map, the bottom half is height
+        // metadata. Crop the colour half so it renders 1 block = 1 pixel.
+        var ctx = canvas.getContext('2d');
+        var sw = Math.min(img.naturalWidth, size);
+        var sh = Math.min(Math.floor(img.naturalHeight / 2), size);
+        ctx.drawImage(img, 0, 0, sw, sh, 0, 0, size, size);
+        done();
+      };
+      // Empty/unrendered tiles come back as 204/404 — leave them blank.
+      img.onerror = function () { done(); };
       img.src = this._tileUrl(coords);
-      return img;
+      return canvas;
     },
     _tileUrl: function (coords) {
       var tilePath = '/maps/' + encodeURIComponent(MAPINFO.mapId) + '/tiles/1/' + blueMapPathFromCoords(coords.x, coords.y) + '.png';
@@ -455,7 +469,7 @@ import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/cont
     crs: L.CRS.Simple, center: mcToLL(initialX, initialZ), zoom: CFG.defaultZoom,
     minZoom: -5, maxZoom: 2, zoomSnap: 0.5, zoomDelta: 0.5
   });
-  var bluemapLayer = new BlueMapLayer({ maxNativeZoom: 0, minNativeZoom: 0 });
+  var bluemapLayer = new BlueMapLayer({ maxNativeZoom: 0, minNativeZoom: 0, tileSize: MAPINFO.tileSize });
   bluemapLayer.addTo(map2d);
 
   var cursorEl = document.getElementById('cursor-coords');

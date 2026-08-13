@@ -840,11 +840,25 @@ body.is-resizing-panel { cursor: row-resize; }
   const BlueMapLayer = L.GridLayer.extend({
     options: { tileSize: 500, updateWhenIdle: true, attribution: 'Map data: BlueMap' },
     createTile(coords, done) {
-      const img = document.createElement('img');
-      img.onload  = () => done(null, img);
-      img.onerror = () => { img.style.opacity = '0'; done(null, img); };
+      const size = this.getTileSize().x;
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const img = new Image();
+      img.onload = () => {
+        // BlueMap low-res tiles are (tileSize+1) wide and 2×(tileSize+1)
+        // tall: the top half is the colour map, the bottom half is height
+        // metadata. Crop the colour half so it renders 1 block = 1 pixel.
+        const ctx = canvas.getContext('2d');
+        const sw = Math.min(img.naturalWidth, size);
+        const sh = Math.min(Math.floor(img.naturalHeight / 2), size);
+        ctx.drawImage(img, 0, 0, sw, sh, 0, 0, size, size);
+        done();
+      };
+      // Empty/unrendered tiles come back as 204/404 — leave them blank.
+      img.onerror = () => done();
       img.src = this._tileUrl(coords);
-      return img;
+      return canvas;
     },
     _tileUrl(coords) {
       const tilePath = `/maps/${encodeURIComponent(MAPINFO.mapId)}/tiles/1/${blueMapPathFromCoords(coords.x, coords.y)}.png`;
@@ -865,7 +879,7 @@ body.is-resizing-panel { cursor: row-resize; }
     zoomSnap: 0.5,
     zoomDelta: 0.5
   });
-  const bluemapLayer = new BlueMapLayer({ maxNativeZoom: 0, minNativeZoom: 0 });
+  const bluemapLayer = new BlueMapLayer({ maxNativeZoom: 0, minNativeZoom: 0, tileSize: MAPINFO.tileSize });
   bluemapLayer.addTo(map);
 
   const cursorEl = document.getElementById('cursor-coords');
