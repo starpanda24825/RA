@@ -21,28 +21,113 @@ async function requireAdmin(request, env) {
   if (!hasRole(user, 'admin') && !hasRole(user, 'banker')) {
     return { error: json({ error: 'Admin or banker role required.' }, { status: 403 }) };
   }
-  return { user };
+  const isAdmin = hasRole(user, 'admin');
+  const isBanker = hasRole(user, 'banker');
+  let treasuryKey = null;
+  if (isBanker && !isAdmin) {
+    const assignment = await store.getBankerAssignment(env, user.id);
+    if (!assignment) {
+      return { error: json({ error: 'No treasury assigned to your banker account. Contact an administrator.' }, { status: 403 }) };
+    }
+    treasuryKey = assignment.treasury_key;
+  }
+  return { user, isAdmin, isBanker, treasuryKey };
+}
+
+// Fetches a company joined with its treasury (via the linked bank account)
+// and rejects bankers who aren't assigned to that treasury. Admins may
+// manage any company.
+async function authorizeCompany(auth, env, { id, ticker } = {}) {
+  const byId = id !== undefined && id !== null;
+  const company = await env.DB.prepare(
+    `SELECT c.*, ba.treasury_key AS treasury_key
+     FROM fdx_companies c
+     LEFT JOIN banking_accounts ba ON ba.key = c.linked_bank_account
+     WHERE ${byId ? 'c.id = ?' : 'c.ticker = ?'}`
+  ).bind(byId ? Number(id) : String(ticker).toUpperCase()).first();
+  if (!company) return { error: json({ error: 'Company not found.' }, { status: 404 }) };
+  if (auth.isBanker && !auth.isAdmin) {
+    if (!company.treasury_key || company.treasury_key !== auth.treasuryKey) {
+      return { error: json({ error: 'You can only manage companies in your assigned treasury.' }, { status: 403 }) };
+    }
+  }
+  return { company };
 }
 
 // ── PUT /api/exchange/admin/companies/:id ─────────────────────────
+// Admins can edit name, sector, ticker, price (plus the other listing
+// fields). Bankers can only edit name and sector.
 export async function updateCompany(request, env, id) {
   const auth = await requireAdmin(request, env);
   if (auth.error) return auth.error;
 
-  const company = await env.DB.prepare('SELECT * FROM fdx_companies WHERE id = ?')
-    .bind(Number(id)).first();
-  if (!company) return json({ error: 'Company not found.' }, { status: 404 });
+  const { company, error } = await authorizeCompany(auth, env, { id });
+  if (error) return error;
 
   let body;
   try { body = await request.json(); }
   catch { return json({ error: 'Invalid request body.' }, { status: 400 }); }
 
+  const isAdmin = hasRole(auth.user, 'admin');
+
   const sets = [];
   const binds = [];
-  const allowed = ['name', 'sector', 'description', 'logo_emoji', 'linked_bank_account',
-                   'fundamental_beta', 'status'];
+  const allowed = ['name', 'sector'];
+  if (isAdmin) {
+    allowed.push('ticker', 'current_price', 'description', 'logo_emoji',
+                 'linked_bank_account', 'fundamental_beta', 'status');
+  }
+
   for (const [k, v] of Object.entries(body)) {
     if (!allowed.includes(k)) continue;
+
+    if (k === 'name' && v != null && String(v).trim()) {
+      const trimmed = String(v).trim();
+      // Names are unique (case-insensitive) across both the exchange listing
+      // and any linked bank account.
+      const dupListing = await env.DB.prepare(
+        'SELECT id FROM fdx_companies WHERE name = ? COLLATE NOCASE AND id != ? LIMIT 1'
+      ).bind(trimmed, Number(id)).first();
+      if (dupListing) return json({ error: 'A company with that name already exists.' }, { status: 409 });
+      const dupBank = await env.DB.prepare(
+        "SELECT key FROM banking_accounts WHERE type = 'company' AND name = ? COLLATE NOCASE AND key != ? LIMIT 1"
+      ).bind(trimmed, company.linked_bank_account || '').first();
+      if (dupBank) return json({ error: 'A company with that name already exists.' }, { status: 409 });
+      sets.push('name = ?');
+      binds.push(trimmed);
+      continue;
+    }
+
+    if (k === 'ticker') {
+      const ticker = String(v).trim().toUpperCase();
+      if (!/^[A-Z]{1,4}$/.test(ticker)) {
+        return json({ error: 'Ticker must be 1-4 uppercase letters.' }, { status: 400 });
+      }
+      const dup = await env.DB.prepare(
+        'SELECT id FROM fdx_companies WHERE ticker = ? AND id != ? LIMIT 1'
+      ).bind(ticker, Number(id)).first();
+      if (dup) return json({ error: 'That ticker is already in use.' }, { status: 409 });
+      sets.push('ticker = ?');
+      binds.push(ticker);
+      continue;
+    }
+
+    if (k === 'current_price') {
+      const price = Number(v);
+      if (!Number.isFinite(price) || price < 0) {
+        return json({ error: 'Price must be a non-negative number.' }, { status: 400 });
+      }
+      sets.push('current_price = ?');
+      binds.push(Math.round(price * 100) / 100);
+      continue;
+    }
+
+    if (k === 'sector' && v != null && String(v).trim()) {
+      sets.push('sector = ?');
+      binds.push(String(v).trim().toUpperCase());
+      continue;
+    }
+
     sets.push(`${k} = ?`);
     binds.push(v);
   }
@@ -53,6 +138,14 @@ export async function updateCompany(request, env, id) {
 
   await env.DB.prepare(`UPDATE fdx_companies SET ${sets.join(', ')} WHERE id = ?`)
     .bind(...binds).run();
+
+  // Keep the linked bank account's name in sync so the Companies tab and
+  // the public listings always match the bank account.
+  if (body.name != null && String(body.name).trim() && company.linked_bank_account) {
+    await env.DB.prepare(
+      'UPDATE banking_accounts SET name = ?, updated_at = ? WHERE key = ?'
+    ).bind(String(body.name).trim(), nowIso(), company.linked_bank_account).run();
+  }
 
   // Audit log
   await env.DB.prepare(
@@ -70,9 +163,8 @@ export async function updateFundamentals(request, env, id) {
   const auth = await requireAdmin(request, env);
   if (auth.error) return auth.error;
 
-  const company = await env.DB.prepare('SELECT * FROM fdx_companies WHERE id = ?')
-    .bind(Number(id)).first();
-  if (!company) return json({ error: 'Company not found.' }, { status: 404 });
+  const { company, error } = await authorizeCompany(auth, env, { id });
+  if (error) return error;
 
   let body;
   try { body = await request.json(); }
@@ -135,9 +227,8 @@ export async function haltCompany(request, env, id) {
   const auth = await requireAdmin(request, env);
   if (auth.error) return auth.error;
 
-  const company = await env.DB.prepare('SELECT * FROM fdx_companies WHERE id = ?')
-    .bind(Number(id)).first();
-  if (!company) return json({ error: 'Company not found.' }, { status: 404 });
+  const { company, error } = await authorizeCompany(auth, env, { id });
+  if (error) return error;
   if (company.status === 'halted') return json({ error: 'Already halted.' }, { status: 400 });
 
   let body;
@@ -162,9 +253,8 @@ export async function resumeCompany(request, env, id) {
   const auth = await requireAdmin(request, env);
   if (auth.error) return auth.error;
 
-  const company = await env.DB.prepare('SELECT * FROM fdx_companies WHERE id = ?')
-    .bind(Number(id)).first();
-  if (!company) return json({ error: 'Company not found.' }, { status: 404 });
+  const { company, error } = await authorizeCompany(auth, env, { id });
+  if (error) return error;
   if (company.status !== 'halted') return json({ error: 'Company is not halted.' }, { status: 400 });
 
   await env.DB.prepare(
@@ -185,9 +275,8 @@ export async function issueShares(request, env, id) {
   const auth = await requireAdmin(request, env);
   if (auth.error) return auth.error;
 
-  const company = await env.DB.prepare('SELECT * FROM fdx_companies WHERE id = ?')
-    .bind(Number(id)).first();
-  if (!company) return json({ error: 'Company not found.' }, { status: 404 });
+  const { company, error } = await authorizeCompany(auth, env, { id });
+  if (error) return error;
 
   let body;
   try { body = await request.json(); }
@@ -219,9 +308,8 @@ export async function buybackShares(request, env, id) {
   const auth = await requireAdmin(request, env);
   if (auth.error) return auth.error;
 
-  const company = await env.DB.prepare('SELECT * FROM fdx_companies WHERE id = ?')
-    .bind(Number(id)).first();
-  if (!company) return json({ error: 'Company not found.' }, { status: 404 });
+  const { company, error } = await authorizeCompany(auth, env, { id });
+  if (error) return error;
 
   let body;
   try { body = await request.json(); }
@@ -302,9 +390,8 @@ export async function declareDividend(request, env) {
     return json({ error: 'ticker, dividend_per_share, and pay_date are required.' }, { status: 400 });
   }
 
-  const company = await env.DB.prepare('SELECT id FROM fdx_companies WHERE ticker = ?')
-    .bind(ticker.toUpperCase()).first();
-  if (!company) return json({ error: 'Company not found.' }, { status: 404 });
+  const { company, error } = await authorizeCompany(auth, env, { ticker });
+  if (error) return error;
 
   const dps = parseFloat(dividend_per_share);
   if (!Number.isFinite(dps) || dps <= 0) {
@@ -331,6 +418,9 @@ export async function cancelDividend(request, env, id) {
     return json({ error: 'Only pending dividends can be cancelled.' }, { status: 400 });
   }
 
+  const { error } = await authorizeCompany(auth, env, { id: dividend.company_id });
+  if (error) return error;
+
   await env.DB.prepare(
     "UPDATE fdx_dividends SET status = 'cancelled' WHERE id = ?"
   ).bind(Number(id)).run();
@@ -351,9 +441,18 @@ export async function listAllCompanies(request, env) {
      LEFT JOIN banking_accounts ba ON ba.key = c.linked_bank_account
      LEFT JOIN banking_accounts o  ON o.key = ba.owner_key`;
 
-  const { results } = status
-    ? await env.DB.prepare(`${baseSelect} WHERE c.status = ? ORDER BY c.ticker ASC`).bind(status).all()
-    : await env.DB.prepare(`${baseSelect} ORDER BY c.ticker ASC`).all();
+  // A company whose bank account was deleted is orphaned; hide it.
+  const notOrphaned = `(c.linked_bank_account IS NULL OR ba.key IS NOT NULL)`;
+
+  const where = [notOrphaned];
+  const binds = [];
+  if (status) { where.push('c.status = ?'); binds.push(status); }
+  // Bankers only see companies in their assigned treasury.
+  if (auth.isBanker && !auth.isAdmin) { where.push('ba.treasury_key = ?'); binds.push(auth.treasuryKey); }
+
+  const { results } = await env.DB.prepare(
+    `${baseSelect} WHERE ${where.join(' AND ')} ORDER BY c.ticker ASC`
+  ).bind(...binds).all();
 
   return json(results || []);
 }
@@ -366,13 +465,18 @@ export async function listDividends(request, env) {
   const url = new URL(request.url);
   const status = url.searchParams.get('status') || 'pending';
 
+  // Bankers only see dividends for companies in their assigned treasury.
+  const scoped = auth.isBanker && !auth.isAdmin;
+  const binds = scoped ? [status, auth.treasuryKey] : [status];
+
   const { results } = await env.DB.prepare(
     `SELECT d.*, c.ticker, c.name AS company_name
      FROM fdx_dividends d
      JOIN fdx_companies c ON c.id = d.company_id
-     WHERE d.status = ?
+     LEFT JOIN banking_accounts ba ON ba.key = c.linked_bank_account
+     WHERE d.status = ?${scoped ? ' AND ba.treasury_key = ?' : ''}
      ORDER BY d.pay_date ASC`
-  ).bind(status).all();
+  ).bind(...binds).all();
 
   return json(results || []);
 }
@@ -505,6 +609,7 @@ export async function getSettings(request, env) {
 export async function globalHalt(request, env) {
   const auth = await requireAdmin(request, env);
   if (auth.error) return auth.error;
+  if (!auth.isAdmin) return json({ error: 'Admin role required.' }, { status: 403 });
 
   let body;
   try { body = await request.json(); }
@@ -528,6 +633,7 @@ export async function globalHalt(request, env) {
 export async function globalResume(request, env) {
   const auth = await requireAdmin(request, env);
   if (auth.error) return auth.error;
+  if (!auth.isAdmin) return json({ error: 'Admin role required.' }, { status: 403 });
 
   await env.DB.prepare(
     `UPDATE fdx_companies SET status = 'active', halt_reason = NULL, updated_at = ?
@@ -584,9 +690,8 @@ export async function createReport(request, env) {
     return json({ error: 'ticker and headline are required.' }, { status: 400 });
   }
 
-  const company = await env.DB.prepare('SELECT * FROM fdx_companies WHERE ticker = ?')
-    .bind(ticker.toUpperCase()).first();
-  if (!company) return json({ error: 'Company not found.' }, { status: 404 });
+  const { company, error } = await authorizeCompany(auth, env, { ticker });
+  if (error) return error;
 
   // Compute deltas from current fundamentals
   const earningsChange = body.earnings_change !== undefined ? Number(body.earnings_change) : null;
@@ -788,9 +893,8 @@ export async function getCompanyByTicker(request, env, ticker) {
   const auth = await requireAdmin(request, env);
   if (auth.error) return auth.error;
 
-  const company = await env.DB.prepare('SELECT * FROM fdx_companies WHERE ticker = ?')
-    .bind(ticker.toUpperCase()).first();
-  if (!company) return json({ error: 'Company not found.' }, { status: 404 });
+  const { company, error } = await authorizeCompany(auth, env, { ticker });
+  if (error) return error;
   return json(company);
 }
 
@@ -802,6 +906,9 @@ export async function updateReport(request, env, id) {
   const report = await env.DB.prepare('SELECT * FROM fdx_company_reports WHERE id = ?')
     .bind(Number(id)).first();
   if (!report) return json({ error: 'Report not found.' }, { status: 404 });
+
+  const { error } = await authorizeCompany(auth, env, { id: report.company_id });
+  if (error) return error;
 
   let body;
   try { body = await request.json(); }
@@ -835,9 +942,8 @@ export async function getIpoSubscriptions(request, env, id) {
   const auth = await requireAdmin(request, env);
   if (auth.error) return auth.error;
 
-  const company = await env.DB.prepare('SELECT * FROM fdx_companies WHERE id = ?')
-    .bind(Number(id)).first();
-  if (!company) return json({ error: 'Company not found.' }, { status: 404 });
+  const { company, error } = await authorizeCompany(auth, env, { id });
+  if (error) return error;
 
   const { results } = await env.DB.prepare(
     `SELECT o.id, o.account_id, o.player_name, o.quantity, o.placed_at,
@@ -1012,9 +1118,8 @@ export async function cancelIpo(request, env, id) {
   const auth = await requireAdmin(request, env);
   if (auth.error) return auth.error;
 
-  const company = await env.DB.prepare('SELECT * FROM fdx_companies WHERE id = ?')
-    .bind(Number(id)).first();
-  if (!company) return json({ error: 'Company not found.' }, { status: 404 });
+  const { company, error } = await authorizeCompany(auth, env, { id });
+  if (error) return error;
   if (company.status !== 'ipo') {
     return json({ error: 'Company is not in offering status.' }, { status: 400 });
   }
@@ -1045,9 +1150,8 @@ export async function openIpo(request, env, id) {
   const auth = await requireAdmin(request, env);
   if (auth.error) return auth.error;
 
-  const company = await env.DB.prepare('SELECT * FROM fdx_companies WHERE id = ?')
-    .bind(Number(id)).first();
-  if (!company) return json({ error: 'Company not found.' }, { status: 404 });
+  const { company, error } = await authorizeCompany(auth, env, { id });
+  if (error) return error;
   if (company.status !== 'private') {
     return json({ error: 'Only private (unlisted) companies can open an offering.' }, { status: 400 });
   }

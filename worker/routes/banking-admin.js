@@ -242,6 +242,12 @@ export async function createAccount(request, env) {
       return json({ error: 'Company owner must be a personal account.' }, { status: 400 });
     }
 
+    // Company names must be unique (case-insensitive) across both the bank and
+    // the exchange listing.
+    if (await store.companyNameExists(env, body.name)) {
+      return json({ error: 'A company with that name already exists.' }, { status: 409 });
+    }
+
     // Ticker is generated automatically from the company name.
     tickerNorm = await findAvailableTicker(env, tickerFromName(body.name));
     if (sector) sectorNorm = String(sector).trim().toUpperCase();
@@ -264,9 +270,16 @@ export async function createAccount(request, env) {
 
       // Public shares is a percentage of total shares; round up to a whole
       // number if a fractional value was supplied, then to whole shares.
+      // State-owned companies must retain majority control, so their public
+      // float is capped below 50% (max 49%).
       const pct = Math.ceil(parseFloat(publicSharesPct));
-      if (!Number.isFinite(pct) || pct <= 0 || pct > 100) {
-        return json({ error: 'Public shares must be a percentage between 1 and 100.' }, { status: 400 });
+      const maxPct = stateOwned ? 49 : 100;
+      if (!Number.isFinite(pct) || pct <= 0 || pct > maxPct) {
+        return json({
+          error: stateOwned
+            ? 'State-owned companies must keep public shares below 50% (max 49%).'
+            : 'Public shares must be a percentage between 1 and 100.',
+        }, { status: 400 });
       }
       floatSharesNum = Math.ceil(totalSharesNum * pct / 100);
       if (floatSharesNum > totalSharesNum) floatSharesNum = totalSharesNum;
@@ -379,7 +392,22 @@ export async function updateAccount(request, env, key) {
     fields.treasury_key = body.treasuryKey || '';
   }
 
+  // Enforce unique company names and keep the exchange listing's name in sync
+  // so the companies tab and public listings always match the bank account.
+  if (account.type === 'company' && fields.name !== undefined && fields.name) {
+    if (await store.companyNameExists(env, fields.name, key)) {
+      return json({ error: 'A company with that name already exists.' }, { status: 409 });
+    }
+  }
+
   const updated = await store.updateBankingAccount(env, key, fields);
+
+  if (account.type === 'company' && fields.name !== undefined && fields.name) {
+    await env.DB.prepare(
+      'UPDATE fdx_companies SET name = ?, updated_at = ? WHERE linked_bank_account = ?'
+    ).bind(fields.name, new Date().toISOString(), key).run();
+  }
+
   return json(updated);
 }
 

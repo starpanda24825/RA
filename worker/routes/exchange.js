@@ -31,7 +31,14 @@ async function requireLinkedAccount(request, env) {
 // ── GET /api/exchange/market ──────────────────────────────────────
 export async function getMarket(request, env) {
   const { results: companies } = await env.DB.prepare(
-    "SELECT id, ticker, name, sector, description, logo_emoji, total_shares, shares_in_float, current_price, prev_close_price, day_high, day_low, day_volume, market_cap, status FROM fdx_companies WHERE status IN ('active','halted') ORDER BY ticker ASC"
+    `SELECT c.id, c.ticker, c.name, c.sector, c.description, c.logo_emoji,
+            c.total_shares, c.shares_in_float, c.current_price, c.prev_close_price,
+            c.day_high, c.day_low, c.day_volume, c.market_cap, c.status
+     FROM fdx_companies c
+     WHERE c.status IN ('active','halted')
+       AND (c.linked_bank_account IS NULL
+            OR EXISTS (SELECT 1 FROM banking_accounts ba WHERE ba.key = c.linked_bank_account))
+     ORDER BY c.ticker ASC`
   ).all();
 
   const enriched = (companies || []).map(c => ({
@@ -530,9 +537,12 @@ export async function getWatchlist(request, env) {
 // ── GET /api/exchange/sectors ─────────────────────────────────────
 export async function getSectors(request, env) {
   const { results } = await env.DB.prepare(
-    `SELECT sector, COUNT(*) AS count, SUM(market_cap) AS total_market_cap
-     FROM fdx_companies WHERE status IN ('active','halted')
-     GROUP BY sector ORDER BY total_market_cap DESC`
+    `SELECT c.sector, COUNT(*) AS count, SUM(c.market_cap) AS total_market_cap
+     FROM fdx_companies c
+     WHERE c.status IN ('active','halted')
+       AND (c.linked_bank_account IS NULL
+            OR EXISTS (SELECT 1 FROM banking_accounts ba WHERE ba.key = c.linked_bank_account))
+     GROUP BY c.sector ORDER BY total_market_cap DESC`
   ).all();
 
   return json(results || []);
@@ -552,6 +562,8 @@ export async function listIpos(request, env) {
      LEFT JOIN fdx_orders o ON o.company_id = c.id
        AND o.status = 'pending_ipo'
      WHERE c.status = 'ipo'
+       AND (c.linked_bank_account IS NULL
+            OR EXISTS (SELECT 1 FROM banking_accounts ba WHERE ba.key = c.linked_bank_account))
      GROUP BY c.id
      ORDER BY c.listed_at DESC`
   ).all();
@@ -563,6 +575,8 @@ export async function listIpos(request, env) {
      INNER JOIN fdx_audit_log al ON al.entity_type = 'company'
        AND al.entity_id = c.id AND al.action = 'IPO_ALLOCATE'
      WHERE c.status IN ('active','halted','delisted')
+       AND (c.linked_bank_account IS NULL
+            OR EXISTS (SELECT 1 FROM banking_accounts ba WHERE ba.key = c.linked_bank_account))
      ORDER BY c.listed_at DESC LIMIT 20`
   ).all();
 

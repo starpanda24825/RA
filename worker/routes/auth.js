@@ -176,7 +176,7 @@ export async function handleChangePassword(request, env) {
   // Also sync the password to any linked banking account so terminal
   // login uses the same credential (Patch 8 — universal password).
   const linkedAccount = await store.findBankingAccountByUserId(env, user.id);
-  if (linkedAccount) {
+  if (linkedAccount && linkedAccount.type === 'personal') {
     await store.updateBankingAccount(env, linkedAccount.key, { password_hash: newHash });
   }
 

@@ -62,6 +62,12 @@ window.ExchangeAdmin = (function () {
       document.getElementById('exp-delist-card').classList.remove('active');
     });
 
+    // Edit company handlers
+    document.getElementById('exp-edit-save').addEventListener('click', saveCompanyEdit);
+    document.getElementById('exp-edit-cancel').addEventListener('click', () => {
+      document.getElementById('exp-edit-card').classList.remove('active');
+    });
+
     // Buyback handlers
     document.getElementById('exp-bb-count').addEventListener('input', updateBuybackEstimate);
     document.getElementById('exp-bb-execute').addEventListener('click', executeBuyback);
@@ -154,6 +160,61 @@ window.ExchangeAdmin = (function () {
   async function resumeCompany(id) {
     await fetch('/api/exchange/admin/companies/' + id + '/resume', { method: 'POST' });
     loadCompanies();
+  }
+
+  // ── Edit Company ─────────────────────────────────────────────
+
+  function openEditCompanyForm(id) {
+    const c = companiesCache.find(x => x.id == id);
+    if (!c) return;
+    const card = document.getElementById('exp-edit-card');
+    document.getElementById('exp-edit-heading').textContent = 'Edit Company — ' + c.ticker;
+    document.getElementById('exp-edit-name').value = c.name || '';
+    document.getElementById('exp-edit-sector').value = c.sector || 'SERVICES';
+    document.getElementById('exp-edit-ticker').value = c.ticker || '';
+    document.getElementById('exp-edit-price').value = c.current_price != null ? c.current_price : '';
+    // Admins can edit ticker and price; bankers can only edit name and sector.
+    document.getElementById('exp-edit-ticker-field').style.display = isAdmin ? '' : 'none';
+    document.getElementById('exp-edit-price-field').style.display = isAdmin ? '' : 'none';
+    document.getElementById('exp-edit-msg').style.display = 'none';
+    card.dataset.companyId = id;
+    card.classList.add('active');
+    card.scrollIntoView({ behavior: 'smooth' });
+  }
+
+  async function saveCompanyEdit() {
+    const id = document.getElementById('exp-edit-card').dataset.companyId;
+    const name = document.getElementById('exp-edit-name').value;
+    const sector = document.getElementById('exp-edit-sector').value;
+    const msg = document.getElementById('exp-edit-msg');
+
+    if (!name.trim()) {
+      msg.textContent = 'Name is required.'; msg.className = 'a-msg error'; msg.style.display = 'block'; return;
+    }
+
+    const body = { name: name.trim(), sector };
+    if (isAdmin) {
+      const ticker = document.getElementById('exp-edit-ticker').value.trim();
+      const price = document.getElementById('exp-edit-price').value;
+      if (ticker) body.ticker = ticker;
+      if (price !== '') body.current_price = price;
+    }
+
+    try {
+      const r = await fetch('/api/exchange/admin/companies/' + id, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      msg.style.display = 'block';
+      if (r.ok) {
+        msg.className = 'a-msg success'; msg.textContent = 'Company updated.';
+        document.getElementById('exp-edit-card').classList.remove('active');
+        loadCompanies();
+      } else {
+        msg.className = 'a-msg error'; msg.textContent = d.error || 'Failed to update.';
+      }
+    } catch(e) { msg.className = 'a-msg error'; msg.textContent = 'Network error.'; msg.style.display = 'block'; }
   }
 
   // ── Stock Split ────────────────────────────────────────────────

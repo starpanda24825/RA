@@ -319,23 +319,44 @@
       toggleListingFields();
     }
 
-    // Live hint: show how many shares the chosen percentage represents
+    // Live hint: show how many shares the chosen percentage represents.
+    // State-owned companies must retain majority control, so their public
+    // float is capped below 50% (max 49%).
     var totalSharesEl = document.getElementById('bae-total-shares');
     var pctEl = document.getElementById('bae-public-shares-pct');
     var hintEl = document.getElementById('bae-public-shares-hint');
+    var stateOwnedChk = document.getElementById('bae-state-owned');
+
+    function publicSharesMax() {
+      return (stateOwnedChk && stateOwnedChk.checked) ? 49 : 100;
+    }
+
     function updatePublicSharesHint() {
       if (!hintEl) return;
+      var isState = !!(stateOwnedChk && stateOwnedChk.checked);
+      var max = publicSharesMax();
       var total = Number(totalSharesEl && totalSharesEl.value);
       var pct = Math.ceil(Number(pctEl && pctEl.value));
-      if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(pct) || pct <= 0 || pct > 100) {
-        hintEl.textContent = '';
+      if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(pct) || pct <= 0 || pct > max) {
+        hintEl.textContent = isState ? 'State-owned: max 49%' : '';
         return;
       }
-      hintEl.textContent = '= ' + Math.ceil(total * pct / 100).toLocaleString() + ' shares';
+      var label = '= ' + Math.ceil(total * pct / 100).toLocaleString() + ' shares';
+      if (isState) label += ' · State-owned: max 49%';
+      hintEl.textContent = label;
     }
+
+    function syncPublicSharesLimit() {
+      if (!pctEl) return;
+      pctEl.max = publicSharesMax();
+      if (Number(pctEl.value) > publicSharesMax()) pctEl.value = publicSharesMax();
+      updatePublicSharesHint();
+    }
+
     if (totalSharesEl) totalSharesEl.addEventListener('input', updatePublicSharesHint);
-    if (pctEl) pctEl.addEventListener('input', updatePublicSharesHint);
-    updatePublicSharesHint();
+    if (pctEl) pctEl.addEventListener('input', syncPublicSharesLimit);
+    if (stateOwnedChk) stateOwnedChk.addEventListener('change', syncPublicSharesLimit);
+    syncPublicSharesLimit();
 
     // Live preview of the auto-generated ticker from the company name
     var nameEl = document.getElementById('bae-name');

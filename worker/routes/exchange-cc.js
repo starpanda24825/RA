@@ -54,10 +54,13 @@ async function resolvePlayerAccount(env, token, bodyAccount) {
 // ── GET /api/exchange/cc/market ───────────────────────────────────
 export async function ccMarket(request, env) {
   const { results: companies } = await env.DB.prepare(
-    `SELECT ticker, name, sector, current_price AS price,
-            prev_close_price, day_volume AS volume, market_cap, status
-     FROM fdx_companies WHERE status IN ('active','halted')
-     ORDER BY ticker ASC`
+    `SELECT c.ticker, c.name, c.sector, c.current_price AS price,
+            c.prev_close_price, c.day_volume AS volume, c.market_cap, c.status
+     FROM fdx_companies c
+     WHERE c.status IN ('active','halted')
+       AND (c.linked_bank_account IS NULL
+            OR EXISTS (SELECT 1 FROM banking_accounts ba WHERE ba.key = c.linked_bank_account))
+     ORDER BY c.ticker ASC`
   ).all();
 
   return ccJson(true, (companies || []).map(c => ({

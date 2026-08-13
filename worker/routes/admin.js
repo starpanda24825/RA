@@ -85,6 +85,17 @@ export async function updateUserRoute(request, env, id) {
   }
 
   const updated = await store.updateUser(env, id, fields);
+
+  // Universal-password rule: the linked personal bank account shares the web
+  // user's credential. The self-service flow syncs this in /api/auth/password;
+  // the admin reset path must too.
+  if (fields.passwordHash) {
+    const linkedAccount = await store.findBankingAccountByUserId(env, id);
+    if (linkedAccount && linkedAccount.type === 'personal') {
+      await store.updateBankingAccount(env, linkedAccount.key, { password_hash: fields.passwordHash });
+    }
+  }
+
   return json({ id: updated.id, username: updated.username, role: updated.role, created_at: updated.created_at });
 }
 

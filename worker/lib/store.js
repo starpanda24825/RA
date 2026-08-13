@@ -458,6 +458,24 @@ export async function findBankingAccountByUserId(env, userId) {
   return env.DB.prepare(`SELECT ${ACCOUNT_COLS} FROM banking_accounts WHERE user_id = ?`).bind(Number(userId)).first();
 }
 
+/** Returns true if another company (bank account or exchange listing) already
+ *  uses the given name, case-insensitively. excludeKey skips the company being
+ *  renamed so it can keep its own name. */
+export async function companyNameExists(env, name, excludeKey = '') {
+  const trimmed = String(name || '').trim();
+  if (!trimmed) return false;
+
+  const bank = await env.DB.prepare(
+    "SELECT key FROM banking_accounts WHERE type = 'company' AND name = ? COLLATE NOCASE AND key != ? LIMIT 1"
+  ).bind(trimmed, excludeKey).first();
+  if (bank) return true;
+
+  const fdx = await env.DB.prepare(
+    "SELECT id FROM fdx_companies WHERE name = ? COLLATE NOCASE AND COALESCE(linked_bank_account, '') != ? LIMIT 1"
+  ).bind(trimmed, excludeKey).first();
+  return !!fdx;
+}
+
 export async function findBankingAccountsByTreasury(env, treasuryKey) {
   const { results } = await env.DB.prepare(
     `SELECT ${ACCOUNT_COLS} FROM banking_accounts WHERE treasury_key = ? ORDER BY name COLLATE NOCASE ASC`
@@ -496,7 +514,42 @@ export async function updateBankingAccount(env, key, fields) {
 }
 
 export async function deleteBankingAccount(env, key) {
+  // Company accounts double as exchange listings. Remove the listing (and its
+  // dependent exchange rows) first so a deleted company disappears from the
+  // companies tab and every public listing instead of lingering as an orphan.
+  const account = await env.DB.prepare('SELECT type FROM banking_accounts WHERE key = ?').bind(key).first();
+  if (account && account.type === 'company') {
+    await deleteCompanyListing(env, key);
+  }
   await env.DB.prepare('DELETE FROM banking_accounts WHERE key = ?').bind(key).run();
+}
+
+/**
+ * Deletes a company's exchange listing and all dependent rows (orders, trades,
+ * holdings, candles, dividends, reports, halts, watchlist, shareholders, value
+ * history) so the company is fully removed. No-op if there is no linked listing.
+ */
+export async function deleteCompanyListing(env, bankKey) {
+  const company = await env.DB.prepare(
+    'SELECT id FROM fdx_companies WHERE linked_bank_account = ?'
+  ).bind(bankKey).first();
+  if (!company) return;
+
+  const id = company.id;
+  // Children before parents so the delete succeeds even with FKs enforced.
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM fdx_trades WHERE company_id = ?').bind(id),
+    env.DB.prepare('DELETE FROM fdx_orders WHERE company_id = ?').bind(id),
+    env.DB.prepare('DELETE FROM fdx_portfolios WHERE company_id = ?').bind(id),
+    env.DB.prepare('DELETE FROM fdx_candles WHERE company_id = ?').bind(id),
+    env.DB.prepare('DELETE FROM fdx_dividends WHERE company_id = ?').bind(id),
+    env.DB.prepare('DELETE FROM fdx_company_reports WHERE company_id = ?').bind(id),
+    env.DB.prepare('DELETE FROM fdx_halt_log WHERE company_id = ?').bind(id),
+    env.DB.prepare('DELETE FROM fdx_watchlist WHERE company_id = ?').bind(id),
+    env.DB.prepare('DELETE FROM banking_shareholders WHERE company_key = ?').bind(bankKey),
+    env.DB.prepare('DELETE FROM banking_value_history WHERE company_key = ?').bind(bankKey),
+  ]);
+  await env.DB.prepare('DELETE FROM fdx_companies WHERE id = ?').bind(id).run();
 }
 
 export async function linkBankingAccountToUser(env, accountKey, userId) {
