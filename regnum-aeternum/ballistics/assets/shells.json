@@ -15,7 +15,7 @@
   "constants": {
     "gravity":             0.05,
     "velocityPerCharge":   2,
-    "maxCharges":          6
+    "maxCharges":          8
   },
   "map": {
     "bluemapBaseUrl": "http://regnumaeternum.enderman.cloud:50500",

@@ -192,11 +192,11 @@
 .mapsource-popover__actions .map-btn { flex-shrink: 0; }
 
 .panel-inner {
-  max-width: 1200px;
+  max-width: 860px;
   margin: 0 auto;
   padding: 22px 28px 32px;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: 1fr 1fr;
   gap: 20px 28px;
   align-items: start;
 }
@@ -204,6 +204,9 @@
   .bc-main { flex-direction: column; }
   #map-wrap { flex: 0 0 auto; width: 100%; height: auto; aspect-ratio: 1 / 1; }
   #panel { border-left: none; border-top: 1px solid var(--slate-line); }
+}
+@media (max-width: 520px) {
+  .panel-inner { grid-template-columns: 1fr; }
 }
 
 .field-group { display: flex; flex-direction: column; gap: 6px; }
@@ -247,21 +250,44 @@
   width: 100%;
 }
 
-.charges-row { display: flex; gap: 6px; flex-wrap: wrap; }
-.charge-btn {
-  font-family: var(--font-mono);
-  font-size: 13px;
-  padding: 9px 0;
-  flex: 1 1 28px;
-  text-align: center;
+.charges-slider { display: flex; align-items: center; gap: 12px; }
+.charges-range {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  height: 6px;
+  border-radius: 100px;
   background: var(--ink-elevated);
   border: 1px solid var(--slate-line);
-  color: var(--parchment-dim);
-  border-radius: 7px;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  outline: none;
 }
-.charge-btn.active { background: var(--crimson-deep); border-color: var(--crimson-bright); color: var(--parchment); }
+.charges-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--crimson);
+  border: 2px solid var(--crimson-bright);
+  cursor: pointer;
+}
+.charges-range::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--crimson);
+  border: 2px solid var(--crimson-bright);
+  cursor: pointer;
+}
+.charges-value {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--parchment);
+  min-width: 52px;
+  text-align: right;
+  white-space: nowrap;
+}
 
 .calc-btn {
   font-family: var(--font-mono);
@@ -453,6 +479,13 @@
           <input class="bc-input" id="cy" type="number" placeholder="Y" value="64"/>
           <input class="bc-input" id="cz" type="number" placeholder="Z"/>
         </div>
+        <label style="margin-top:10px;">Cannon Facing (before turning)</label>
+        <select class="bc-select" id="cannon-facing">
+          <option value="180">North (180°)</option>
+          <option value="270">East (270°)</option>
+          <option value="0" selected>South (0°)</option>
+          <option value="90">West (90°)</option>
+        </select>
         <div class="field-hint">Click "Cannon" then click the map, or type coordinates directly</div>
       </div>
 
@@ -475,7 +508,10 @@
 
       <div class="field-group">
         <label>Powder Charges</label>
-        <div class="charges-row" id="charges-row"></div>
+        <div class="charges-slider">
+          <input class="charges-range" id="charges-slider" type="range" min="1" max="8" step="1" value="3" aria-label="Powder charges"/>
+          <span class="charges-value" id="charges-value">3</span>
+        </div>
         <button class="calc-btn" id="calc-btn" disabled>Calculate Trajectory</button>
       </div>
 
@@ -538,8 +574,9 @@
   //    many candidate pitches, and bisect wherever the simulated
   //    height at the target's horizontal distance crosses the
   //    target's actual height. Low arc and high arc are searched
-  //    as two separate brackets (0.5–44.9° and 45.1–85°) since a
-  //    target within range usually has one solution in each.
+  //    as two separate brackets (0.5–44.9° and 45.1–60°); the
+  //    cannon cannot elevate beyond 60°, so anything steeper is
+  //    reported as an impossible shot.
   // ════════════════════════════════════════════════════════════
 
   const GRAVITY        = 0.05;
@@ -644,7 +681,7 @@
     defaultZoom: -2, useProxy: true
   };
   let shells          = [];
-  let maxCharges       = 6;
+  let maxCharges       = 8;
   let selectedCharges  = 3;
   let placeMode        = null;        // 'cannon' | 'target' | null
   let cannonMarker     = null;
@@ -662,7 +699,7 @@
     const json = await resp.json();
     if (json.map) CFG = Object.assign({}, CFG, json.map);
     shells = json.shells || [];
-    if (json.constants && json.constants.maxCharges) maxCharges = json.constants.maxCharges;
+    if (json.constants && json.constants.maxCharges) maxCharges = Math.min(Number(json.constants.maxCharges) || 8, 8);
   } catch (e) {
     console.warn('Could not load assets/shells.json — using built-in defaults.', e);
   }
@@ -1000,20 +1037,15 @@
       `<option value="${i}">${s.name} — ${s.fullName} (${s.fuze})</option>`
     ).join('');
 
-    const row = document.getElementById('charges-row');
-    row.innerHTML = '';
-    for (let n = 1; n <= maxCharges; n++) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'charge-btn' + (n === selectedCharges ? ' active' : '');
-      btn.textContent = n;
-      btn.dataset.n = n;
-      btn.addEventListener('click', () => {
-        selectedCharges = n;
-        row.querySelectorAll('.charge-btn').forEach(b => b.classList.toggle('active', +b.dataset.n === n));
-      });
-      row.appendChild(btn);
-    }
+    const slider = document.getElementById('charges-slider');
+    const valueEl = document.getElementById('charges-value');
+    slider.max = String(maxCharges);
+    slider.value = String(Math.min(selectedCharges, maxCharges));
+    valueEl.textContent = slider.value + ' / ' + maxCharges;
+    slider.addEventListener('input', () => {
+      selectedCharges = parseInt(slider.value, 10);
+      valueEl.textContent = selectedCharges + ' / ' + maxCharges;
+    });
   }
   renderShellsUI();
 
@@ -1116,8 +1148,21 @@
     const heading = ((yaw % 360) + 360) % 360;
     const cardinal = (heading < 45 || heading >= 315) ? 'S' : (heading < 135) ? 'W' : (heading < 225) ? 'N' : 'E';
 
-    const low  = solveArc(bx, by, bz, tx, ty, tz, yaw, selectedCharges, drag, 0.5,  44.9, 'min');
-    const high = solveArc(bx, by, bz, tx, ty, tz, yaw, selectedCharges, drag, 45.1, 85.0, 'max');
+    // The cannon starts at a fixed yaw set by how it was assembled
+    // (N=180, E=270, S=0, W=90). Report how far it must turn from there.
+    const baseYaw = parseInt(document.getElementById('cannon-facing').value, 10) || 0;
+    let turn = yaw - baseYaw;
+    turn = ((turn % 360) + 360) % 360;   // → [0, 360)
+    if (turn > 180) turn -= 360;         // → (-180, 180]
+    const turnAbs = Math.abs(turn);
+    const turnStr = turnAbs < 0.05
+      ? '0° (already aimed)'
+      : turnAbs.toFixed(1) + '° ' + (turn > 0 ? 'clockwise' : 'counter-clockwise');
+
+    // Pitch is capped at 60°: anything steeper is not a valid shot.
+    const low      = solveArc(bx, by, bz, tx, ty, tz, yaw, selectedCharges, drag, 0.5,  44.9, 'min');
+    const high     = solveArc(bx, by, bz, tx, ty, tz, yaw, selectedCharges, drag, 45.1, 60.0, 'max');
+    const highOver = solveArc(bx, by, bz, tx, ty, tz, yaw, selectedCharges, drag, 60.1, 85.0, 'max');
 
     if (trajLayerLow)  trajLayerLow.remove();
     if (trajLayerHigh) trajLayerHigh.remove();
@@ -1136,14 +1181,18 @@
       </div>`;
     }
 
-    function arcHtml(sol, arcName) {
-      if (!sol) return `<div class="result-error">Target is out of range for the ${arcName}. Try more powder charges, a different shell, or a closer target.</div>`;
+    function arcHtml(sol, arcName, overReason) {
+      if (!sol) {
+        if (overReason) return `<div class="result-error">${overReason}</div>`;
+        return `<div class="result-error">Target is out of range for the ${arcName}. Try more powder charges, a different shell, or a closer target.</div>`;
+      }
       const tofSec  = sol.tof != null ? sol.tof.toFixed(2) + 's' : '—';
       const tofTick = sol.tof != null ? Math.round(sol.tof * TICKS_PER_SEC) + ' ticks' : '—';
       const peakY   = Math.max(...sol.path.map(p => p.y));
       return `<div class="result-grid">
         ${statBlock('Pitch Angle', sol.pitch.toFixed(3) + '°', 'highlight')}
-        ${statBlock('Yaw / Heading', yaw.toFixed(1) + '° (' + cardinal + ')', '')}
+        ${statBlock('Cannon Turn', turnStr, 'highlight')}
+        ${statBlock('Target Heading', yaw.toFixed(1) + '° (' + cardinal + ')', '')}
         ${statBlock('Time of Flight', tofSec, '')}
         ${statBlock('Ticks', tofTick, '')}
         ${statBlock('Muzzle Velocity', v0 + ' blk/tick', '')}
@@ -1158,7 +1207,8 @@
     }
 
     document.getElementById('tab-low').innerHTML  = arcHtml(low,  'low arc');
-    document.getElementById('tab-high').innerHTML = arcHtml(high, 'high arc');
+    document.getElementById('tab-high').innerHTML = arcHtml(high, 'high arc',
+      (!high && highOver) ? 'Pitch would need to exceed 60° for the high arc — shot not possible at this range.' : null);
 
     lastLow = low; lastHigh = high; lastBy = by; lastTy = ty;
     drawHeightProfile();
