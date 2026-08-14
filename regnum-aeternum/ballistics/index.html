@@ -22,10 +22,23 @@
   overflow: hidden;
 }
 
+/* Map square on the left, static control panel filling the rest. */
+.bc-main {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  overflow: hidden;
+}
+
 #map-wrap {
   position: relative;
-  flex: 1 1 0;
-  min-height: 0;
+  flex: 0 0 auto;
+  height: 100%;
+  aspect-ratio: 1 / 1;
+  min-width: 0;
+  background: var(--ink);
 }
 #map {
   width: 100%;
@@ -34,11 +47,11 @@
 }
 
 #panel {
-  flex: 0 0 auto;
-  height: 360px;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow-y: auto;
   background: var(--ink-soft);
-  border-top: 1px solid var(--slate-line);
+  border-left: 1px solid var(--slate-line);
 }
 
 .map-bar {
@@ -100,40 +113,6 @@
   pointer-events: none;
   white-space: nowrap;
 }
-
-/* ---------- resize handle between map and control panel ---------- */
-
-.panel-resize-handle {
-  flex: 0 0 auto;
-  height: 14px;
-  background: var(--ink-soft);
-  border-top: 1px solid var(--slate-line);
-  border-bottom: 1px solid var(--slate-line);
-  cursor: row-resize;
-  touch-action: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  z-index: 60;
-}
-.panel-resize-handle::before {
-  content: "";
-  width: 44px;
-  height: 4px;
-  border-radius: 100px;
-  background: var(--slate-line);
-  transition: background 0.15s ease;
-}
-.panel-resize-handle:hover::before,
-.panel-resize-handle.is-dragging::before {
-  background: var(--gold-dim);
-}
-.panel-resize-handle:focus-visible {
-  outline: 2px solid var(--gold-bright);
-  outline-offset: -2px;
-}
-body.is-resizing-panel { cursor: row-resize; }
 
 /* ---------- BlueMap source status + settings popover ---------- */
 
@@ -217,16 +196,14 @@ body.is-resizing-panel { cursor: row-resize; }
   margin: 0 auto;
   padding: 22px 28px 32px;
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 20px 28px;
   align-items: start;
 }
-@media (max-width: 900px) {
-  .panel-inner { grid-template-columns: 1fr 1fr; }
-}
-@media (max-width: 540px) {
-  .panel-inner { grid-template-columns: 1fr; }
-  #panel { height: auto; max-height: 55vh; }
+@media (max-width: 720px) {
+  .bc-main { flex-direction: column; }
+  #map-wrap { flex: 0 0 auto; width: 100%; height: auto; aspect-ratio: 1 / 1; }
+  #panel { border-left: none; border-top: 1px solid var(--slate-line); }
 }
 
 .field-group { display: flex; flex-direction: column; gap: 6px; }
@@ -424,6 +401,7 @@ body.is-resizing-panel { cursor: row-resize; }
     <button id="logout-btn" class="map-btn" style="margin-left:10px;">Sign out</button>
   </header>
 
+  <div class="bc-main">
   <div id="map-wrap">
     <div id="map"></div>
     <div class="map-bar">
@@ -464,8 +442,6 @@ body.is-resizing-panel { cursor: row-resize; }
       </div>
     </div>
   </div>
-
-  <div class="panel-resize-handle" id="panel-resize-handle" role="separator" aria-orientation="horizontal" aria-label="Resize the control panel — drag, or use the arrow keys" tabindex="0"></div>
 
   <div id="panel">
     <div class="panel-inner">
@@ -517,6 +493,7 @@ body.is-resizing-panel { cursor: row-resize; }
       </div>
 
     </div>
+  </div>
   </div>
 </div>
 
@@ -838,7 +815,7 @@ body.is-resizing-panel { cursor: row-resize; }
   }
 
   const BlueMapLayer = L.GridLayer.extend({
-    options: { tileSize: 500, updateWhenIdle: true, attribution: 'Map data: BlueMap' },
+    options: { tileSize: 500, updateWhenIdle: true, keepBuffer: 1, attribution: 'Map data: BlueMap' },
     createTile(coords, done) {
       const size = this.getTileSize().x;
       const canvas = document.createElement('canvas');
@@ -874,7 +851,7 @@ body.is-resizing-panel { cursor: row-resize; }
     crs: L.CRS.Simple,
     center: mcToLL(initialX, initialZ),
     zoom: CFG.defaultZoom,
-    minZoom: -5,
+    minZoom: -3,
     maxZoom: 2,
     zoomSnap: 0.5,
     zoomDelta: 0.5
@@ -892,68 +869,17 @@ body.is-resizing-panel { cursor: row-resize; }
   const targetIcon = L.divIcon({ className: '', html: '<div class="target-icon"></div>', iconSize: [18,18], iconAnchor: [9,9] });
 
   // ════════════════════════════════════════════════════════════
-  // 3a. PANEL RESIZE
-  //    The control panel keeps its full set of fields — dragging
-  //    this handle (or tapping it and using the arrow keys) just
-  //    changes how much of it is visible before its own scrollbar
-  //    takes over, so more of the map shows above it. Height is
-  //    remembered across visits; double-click resets to default.
+  // 3a. MAP SIZING
+  //    The map is now a fixed square docked to the left edge, so its
+  //    size is derived from the panel layout rather than the window.
+  //    Watch the container and re-measure Leaflet whenever it changes
+  //    (initial reveal, window resizes, and any future layout shifts).
   // ════════════════════════════════════════════════════════════
-  (function initPanelResize() {
-    const handle  = document.getElementById('panel-resize-handle');
-    const panelEl = document.getElementById('panel');
-    const STORAGE_KEY = 'ra-ballistics-panel-height';
-    const DEFAULT_H = 360;
-    const MIN_H = 88;
-    const TOP_RESERVE = 220; // leave room for the topbar + a sliver of map
-
-    function maxH() { return Math.max(MIN_H, window.innerHeight - TOP_RESERVE); }
-    function clampH(h) { return Math.max(MIN_H, Math.min(maxH(), h)); }
-
-    function setHeight(h, persist) {
-      const clamped = clampH(h);
-      panelEl.style.height = clamped + 'px';
-      if (persist) { try { localStorage.setItem(STORAGE_KEY, String(clamped)); } catch (e) {} }
-      requestAnimationFrame(() => map.invalidateSize());
-    }
-
-    try {
-      const saved = parseInt(localStorage.getItem(STORAGE_KEY), 10);
-      if (!isNaN(saved) && saved > 0) setHeight(saved, false);
-    } catch (e) {}
-
-    let dragging = false, startY = 0, startH = 0;
-
-    handle.addEventListener('pointerdown', (e) => {
-      dragging = true;
-      startY = e.clientY;
-      startH = panelEl.getBoundingClientRect().height;
-      try { handle.setPointerCapture(e.pointerId); } catch (err) {}
-      handle.classList.add('is-dragging');
-      document.body.classList.add('is-resizing-panel');
-    });
-    handle.addEventListener('pointermove', (e) => {
-      if (!dragging) return;
-      setHeight(startH - (e.clientY - startY), false);
-    });
-    function endDrag() {
-      if (!dragging) return;
-      dragging = false;
-      handle.classList.remove('is-dragging');
-      document.body.classList.remove('is-resizing-panel');
-      setHeight(panelEl.getBoundingClientRect().height, true);
-    }
-    handle.addEventListener('pointerup', endDrag);
-    handle.addEventListener('pointercancel', endDrag);
-    handle.addEventListener('dblclick', () => setHeight(DEFAULT_H, true));
-    handle.addEventListener('keydown', (e) => {
-      const cur = panelEl.getBoundingClientRect().height;
-      if (e.key === 'ArrowUp')   { setHeight(cur + 24, true); e.preventDefault(); }
-      if (e.key === 'ArrowDown') { setHeight(cur - 24, true); e.preventDefault(); }
-      if (e.key === 'Home')      { setHeight(DEFAULT_H, true); e.preventDefault(); }
-    });
-    window.addEventListener('resize', () => setHeight(panelEl.getBoundingClientRect().height, false));
-  })();
+  if (window.ResizeObserver) {
+    const mapWrap = document.getElementById('map-wrap');
+    const mapResizeObserver = new ResizeObserver(() => map.invalidateSize());
+    mapResizeObserver.observe(mapWrap);
+  }
 
   // ════════════════════════════════════════════════════════════
   // 3b. MAP SOURCE POPOVER
