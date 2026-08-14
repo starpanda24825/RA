@@ -310,24 +310,24 @@
 .results-wrap { grid-column: 1 / -1; display: none; }
 .results-wrap.visible { display: block; }
 
-.results-tabs { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--slate-line); }
-.rtab {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  padding: 6px 16px;
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--parchment-faint);
+.field-group label.direct-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  color: var(--parchment-dim);
+  user-select: none;
 }
-.rtab.active { color: var(--gold-bright); border-bottom-color: var(--gold-bright); }
-
-.result-panel { display: none; }
-.result-panel.active { display: block; }
+.field-group label.direct-toggle input {
+  accent-color: var(--crimson-bright);
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
 
 .result-grid { display: flex; flex-wrap: wrap; gap: 10px; }
 .result-stat {
@@ -359,9 +359,21 @@
   border-radius: 8px;
 }
 
+.result-note {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--gold-bright);
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: rgba(201,162,39,0.10);
+  border: 1px solid var(--gold-dim);
+  border-radius: 8px;
+}
+
 #height-canvas {
   width: 100%;
   height: 130px;
+  margin-top: 12px;
   background: var(--ink-elevated);
   border: 1px solid var(--slate-line);
   border-radius: 8px;
@@ -512,20 +524,16 @@
           <input class="charges-range" id="charges-slider" type="range" min="1" max="8" step="1" value="3" aria-label="Powder charges"/>
           <span class="charges-value" id="charges-value">3</span>
         </div>
+        <label class="direct-toggle">
+          <input type="checkbox" id="direct-hit"/>
+          <span>Direct hit (point-blank aim)</span>
+        </label>
         <button class="calc-btn" id="calc-btn" disabled>Calculate Trajectory</button>
       </div>
 
       <div class="results-wrap" id="results-wrap">
-        <div class="results-tabs">
-          <button class="rtab active" data-tab="low">Low Arc</button>
-          <button class="rtab" data-tab="high">High Arc</button>
-          <button class="rtab" data-tab="profile">Height Profile</button>
-        </div>
-        <div class="result-panel active" id="tab-low"></div>
-        <div class="result-panel"        id="tab-high"></div>
-        <div class="result-panel"        id="tab-profile">
-          <canvas id="height-canvas"></canvas>
-        </div>
+        <div id="result-stats"></div>
+        <canvas id="height-canvas"></canvas>
       </div>
 
     </div>
@@ -573,10 +581,12 @@
   //    the firing angle is found numerically: simulate the shot at
   //    many candidate pitches, and bisect wherever the simulated
   //    height at the target's horizontal distance crosses the
-  //    target's actual height. Low arc and high arc are searched
-  //    as two separate brackets (0.5–44.9° and 45.1–60°); the
-  //    cannon cannot elevate beyond 60°, so anything steeper is
-  //    reported as an impossible shot.
+  //    target's actual height. The whole valid pitch range (0.5–60°)
+  //    is scanned and, of every solution that lands on target, the
+  //    one with the shortest time of flight is chosen — the "most
+  //    optimal" trajectory. A "direct hit" mode instead aims the
+  //    barrel straight at the target (line-of-sight elevation, no
+  //    gravity compensation) for point-blank fire.
   // ════════════════════════════════════════════════════════════
 
   const GRAVITY        = 0.05;
@@ -661,13 +671,51 @@
     return roots;
   }
 
-  function solveArc(x0, y0, z0, xt, yt, zt, yawDeg, charges, drag, loLim, hiLim, pick) {
-    const roots = findFiringSolutions(x0, y0, z0, xt, yt, zt, yawDeg, charges, drag, loLim, hiLim);
+  // Scan the full valid pitch range and return the single solution
+  // with the shortest time of flight — the "most optimal" trajectory.
+  // Also carries the steep (longest time-of-flight) solution, when a
+  // distinct one exists, as secondary info.
+  function findOptimalSolution(x0, y0, z0, xt, yt, zt, yawDeg, charges, drag) {
+    const roots = findFiringSolutions(x0, y0, z0, xt, yt, zt, yawDeg, charges, drag, 0.5, 60.0);
     if (!roots.length) return null;
-    const pitch = pick === 'min' ? roots[0] : roots[roots.length - 1];
-    const path  = simulate(x0, y0, z0, yawDeg, pitch, charges, drag);
-    const r     = yAtHDist(path, x0, z0, Math.hypot(xt - x0, zt - z0));
-    return { pitch, path, tof: r ? r.tick / TICKS_PER_SEC : null };
+    const targetH = Math.hypot(xt - x0, zt - z0);
+    let best  = null;
+    let steep = null;
+    for (const pitch of roots) {
+      const path = simulate(x0, y0, z0, yawDeg, pitch, charges, drag);
+      const r    = yAtHDist(path, x0, z0, targetH);
+      const tof  = r ? r.tick / TICKS_PER_SEC : Infinity;
+      if (!best || tof < best.tof) best = { pitch, path, tof };
+      if (!steep || pitch > steep.pitch) steep = { pitch, tof };
+    }
+    if (steep && Math.abs(steep.pitch - best.pitch) < 0.05) steep = null;
+    best.alternative = steep;
+    return best;
+  }
+
+  // Direct (point-blank) fire: aim the barrel straight at the target
+  // with no gravity compensation. Pitch is the line-of-sight elevation
+  // clamped to the cannon's 0–60° range; the shell still falls under
+  // gravity, so this is a close-range reference rather than a
+  // guaranteed hit.
+  function directHitSolution(x0, y0, z0, xt, yt, zt, yawDeg, charges, drag) {
+    const targetH = Math.hypot(xt - x0, zt - z0);
+    let pitch = Math.atan2(yt - y0, targetH) * 180 / Math.PI;
+    pitch = Math.max(0, Math.min(60, pitch));
+    const path = simulate(x0, y0, z0, yawDeg, pitch, charges, drag);
+    const r    = yAtHDist(path, x0, z0, targetH);
+
+    // Direct aim ignores gravity drop, so flag when the shell falls
+    // short of the target (either landing short or passing below it).
+    let undershoot = null;
+    if (r === null) {
+      undershoot = 'Direct aim undershoots — the shell drops before reaching the target\'s horizontal distance.';
+    } else {
+      const miss = yt - r.y;
+      if (miss > 0.05) undershoot = 'Direct aim undershoots — the shell passes ' + miss.toFixed(1) + ' blocks below the target.';
+    }
+
+    return { pitch, path, tof: r ? r.tick / TICKS_PER_SEC : null, undershoot };
   }
 
   // ════════════════════════════════════════════════════════════
@@ -686,10 +734,9 @@
   let placeMode        = null;        // 'cannon' | 'target' | null
   let cannonMarker     = null;
   let targetMarker     = null;
-  let trajLayerLow     = null;
-  let trajLayerHigh    = null;
-  let lastLow          = null;        // kept for the height-profile redraw
-  let lastHigh         = null;
+  let trajLayer        = null;
+  let lastResult       = null;        // kept for the height-profile redraw
+  let lastMode         = 'optimal';
   let lastBy           = 64;
   let lastTy           = 64;
 
@@ -1105,8 +1152,7 @@
   function clearAll() {
     if (cannonMarker)  cannonMarker.remove();  cannonMarker  = null;
     if (targetMarker)  targetMarker.remove();  targetMarker  = null;
-    if (trajLayerLow)  trajLayerLow.remove();  trajLayerLow  = null;
-    if (trajLayerHigh) trajLayerHigh.remove(); trajLayerHigh = null;
+    if (trajLayer) trajLayer.remove(); trajLayer = null;
     ['cx','cz','tx','tz'].forEach(id => { const el = document.getElementById(id); el.value = ''; el.classList.remove('set'); });
     document.getElementById('results-wrap').classList.remove('visible');
     updateCalcBtn();
@@ -1122,6 +1168,9 @@
   // 6. CALCULATE
   // ════════════════════════════════════════════════════════════
   document.getElementById('calc-btn').addEventListener('click', runCalc);
+  document.getElementById('direct-hit').addEventListener('change', () => {
+    if (document.getElementById('results-wrap').classList.contains('visible')) runCalc();
+  });
 
   function runCalc() {
     const cx = parseFloat(document.getElementById('cx').value);
@@ -1159,18 +1208,23 @@
       ? '0° (already aimed)'
       : turnAbs.toFixed(1) + '° ' + (turn > 0 ? 'clockwise' : 'counter-clockwise');
 
-    // Pitch is capped at 60°: anything steeper is not a valid shot.
-    const low      = solveArc(bx, by, bz, tx, ty, tz, yaw, selectedCharges, drag, 0.5,  44.9, 'min');
-    const high     = solveArc(bx, by, bz, tx, ty, tz, yaw, selectedCharges, drag, 45.1, 60.0, 'max');
-    const highOver = solveArc(bx, by, bz, tx, ty, tz, yaw, selectedCharges, drag, 60.1, 85.0, 'max');
+    // Default is the most optimal (shortest time-of-flight) solution;
+    // the "direct hit" checkbox swaps in a point-blank aim instead.
+    const directHit = document.getElementById('direct-hit').checked;
+    const sol = directHit
+      ? directHitSolution(bx, by, bz, tx, ty, tz, yaw, selectedCharges, drag)
+      : findOptimalSolution(bx, by, bz, tx, ty, tz, yaw, selectedCharges, drag);
 
-    if (trajLayerLow)  trajLayerLow.remove();
-    if (trajLayerHigh) trajLayerHigh.remove();
+    if (trajLayer) trajLayer.remove();
 
     function pathToLL(path) { return path.filter((_, i) => i % 5 === 0).map(p => mcToLL(p.x, p.z)); }
 
-    if (low)  trajLayerLow  = L.polyline(pathToLL(low.path),  { color: '#b3273a', weight: 2, opacity: 0.85, dashArray: '6 3' }).addTo(map);
-    if (high) trajLayerHigh = L.polyline(pathToLL(high.path), { color: '#c9a227', weight: 2, opacity: 0.85, dashArray: '6 3' }).addTo(map);
+    if (sol) {
+      trajLayer = L.polyline(pathToLL(sol.path), {
+        color: directHit ? '#c9a227' : '#b3273a',
+        weight: 2, opacity: 0.85, dashArray: '6 3'
+      }).addTo(map);
+    }
 
     const v0 = selectedCharges * VEL_PER_CHARGE;
 
@@ -1181,16 +1235,24 @@
       </div>`;
     }
 
-    function arcHtml(sol, arcName, overReason) {
+    function trajHtml(sol) {
       if (!sol) {
-        if (overReason) return `<div class="result-error">${overReason}</div>`;
-        return `<div class="result-error">Target is out of range for the ${arcName}. Try more powder charges, a different shell, or a closer target.</div>`;
+        return `<div class="result-error">Target is out of range. Try more powder charges, a different shell, or a closer target.</div>`;
       }
+      const note = (directHit && sol.undershoot)
+        ? `<div class="result-note">${sol.undershoot}</div>`
+        : '';
+      const altHtml = (!directHit && sol.alternative)
+        ? statBlock('Steep Alt. Pitch', sol.alternative.pitch.toFixed(3) + '°', '') +
+          statBlock('Steep Alt. Time', sol.alternative.tof.toFixed(2) + 's', '')
+        : '';
       const tofSec  = sol.tof != null ? sol.tof.toFixed(2) + 's' : '—';
       const tofTick = sol.tof != null ? Math.round(sol.tof * TICKS_PER_SEC) + ' ticks' : '—';
       const peakY   = Math.max(...sol.path.map(p => p.y));
-      return `<div class="result-grid">
+      return note + `<div class="result-grid">
+        ${statBlock('Fire Mode', directHit ? 'Direct (point-blank)' : 'Optimal', 'highlight')}
         ${statBlock('Pitch Angle', sol.pitch.toFixed(3) + '°', 'highlight')}
+        ${altHtml}
         ${statBlock('Cannon Turn', turnStr, 'highlight')}
         ${statBlock('Target Heading', yaw.toFixed(1) + '° (' + cardinal + ')', '')}
         ${statBlock('Time of Flight', tofSec, '')}
@@ -1206,14 +1268,11 @@
       </div>`;
     }
 
-    document.getElementById('tab-low').innerHTML  = arcHtml(low,  'low arc');
-    document.getElementById('tab-high').innerHTML = arcHtml(high, 'high arc',
-      (!high && highOver) ? 'Pitch would need to exceed 60° for the high arc — shot not possible at this range.' : null);
+    document.getElementById('result-stats').innerHTML = trajHtml(sol);
 
-    lastLow = low; lastHigh = high; lastBy = by; lastTy = ty;
-    drawHeightProfile();
-
+    lastResult = sol; lastMode = directHit ? 'direct' : 'optimal'; lastBy = by; lastTy = ty;
     document.getElementById('results-wrap').classList.add('visible');
+    drawHeightProfile();
 
     const bounds = [];
     if (cannonMarker) bounds.push(cannonMarker.getLatLng());
@@ -1237,8 +1296,7 @@
     ctx.fillRect(0, 0, W, H);
 
     const paths = [];
-    if (lastLow)  paths.push({ path: lastLow.path,  color: '#b3273a' });
-    if (lastHigh) paths.push({ path: lastHigh.path, color: '#c9a227' });
+    if (lastResult) paths.push({ path: lastResult.path, color: lastMode === 'direct' ? '#c9a227' : '#b3273a' });
     if (!paths.length) return;
 
     const allPts = paths.flatMap(p => p.path);
@@ -1288,19 +1346,6 @@
     ctx.textAlign = 'center';
     ctx.fillText('Time (ticks)', W / 2, H - 4);
   }
-
-  // ════════════════════════════════════════════════════════════
-  // 8. RESULT TABS
-  // ════════════════════════════════════════════════════════════
-  document.querySelectorAll('.rtab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      document.querySelectorAll('.rtab').forEach(t => t.classList.remove('active'));
-      document.querySelectorAll('.result-panel').forEach(p => p.classList.remove('active'));
-      tab.classList.add('active');
-      document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
-      if (tab.dataset.tab === 'profile') drawHeightProfile();
-    });
-  });
 
   // ════════════════════════════════════════════════════════════
   // 9. AUTH — last, because showApp() needs `map` to already exist
