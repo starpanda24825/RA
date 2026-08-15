@@ -508,10 +508,10 @@ local function runCommand(mount, cmd, shipYaw)
   sleep(SEQ_BEFORE_AIM)
 
   -- 4. Aim. The website sends an absolute world yaw; the mount's yaw is
-  -- measured relative to the ship, so subtract the ship's heading first.
+  -- measured relative to the ship, so add the ship's heading first.
   local aimYaw   = (cmd.yaw or 0) + cfg.yawOffset
   if cfg.shipRelativeYaw and shipYaw then
-    aimYaw = aimYaw - shipYaw
+    aimYaw = aimYaw + shipYaw
   end
   local aimPitch = (cmd.pitch or 0) * cfg.pitchScale
   pcall(function() mount.setYaw(aimYaw) end)
