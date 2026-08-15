@@ -1,6 +1,6 @@
 -- ============================================================
--- Cannon Computer — Regnum Aeternum
--- ComputerCraft bridge for STATIC cannons (Create: Big Cannons)
+-- Sublevel Cannon Computer — Regnum Aeternum
+-- ComputerCraft bridge for MOBILE / SUBLEVEL cannons (Create: Big Cannons)
 --
 -- ────────────────────────────────────────────────────────────
 -- IN-GAME SETUP (read this first)
@@ -12,52 +12,57 @@
 --   3. Create Big Cannons: Peripherals (cbcperipheral)
 --      This is what lets a CC computer talk to a cannon mount.
 --
+-- REQUIRED EXTRAS
+--   - A wireless modem on this computer, and a GPS host on the
+--     network. The world is already set up so that gps.locate(2)
+--     returns this computer's coordinates — that is how the website
+--     knows where the moving cannon is on the map.
+--
 -- BUILD
---   1. Build your cannon on a *static* cannon mount (NOT the fixed
+--   1. Build your cannon on the ship's cannon mount (NOT the fixed
 --      mount — the fixed mount can't be aimed by a computer).
---   2. Place an advanced Computer next to (touching) the cannon mount
---      block so the computer can see the mount as a peripheral.
+--   2. Place an advanced Computer next to (touching) the cannon
+--      mount block so the computer can see the mount peripheral.
 --   3. Wire the cannon's firing mechanism. Two options:
 --        a) Peripheral fire (recommended) — cbcperipheral's fire()
---           calls the cannon directly. Nothing else to place.
---        b) Redstone fire — if your cannon is fired by a redstone
---           pulse (e.g. a breech/controller wired to redstone), run a
---           redstone cable from a side of the computer to the firing
---           block and set fireMode=redstone in cannon_cfg.txt.
---   4. Make sure the cannon is LOADED (shell + powder) before you fire.
+--           calls the cannon directly.
+--        b) Redstone fire — run a redstone cable from a side of the
+--           computer to the firing block and set fireMode=redstone
+--           in subcannon_cfg.txt.
+--   4. Make sure the cannon is LOADED (shell + powder) before firing.
 --
 -- RUN
---   1. Put this program on the computer as "startup" (or run it once
---      and keep it running — it is a daemon).
---   2. First boot prompts for: cannon length (blocks), the direction
---      the cannon faces when assembled (see below), and a short message.
---      These are saved to cannon_cfg.txt. Mobile / sublevel cannons use
---      the separate "Sublevel Cannon Computer" program instead.
---   3. The computer then pings the website. It shows "Awaiting
---      approval" until an officer accepts it in the Ballistic
---      Calculator → Cannon Registry tab (bottom section).
---   4. Once accepted, it waits for fire commands. On a command it runs
---      this exact sequence (static cannons only):
---         disassemble → assemble → aim → fire → disassemble
+--   1. Put this program on the computer as "startup" (it is a daemon).
+--   2. First boot prompts for: cannon length (blocks) and the
+--      direction the cannon faces when assembled. Saved to
+--      subcannon_cfg.txt. This cannon is always reported as sublevel.
+--   3. The computer registers itself with the website as a SUBLEVEL
+--      cannon. It shows "Awaiting approval" until an officer accepts
+--      it in the Ballistic Calculator → Cannon Registry tab.
+--   4. Once accepted it does two jobs at the same time:
+--        a) Polls for fire commands (yaw + pitch). On a command it
+--           runs the same sequence as static cannons:
+--              disassemble → assemble → aim → fire → disassemble
+--        b) Calls gps.locate(2) and pushes fresh coordinates to the
+--           website roughly every 3 seconds, so its dot on the map
+--           follows the cannon as the ship moves.
 --
 -- DIRECTION FACED WHEN ASSEMBLED ("facing")
---   This is the cannon's resting yaw in Minecraft degrees:
+--   Same convention as the static Cannon Computer:
 --      0   = South (+Z)
 --      90  = West
 --      180 = North
 --      270 = East
 --   Find it with F3: face the direction your barrel points when the
---   cannon is assembled, and read the "Facing" value. If your cannon
---   ends up aimed the wrong way, adjust yawOffset in cannon_cfg.txt
---   (see CALIBRATION below).
+--   cannon is assembled, and read the "Facing" value. Calibrate with
+--   yawOffset / pitchScale in subcannon_cfg.txt (see CALIBRATION).
 --
 -- CALIBRATION
 --   CBC's yaw convention should match Minecraft (0 = south, positive
 --   clockwise). If a fire command turns the cannon the wrong way or is
---   offset, tune these in cannon_cfg.txt:
+--   offset, tune these in subcannon_cfg.txt:
 --     yawOffset  — added to the incoming yaw (degrees)
 --     pitchScale — multiplied by the incoming pitch (1 or -1)
---   Aim at a known target and correct until shots land.
 -- ============================================================
 
 -- ------------------------------------------------------------
@@ -69,32 +74,37 @@ local POLL_PATH = "/api/ballistics/cc/poll"
 -- Mount peripheral type from cbcperipheral.
 local MOUNT_TYPE = "cbc_cannon_mount"
 
--- Sequence timing (seconds).
+-- How long (seconds) to let gps.locate run per fix. This also sets the
+-- natural heartbeat cadence: locate (2s) + poll + sleep(pollInterval)
+-- comes out to ~3 seconds, matching the website's dot-refresh cycle.
+local GPS_TIMEOUT = 2
+
+-- Sequence timing (seconds) — identical to the static cannon.
 local SEQ_DISASSEMBLE = 0.5
 local SEQ_ASSEMBLE    = 1.0
-local SEQ_BEFORE_AIM  = 5.0   -- wait after assembling, before aiming
-local SEQ_BEFORE_FIRE = 7.0   -- wait after aiming, before firing
+local SEQ_BEFORE_AIM  = 4.0   -- wait after assembling, before aiming
+local SEQ_BEFORE_FIRE = 5.0   -- wait after aiming, before firing
 local SEQ_AFTER_FIRE  = 2.0   -- wait after firing, before disassembling
 local AIM_TIMEOUT     = 8.0   -- max seconds to wait for aim to settle
 local AIM_TOLERANCE   = 0.5   -- degrees
 
--- Config file path.
-local CFG_PATH = "cannon_cfg.txt"
-local ID_PATH  = "cannon_id.txt"
+-- Config file paths (kept separate from the static cannon's files).
+local CFG_PATH = "subcannon_cfg.txt"
+local ID_PATH  = "subcannon_id.txt"
 
 -- ------------------------------------------------------------
 -- Config defaults
 -- ------------------------------------------------------------
 local cfg = {
-  length     = 4,
-  facing     = 0,
-  message    = "",
-  pollInterval = 1,      -- seconds between pings
-  yawOffset  = 0,
-  pitchScale = 1,
-  fireMode   = "peripheral",  -- "peripheral" or "redstone"
-  redstoneSide = "",          -- e.g. "left", "right", "back", "top"
-  firePulse  = 0.5,           -- redstone pulse length (seconds)
+  length       = 4,
+  facing       = 0,
+  message      = "",
+  pollInterval = 1,      -- seconds after each poll; total loop ≈ 3s
+  yawOffset    = 0,
+  pitchScale   = 1,
+  fireMode     = "peripheral",  -- "peripheral" or "redstone"
+  redstoneSide = "",            -- e.g. "left", "right", "back", "top"
+  firePulse    = 0.5,           -- redstone pulse length (seconds)
 }
 
 -- ------------------------------------------------------------
@@ -149,15 +159,15 @@ end
 local function loadConfig()
   local loaded = readConfig()
   if loaded then
-    cfg.length        = tonumber(loaded.length) or cfg.length
-    cfg.facing        = tonumber(loaded.facing) or cfg.facing
-    cfg.message       = loaded.message or cfg.message
-    cfg.pollInterval  = tonumber(loaded.pollInterval) or cfg.pollInterval
-    cfg.yawOffset     = tonumber(loaded.yawOffset) or cfg.yawOffset
-    cfg.pitchScale    = tonumber(loaded.pitchScale) or cfg.pitchScale
-    cfg.fireMode      = loaded.fireMode or cfg.fireMode
-    cfg.redstoneSide  = loaded.redstoneSide or cfg.redstoneSide
-    cfg.firePulse     = tonumber(loaded.firePulse) or cfg.firePulse
+    cfg.length       = tonumber(loaded.length) or cfg.length
+    cfg.facing       = tonumber(loaded.facing) or cfg.facing
+    cfg.message      = loaded.message or cfg.message
+    cfg.pollInterval = tonumber(loaded.pollInterval) or cfg.pollInterval
+    cfg.yawOffset    = tonumber(loaded.yawOffset) or cfg.yawOffset
+    cfg.pitchScale   = tonumber(loaded.pitchScale) or cfg.pitchScale
+    cfg.fireMode     = loaded.fireMode or cfg.fireMode
+    cfg.redstoneSide = loaded.redstoneSide or cfg.redstoneSide
+    cfg.firePulse    = tonumber(loaded.firePulse) or cfg.firePulse
   end
 end
 
@@ -170,7 +180,7 @@ end
 local function setup()
   term.clear()
   term.setCursorPos(1, 1)
-  print("=== Cannon Computer — first-time setup ===")
+  print("=== Sublevel Cannon Computer — first-time setup ===")
   print("")
 
   local len = tonumber(readLine("Cannon length in blocks (e.g. 4): "))
@@ -233,6 +243,24 @@ local function findMount()
 end
 
 -- ------------------------------------------------------------
+-- GPS location
+-- ------------------------------------------------------------
+local lastGpsX, lastGpsY, lastGpsZ = 0, 0, 0
+
+-- Returns x, y, z, fresh. If gps.locate fails we keep the last known
+-- fix so the map dot stays put instead of jumping to 0,0,0.
+local function currentPosition()
+  if gps and gps.locate then
+    local ok, x, y, z = pcall(gps.locate, GPS_TIMEOUT)
+    if ok and x ~= nil and y ~= nil and z ~= nil then
+      lastGpsX, lastGpsY, lastGpsZ = x, y, z
+      return x, y, z, true
+    end
+  end
+  return lastGpsX, lastGpsY, lastGpsZ, false
+end
+
+-- ------------------------------------------------------------
 -- HTTP bridge
 -- ------------------------------------------------------------
 local function httpPost(path, body)
@@ -255,7 +283,7 @@ local function httpPost(path, body)
 end
 
 -- ------------------------------------------------------------
--- Firing sequence (static cannons):
+-- Firing sequence (same as static cannons):
 --   disassemble → assemble → aim → fire → disassemble
 -- ------------------------------------------------------------
 local function normDeg(d)
@@ -360,65 +388,69 @@ while true do
   local lines = {}
   local mount = findMount()
 
-  if not mount then
-    table.insert(lines, "Cannon Computer")
-    table.insert(lines, "Status: mount peripheral not found")
-    table.insert(lines, "Place this computer touching a static cannon mount.")
-    drawStatus(lines)
-    sleep(cfg.pollInterval)
-  else
-    local curYaw, curPitch = 0, 0
+  local curYaw, curPitch = 0, 0
+  if mount then
     pcall(function() curYaw = mount.getYaw() or 0 end)
     pcall(function() curPitch = mount.getPitch() or 0 end)
+  end
 
-    local body = {
-      computerId = computerId,
-      x = 0, y = 0, z = 0,
-      length = cfg.length,
-      facing = cfg.facing,
-      sublevel = false,
-      message = cfg.message,
-      yaw = curYaw,
-      pitch = curPitch,
-      sequence = lastSequence,
-    }
-    pcall(function() body.x = mount.getX() end)
-    pcall(function() body.y = mount.getY() end)
-    pcall(function() body.z = mount.getZ() end)
+  -- Fetch a fresh GPS fix (blocks ~2s), falling back to the last known.
+  local gx, gy, gz, gpsFresh = currentPosition()
 
-    local resp = httpPost(POLL_PATH, body)
+  local body = {
+    computerId = computerId,
+    x = gx, y = gy, z = gz,
+    length = cfg.length,
+    facing = cfg.facing,
+    sublevel = true,
+    message = cfg.message,
+    yaw = curYaw,
+    pitch = curPitch,
+    sequence = lastSequence,
+  }
 
-    table.insert(lines, "Cannon Computer")
-    table.insert(lines, "Computer ID: " .. computerId)
+  local resp = httpPost(POLL_PATH, body)
 
-    if resp == nil then
-      table.insert(lines, "Status: cannot reach website")
-      table.insert(lines, "Check " .. BASE_URL)
-    elseif not resp.success then
-      table.insert(lines, "Status: server error")
-      table.insert(lines, tostring(resp.response))
-    elseif resp.response.status == "pending" then
-      table.insert(lines, "Status: AWAITING APPROVAL")
-      table.insert(lines, "An officer must accept this cannon")
-      table.insert(lines, "from the website's Cannon Registry tab.")
-    elseif resp.response.status == "active" then
-      local cmd = resp.response.command
-      if cmd and cmd.sequence ~= lastSequence then
+  table.insert(lines, "Sublevel Cannon Computer")
+  table.insert(lines, "Computer ID: " .. computerId)
+  table.insert(lines, "GPS: X " .. tostring(gx) .. "  Y " .. tostring(gy) .. "  Z " .. tostring(gz) .. (gpsFresh and "" or " (stale)"))
+
+  if not mount then
+    table.insert(lines, "Mount: not found")
+    table.insert(lines, "Place this computer touching the cannon mount.")
+  end
+
+  if resp == nil then
+    table.insert(lines, "Status: cannot reach website")
+    table.insert(lines, "Check " .. BASE_URL)
+  elseif not resp.success then
+    table.insert(lines, "Status: server error")
+    table.insert(lines, tostring(resp.response))
+  elseif resp.response.status == "pending" then
+    table.insert(lines, "Status: AWAITING APPROVAL")
+    table.insert(lines, "An officer must accept this cannon")
+    table.insert(lines, "from the website's Cannon Registry tab.")
+  elseif resp.response.status == "active" then
+    local cmd = resp.response.command
+    if cmd and cmd.sequence ~= lastSequence then
+      if mount then
         lastSequence = cmd.sequence   -- ack intent immediately (at-most-once fire)
         local ok, err = pcall(runCommand, mount, cmd)
         if not ok then
           print("Command #" .. tostring(cmd.sequence) .. " failed: " .. tostring(err))
         end
       else
-        table.insert(lines, "Status: READY")
-        table.insert(lines, "Name: " .. tostring(resp.response.name))
-        table.insert(lines, "Aiming: yaw " .. string.format("%.1f", curYaw) .. " / pitch " .. string.format("%.1f", curPitch))
+        table.insert(lines, "Fire command queued — mount not found")
       end
     else
-      table.insert(lines, "Status: " .. tostring(resp.response.status))
+      table.insert(lines, "Status: READY")
+      table.insert(lines, "Name: " .. tostring(resp.response.name))
+      table.insert(lines, "Aiming: yaw " .. string.format("%.1f", curYaw) .. " / pitch " .. string.format("%.1f", curPitch))
     end
-
-    drawStatus(lines)
-    sleep(cfg.pollInterval)
+  else
+    table.insert(lines, "Status: " .. tostring(resp.response.status))
   end
+
+  drawStatus(lines)
+  sleep(cfg.pollInterval)
 end

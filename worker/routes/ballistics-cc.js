@@ -1,6 +1,6 @@
 /* ============================================================
    Regnum Aeternum — Worker
-   Ballistics: ComputerCraft static-cannon bridge.
+   Ballistics: ComputerCraft cannon bridge (static + sublevel).
 
    Open self-registration: an in-game computer pings one endpoint
    with its cannon's details and current state, and receives any
@@ -8,6 +8,10 @@
    instead the computer identifies itself with a stable computer id
    (os.getComputerID(), or a persisted UUID). Requests stay
    'pending' until accepted on the website's Cannon Registry tab.
+
+   Sublevel (mobile) cannons additionally keep refreshing their
+   x/y/z from gps.locate() on every poll, so their map dot tracks
+   the cannon as it moves.
 
    Fire command shape returned to the computer:
      { sequence, yaw, pitch, fire }
@@ -58,8 +62,11 @@ export async function ccPoll(request, env) {
   let cannon = await store.findCannonByComputerId(env, computerId);
   if (!cannon) {
     cannon = await store.insertCannon(env, { computerId, x, y, z, length, facing, sublevel, message });
-  } else if (cannon.status === 'pending') {
-    cannon = await store.refreshPendingCannon(env, cannon.id, { x, y, z, length, facing, sublevel, message });
+  } else if (cannon.status === 'pending' || Number(cannon.sublevel) === 1) {
+    // Pending requests and sublevel (mobile) cannons keep their reported
+    // coordinates fresh on every ping; accepted static cannons do not,
+    // so a website-side coordinate edit is never overwritten.
+    cannon = await store.refreshCannonFromComputer(env, cannon.id, { x, y, z, length, facing, sublevel, message });
   }
 
   // Report the current aim state (heartbeat) regardless of status.

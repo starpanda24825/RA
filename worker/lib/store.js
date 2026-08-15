@@ -1172,8 +1172,10 @@ export async function insertCannon(env, { computerId, x, y, z, length, facing, s
   return findCannonById(env, result.meta.last_row_id);
 }
 
-// While a request is still pending, keep its registration fields fresh on every ping.
-export async function refreshPendingCannon(env, id, { x, y, z, length, facing, sublevel, message }) {
+// Refresh a cannon's registration fields on a ping. Used while a request is
+// still pending, and for sublevel (mobile) cannons on every ping so their
+// GPS coordinates keep the map dot moving even after acceptance.
+export async function refreshCannonFromComputer(env, id, { x, y, z, length, facing, sublevel, message }) {
   await env.DB.prepare(
     `UPDATE ballistics_cannons
         SET x = ?, y = ?, z = ?, length = ?, facing = ?, sublevel = ?, message = ?,

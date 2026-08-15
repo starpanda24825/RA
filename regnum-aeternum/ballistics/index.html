@@ -306,27 +306,50 @@
 }
 .calc-btn:hover { background: var(--crimson-bright); }
 .calc-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.calc-btn--gold { background: var(--gold); border-color: var(--gold-bright); color: var(--ink); }
+.calc-btn--gold:hover { background: var(--gold-bright); }
+.traj-card__fire { margin-top: 12px; }
+.traj-card__fire .calc-btn { margin-top: 0; }
 
 .results-wrap { grid-column: 1 / -1; display: none; }
 .results-wrap.visible { display: block; }
 
-.field-group label.direct-toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 12px;
-  cursor: pointer;
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  text-transform: none;
-  color: var(--parchment-dim);
-  user-select: none;
+.traj-card {
+  background: var(--ink-elevated);
+  border: 1px solid var(--slate-line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
 }
-.field-group label.direct-toggle input {
-  accent-color: var(--crimson-bright);
-  width: 15px;
-  height: 15px;
-  cursor: pointer;
+.traj-card--optimal { border-left: 3px solid var(--crimson-bright); }
+.traj-card--direct  { border-left: 3px solid var(--gold-bright); }
+.traj-card__head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.traj-card__title {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.traj-card--optimal .traj-card__title { color: var(--crimson-bright); }
+.traj-card--direct  .traj-card__title { color: var(--gold-bright); }
+.traj-card--invalid { opacity: 0.6; filter: grayscale(0.6); }
+.traj-card--invalid .traj-card__title { color: var(--slate-soft); }
+.traj-card__subtitle {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--slate-soft);
+}
+.shared-stats { margin-top: 16px; }
+.shared-stats__title {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--slate-soft);
+  margin: 0 0 8px;
 }
 
 .result-grid { display: flex; flex-wrap: wrap; gap: 10px; }
@@ -389,6 +412,8 @@
 
 .cannon-icon { width:18px; height:18px; background:var(--crimson-bright); border:2px solid var(--parchment); border-radius:50%; }
 .target-icon { width:18px; height:18px; background:var(--gold-bright);    border:2px solid var(--ink);        border-radius:50%; }
+.cannon-dot { width:12px; height:12px; background:var(--crimson-bright); border:2px solid var(--parchment); border-radius:50%; }
+.cannon-dot--mobile { background:var(--gold-bright); border-color:var(--ink); }
 /* ---------- Tabs ---------- */
 .bc-tabs {
   display: flex;
@@ -487,7 +512,6 @@
   border: 1px dashed var(--slate-line);
   border-radius: 8px;
 }
-#fire-control { margin-top: 14px; }
 #fire-status {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -610,7 +634,7 @@
           <option value="90">West (90°)</option>
         </select>
         <div class="field-hint">Click "Cannon" then click the map, or type coordinates directly</div>
-        <label style="margin-top:12px;">Registered Static Cannon</label>
+        <label style="margin-top:12px;">Registered Cannon</label>
         <select class="bc-select" id="static-cannon">
           <option value="">— None (manual entry) —</option>
         </select>
@@ -640,19 +664,12 @@
           <input class="charges-range" id="charges-slider" type="range" min="1" max="8" step="1" value="3" aria-label="Powder charges"/>
           <span class="charges-value" id="charges-value">3</span>
         </div>
-        <label class="direct-toggle">
-          <input type="checkbox" id="direct-hit"/>
-          <span>Direct hit (point-blank aim)</span>
-        </label>
         <button class="calc-btn" id="calc-btn" disabled>Calculate Trajectory</button>
       </div>
 
       <div class="results-wrap" id="results-wrap">
         <div id="result-stats"></div>
-        <div id="fire-control" style="display:none;">
-          <button class="calc-btn" id="fire-btn" type="button">Fire Cannon</button>
-          <p id="fire-status"></p>
-        </div>
+        <p id="fire-status"></p>
         <canvas id="height-canvas"></canvas>
       </div>
 
@@ -662,7 +679,7 @@
 
       <div class="field-group" style="grid-column:1/-1;">
         <label>Registered Cannons</label>
-        <p class="field-hint">Static cannons that have been accepted. Edit a name or detail here, then fire from the Calculator tab.</p>
+        <p class="field-hint">Static and mobile (sublevel) cannons that have been accepted. Edit a name or detail here, then fire from the Calculator tab.</p>
         <div class="registry-list" id="cannon-active-list"></div>
       </div>
 
@@ -848,7 +865,7 @@
       undershoot = 'Direct aim undershoots — the shell drops before reaching the target\'s horizontal distance.';
     } else {
       const miss = yt - r.y;
-      if (miss > 0.05) undershoot = 'Direct aim undershoots — the shell passes ' + miss.toFixed(1) + ' blocks below the target.';
+      if (miss >= 1) undershoot = 'Direct aim undershoots — the shell passes ' + miss.toFixed(1) + ' blocks below the target.';
     }
 
     return { pitch, path, tof: r ? r.tick / TICKS_PER_SEC : null, undershoot };
@@ -870,9 +887,10 @@
   let placeMode        = null;        // 'cannon' | 'target' | null
   let cannonMarker     = null;
   let targetMarker     = null;
-  let trajLayer        = null;
-  let lastResult       = null;        // kept for the height-profile redraw
-  let lastMode         = 'optimal';
+  let trajLayer        = null;        // layer group holding both trajectory lines
+  let lastOptimal      = null;        // { pitch, path, tof, alternative }
+  let lastDirect       = null;        // { pitch, path, tof, undershoot }
+  let lastYaw          = null;        // shared target heading for both solutions
   let lastBy           = 64;
   let lastTy           = 64;
 
@@ -1087,6 +1105,9 @@
 
   const cannonIcon = L.divIcon({ className: '', html: '<div class="cannon-icon"></div>', iconSize: [18,18], iconAnchor: [9,9] });
   const targetIcon = L.divIcon({ className: '', html: '<div class="target-icon"></div>', iconSize: [18,18], iconAnchor: [9,9] });
+  const cannonDotIcon       = L.divIcon({ className: '', html: '<div class="cannon-dot"></div>', iconSize: [14,14], iconAnchor: [7,7] });
+  const cannonDotMobileIcon = L.divIcon({ className: '', html: '<div class="cannon-dot cannon-dot--mobile"></div>', iconSize: [14,14], iconAnchor: [7,7] });
+  const registeredCannonMarkers = {}; // cannon id -> L.marker
 
   // ════════════════════════════════════════════════════════════
   // 3a. MAP SIZING
@@ -1291,7 +1312,8 @@
     if (trajLayer) trajLayer.remove(); trajLayer = null;
     ['cx','cz','tx','tz'].forEach(id => { const el = document.getElementById(id); el.value = ''; el.classList.remove('set'); });
     document.getElementById('results-wrap').classList.remove('visible');
-    updateFireControl(null);
+    lastOptimal = null; lastDirect = null; lastYaw = null;
+    updateFireControl();
     updateCalcBtn();
   }
 
@@ -1305,9 +1327,6 @@
   // 6. CALCULATE
   // ════════════════════════════════════════════════════════════
   document.getElementById('calc-btn').addEventListener('click', runCalc);
-  document.getElementById('direct-hit').addEventListener('change', () => {
-    if (document.getElementById('results-wrap').classList.contains('visible')) runCalc();
-  });
 
   function runCalc() {
     const cx = parseFloat(document.getElementById('cx').value);
@@ -1345,23 +1364,17 @@
       ? '0° (already aimed)'
       : turnAbs.toFixed(1) + '° ' + (turn > 0 ? 'clockwise' : 'counter-clockwise');
 
-    // Default is the most optimal (shortest time-of-flight) solution;
-    // the "direct hit" checkbox swaps in a point-blank aim instead.
-    const directHit = document.getElementById('direct-hit').checked;
-    const sol = directHit
-      ? directHitSolution(bx, by, bz, tx, ty, tz, yaw, selectedCharges, drag)
-      : findOptimalSolution(bx, by, bz, tx, ty, tz, yaw, selectedCharges, drag);
+    // Always solve both trajectories so the officer can pick between them.
+    const optimal = findOptimalSolution(bx, by, bz, tx, ty, tz, yaw, selectedCharges, drag);
+    const direct  = directHitSolution(bx, by, bz, tx, ty, tz, yaw, selectedCharges, drag);
 
     if (trajLayer) trajLayer.remove();
+    trajLayer = L.layerGroup().addTo(map);
 
     function pathToLL(path) { return path.filter((_, i) => i % 5 === 0).map(p => mcToLL(p.x, p.z)); }
 
-    if (sol) {
-      trajLayer = L.polyline(pathToLL(sol.path), {
-        color: directHit ? '#c9a227' : '#b3273a',
-        weight: 2, opacity: 0.85, dashArray: '6 3'
-      }).addTo(map);
-    }
+    if (optimal) L.polyline(pathToLL(optimal.path), { color: '#b3273a', weight: 2, opacity: 0.85 }).addTo(trajLayer);
+    if (direct)  L.polyline(pathToLL(direct.path),  { color: '#c9a227', weight: 2, opacity: 0.85, dashArray: '6 3' }).addTo(trajLayer);
 
     const v0 = selectedCharges * VEL_PER_CHARGE;
 
@@ -1372,44 +1385,82 @@
       </div>`;
     }
 
-    function trajHtml(sol) {
+    function tofStat(sol) {
+      return {
+        tofSec:  sol.tof != null ? sol.tof.toFixed(2) + 's' : '—',
+        tofTick: sol.tof != null ? Math.round(sol.tof * TICKS_PER_SEC) + ' ticks' : '—',
+        peakY:   Math.max(...sol.path.map(p => p.y)),
+      };
+    }
+
+    function fireButton(mode, sol) {
+      const s = fireButtonLabel(mode, sol, !!selectedCannonId);
+      const cls = mode === 'direct' ? 'calc-btn calc-btn--gold' : 'calc-btn';
+      return '<button class="' + cls + '" data-fire-mode="' + mode + '" type="button"' +
+        (s.disabled ? ' disabled' : '') +
+        (s.title ? ' title="' + s.title + '"' : '') +
+        '>' + s.label + '</button>';
+    }
+
+    function trajCard(title, cls, sol, extra) {
       if (!sol) {
-        return `<div class="result-error">Target is out of range. Try more powder charges, a different shell, or a closer target.</div>`;
+        return `<div class="traj-card ${cls} traj-card--invalid">
+          <div class="traj-card__head"><span class="traj-card__title">${title}</span></div>
+          <div class="result-error">No firing solution — target is out of range. Try more powder charges, a different shell, or a closer target.</div>
+          <div class="traj-card__fire">${fireButton(extra.mode, null)}</div>
+        </div>`;
       }
-      const note = (directHit && sol.undershoot)
-        ? `<div class="result-note">${sol.undershoot}</div>`
-        : '';
-      const altHtml = (!directHit && sol.alternative)
-        ? statBlock('Steep Alt. Pitch', sol.alternative.pitch.toFixed(3) + '°', '') +
-          statBlock('Steep Alt. Time', sol.alternative.tof.toFixed(2) + 's', '')
-        : '';
-      const tofSec  = sol.tof != null ? sol.tof.toFixed(2) + 's' : '—';
-      const tofTick = sol.tof != null ? Math.round(sol.tof * TICKS_PER_SEC) + ' ticks' : '—';
-      const peakY   = Math.max(...sol.path.map(p => p.y));
-      return note + `<div class="result-grid">
-        ${statBlock('Fire Mode', directHit ? 'Direct (point-blank)' : 'Optimal', 'highlight')}
-        ${statBlock('Pitch Angle', sol.pitch.toFixed(3) + '°', 'highlight')}
-        ${altHtml}
-        ${statBlock('Cannon Turn', turnStr, 'highlight')}
-        ${statBlock('Target Heading', yaw.toFixed(1) + '° (' + cardinal + ')', '')}
-        ${statBlock('Time of Flight', tofSec, '')}
-        ${statBlock('Ticks', tofTick, '')}
-        ${statBlock('Muzzle Velocity', v0 + ' blk/tick', '')}
-        ${statBlock('H. Distance', hDist.toFixed(1) + ' blk', '')}
-        ${statBlock('&Delta; Altitude', (ty - by >= 0 ? '+' : '') + (ty - by).toFixed(1) + ' blk', '')}
-        ${statBlock('Peak Altitude', 'Y ' + peakY.toFixed(1), 'warn')}
-        ${statBlock('Shell', shell.name, '')}
-        ${statBlock('Fuze', shell.fuze || '—', '')}
-        ${statBlock('Drag / tick', drag, '')}
-        ${statBlock('Charges', selectedCharges, '')}
+      const f = tofStat(sol);
+      return `<div class="traj-card ${cls}">
+        <div class="traj-card__head">
+          <span class="traj-card__title">${title}</span>
+          <span class="traj-card__subtitle">${extra.sub}</span>
+        </div>
+        ${extra.note || ''}
+        <div class="result-grid">
+          ${statBlock('Pitch Angle', sol.pitch.toFixed(3) + '°', 'highlight')}
+          ${extra.alt || ''}
+          ${statBlock('Time of Flight', f.tofSec, '')}
+          ${statBlock('Ticks', f.tofTick, '')}
+          ${statBlock('Peak Altitude', 'Y ' + f.peakY.toFixed(1), 'warn')}
+        </div>
+        <div class="traj-card__fire">${fireButton(extra.mode, sol)}</div>
       </div>`;
     }
 
-    document.getElementById('result-stats').innerHTML = trajHtml(sol);
+    const optimalCard = trajCard('Optimal Trajectory', 'traj-card--optimal', optimal, {
+      mode: 'optimal',
+      sub: 'Shortest time of flight',
+      alt: (optimal && optimal.alternative)
+        ? statBlock('Steep Alt. Pitch', optimal.alternative.pitch.toFixed(3) + '°', '') +
+          statBlock('Steep Alt. Time', optimal.alternative.tof.toFixed(2) + 's', '')
+        : '',
+    });
+    const directCard = trajCard('Direct (Point-Blank)', 'traj-card--direct', direct, {
+      mode: 'direct',
+      sub: 'Aim straight at target — no gravity compensation',
+      note: (direct && direct.undershoot) ? `<div class="result-note">${direct.undershoot}</div>` : '',
+    });
 
-    lastResult = sol; lastMode = directHit ? 'direct' : 'optimal'; lastBy = by; lastTy = ty;
+    const sharedStats =
+      statBlock('Cannon Turn', turnStr, 'highlight') +
+      statBlock('Target Heading', yaw.toFixed(1) + '° (' + cardinal + ')', '') +
+      statBlock('Muzzle Velocity', v0 + ' blk/tick', '') +
+      statBlock('H. Distance', hDist.toFixed(1) + ' blk', '') +
+      statBlock('&Delta; Altitude', (ty - by >= 0 ? '+' : '') + (ty - by).toFixed(1) + ' blk', '') +
+      statBlock('Shell', shell.name, '') +
+      statBlock('Fuze', shell.fuze || '—', '') +
+      statBlock('Drag / tick', drag, '') +
+      statBlock('Charges', selectedCharges, '');
+
+    document.getElementById('result-stats').innerHTML =
+      optimalCard + directCard +
+      '<div class="shared-stats"><div class="shared-stats__title">Shared Shot Parameters</div><div class="result-grid">' + sharedStats + '</div></div>';
+
+    lastOptimal = optimal; lastDirect = direct; lastYaw = yaw; lastBy = by; lastTy = ty;
     document.getElementById('results-wrap').classList.add('visible');
-    updateFireControl(sol ? { yaw, pitch: sol.pitch } : null);
+    wireFireButtons();
+    updateFireControl();
     drawHeightProfile();
 
     const bounds = [];
@@ -1434,7 +1485,8 @@
     ctx.fillRect(0, 0, W, H);
 
     const paths = [];
-    if (lastResult) paths.push({ path: lastResult.path, color: lastMode === 'direct' ? '#c9a227' : '#b3273a' });
+    if (lastOptimal) paths.push({ path: lastOptimal.path, color: '#b3273a', label: 'Optimal', dash: null });
+    if (lastDirect)  paths.push({ path: lastDirect.path,  color: '#c9a227', label: 'Direct',  dash: [6, 3] });
     if (!paths.length) return;
 
     const allPts = paths.flatMap(p => p.path);
@@ -1468,9 +1520,10 @@
     ctx.beginPath(); ctx.moveTo(PAD.l, tp.y); ctx.lineTo(W - PAD.r, tp.y); ctx.stroke();
     ctx.setLineDash([]);
 
-    paths.forEach(({ path, color }) => {
+    paths.forEach(({ path, color, dash }) => {
       ctx.strokeStyle = color;
       ctx.lineWidth = 2;
+      ctx.setLineDash(dash || []);
       ctx.beginPath();
       const step = Math.max(1, Math.floor(path.length / 400));
       path.filter((_, i) => i % step === 0).forEach((p, i) => {
@@ -1479,6 +1532,32 @@
       });
       ctx.stroke();
     });
+    ctx.setLineDash([]);
+
+    // Legend so each curve is identifiable at a glance.
+    ctx.font = '10px IBM Plex Mono, monospace';
+    const swatch = 20, gap = 8, itemGap = 20, pad = 8;
+    let legendW = pad * 2 - itemGap;
+    paths.forEach(p => { legendW += swatch + gap + ctx.measureText(p.label).width + itemGap; });
+    const legendX = PAD.l + 4;
+    const legendY = PAD.t + 4;
+    const legendH = 20;
+    ctx.fillStyle = 'rgba(18,17,19,0.72)';
+    ctx.fillRect(legendX, legendY, legendW, legendH);
+    let lx = legendX + pad;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    paths.forEach(p => {
+      ctx.strokeStyle = p.color;
+      ctx.lineWidth = 2;
+      ctx.setLineDash(p.dash || []);
+      ctx.beginPath(); ctx.moveTo(lx, legendY + legendH / 2); ctx.lineTo(lx + swatch, legendY + legendH / 2); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.fillText(p.label, lx + swatch + gap, legendY + legendH / 2);
+      lx += swatch + gap + ctx.measureText(p.label).width + itemGap;
+    });
+    ctx.textBaseline = 'alphabetic';
 
     ctx.fillStyle = 'rgba(255,255,255,0.28)';
     ctx.textAlign = 'center';
@@ -1490,11 +1569,8 @@
   let cannonsActive    = [];
   let cannonsPending   = [];
   let selectedCannonId = null;        // '' = manual entry
-  let lastFireSolution = null;        // { yaw, pitch } from the last calculation
 
   const staticCannonSel = document.getElementById('static-cannon');
-  const fireControl     = document.getElementById('fire-control');
-  const fireBtn         = document.getElementById('fire-btn');
   const fireStatus      = document.getElementById('fire-status');
 
   function escHtml(s) {
@@ -1503,26 +1579,64 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
-  async function loadCannons() {
+  async function loadCannons(opts) {
+    const light = !!(opts && opts.light);
     try {
       const r = await fetch('/api/ballistics/cannons');
       if (!r.ok) return;
       const data = await r.json();
       cannonsActive  = data.active  || [];
       cannonsPending = data.pending || [];
+      renderCannonDots();
       populateCannonDropdown();
-      renderRegistry();
+      if (!light) renderRegistry();
     } catch (e) { console.warn('Could not load cannon registry.', e); }
+  }
+
+  function cannonDotPopup(c) {
+    const online = cannonOnline(c);
+    const sub = c.sublevel ? ' · <span style="color:var(--gold-bright);">Sublevel</span>' : '';
+    const statusColor = online ? 'var(--teal-bright)' : 'var(--parchment-faint)';
+    return '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:12px;">' +
+      escHtml(c.name || ('Cannon ' + c.id)) + sub + '<br/>' +
+      'X ' + c.x + ' · Z ' + c.z + '<br/>' +
+      '<span style="color:' + statusColor + ';">' + (online ? 'Online' : 'Offline') + '</span>' +
+      '</span>';
+  }
+
+  // Draw one dot per registered cannon. Static cannons stay put; sublevel
+  // (mobile) cannons move as their computer pushes new GPS coordinates.
+  function renderCannonDots() {
+    const seen = new Set();
+    for (const c of cannonsActive) {
+      const key = String(c.id);
+      seen.add(key);
+      const latlng = mcToLL(Number(c.x) || 0, Number(c.z) || 0);
+      const icon = c.sublevel ? cannonDotMobileIcon : cannonDotIcon;
+      const content = cannonDotPopup(c);
+      if (registeredCannonMarkers[key]) {
+        registeredCannonMarkers[key].setLatLng(latlng);
+        registeredCannonMarkers[key].setIcon(icon);
+        registeredCannonMarkers[key].setPopupContent(content);
+      } else {
+        registeredCannonMarkers[key] = L.marker(latlng, { icon: icon, zIndexOffset: 150 }).addTo(map).bindPopup(content);
+      }
+    }
+    for (const key of Object.keys(registeredCannonMarkers)) {
+      if (!seen.has(key)) {
+        map.removeLayer(registeredCannonMarkers[key]);
+        delete registeredCannonMarkers[key];
+      }
+    }
   }
 
   function populateCannonDropdown() {
     const prev = staticCannonSel.value;
-    const staticCannons = cannonsActive.filter(c => !c.sublevel);
     staticCannonSel.innerHTML = '<option value="">— None (manual entry) —</option>' +
-      staticCannons.map(c =>
-        '<option value="' + c.id + '">' + escHtml(c.name || ('Cannon ' + c.id)) + '</option>'
+      cannonsActive.map(c =>
+        '<option value="' + c.id + '">' + escHtml(c.name || ('Cannon ' + c.id)) + (c.sublevel ? ' (sublevel)' : '') + '</option>'
       ).join('');
-    if (prev && staticCannons.some(c => String(c.id) === prev)) staticCannonSel.value = prev;
+    if (prev && cannonsActive.some(c => String(c.id) === prev)) staticCannonSel.value = prev;
   }
 
   function cannonOnline(c) {
@@ -1556,44 +1670,71 @@
       const c = cannonsActive.find(x => String(x.id) === selectedCannonId);
       if (c) applyCannonToForm(c);
     }
-    updateFireControl(lastFireSolution);
+    updateFireControl();
   });
 
-  function updateFireControl(solution) {
-    lastFireSolution = solution || null;
-    if (solution && selectedCannonId) {
-      fireControl.style.display = 'block';
-      fireBtn.disabled = false;
-    } else {
-      fireControl.style.display = 'none';
+  function fireButtonLabel(mode, sol, hasCannon) {
+    const isDirect = mode === 'direct';
+    if (sol) {
+      return {
+        label: 'Fire — ' + (isDirect ? 'Direct' : 'Optimal') + ' · ' + sol.pitch.toFixed(2) + '°',
+        disabled: !hasCannon,
+        title: hasCannon ? '' : 'Select a registered cannon to fire',
+      };
     }
+    return {
+      label: isDirect ? 'Direct — Unavailable' : 'Optimal — Out of Range',
+      disabled: true,
+      title: 'No valid firing solution',
+    };
   }
 
-  fireBtn.addEventListener('click', async () => {
-    if (!lastFireSolution || !selectedCannonId) return;
+  function updateFireControl() {
+    const hasCannon = !!selectedCannonId;
+    document.querySelectorAll('[data-fire-mode]').forEach(btn => {
+      const mode = btn.dataset.fireMode;
+      const s = fireButtonLabel(mode, mode === 'direct' ? lastDirect : lastOptimal, hasCannon);
+      btn.disabled = s.disabled;
+      btn.textContent = s.label;
+      btn.title = s.title;
+    });
+  }
+
+  function wireFireButtons() {
+    document.querySelectorAll('[data-fire-mode]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mode = btn.dataset.fireMode;
+        const sol = mode === 'direct' ? lastDirect : lastOptimal;
+        sendFire(sol, mode === 'direct' ? 'Direct' : 'Optimal', btn);
+      });
+    });
+  }
+
+  async function sendFire(sol, label, btn) {
+    if (!selectedCannonId || !sol) return;
     const c = cannonsActive.find(x => String(x.id) === selectedCannonId);
-    fireBtn.disabled = true;
-    fireStatus.textContent = 'Queuing fire command for ' + (c ? c.name : 'cannon') + '…';
+    btn.disabled = true;
+    fireStatus.textContent = 'Queuing ' + label + ' fire command for ' + (c ? c.name : 'cannon') + '…';
     fireStatus.classList.remove('err');
     try {
       const r = await fetch('/api/ballistics/cannons/' + selectedCannonId + '/fire', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ yaw: lastFireSolution.yaw, pitch: lastFireSolution.pitch })
+        body: JSON.stringify({ yaw: lastYaw, pitch: sol.pitch })
       });
       const data = await r.json();
       if (!r.ok) {
         fireStatus.textContent = data.error || 'Could not send fire command.';
         fireStatus.classList.add('err');
       } else {
-        fireStatus.textContent = 'Fire command sent — ' + (c ? c.name : 'cannon') + ' will disassemble, assemble, aim and fire.';
+        fireStatus.textContent = label + ' fire command sent — ' + (c ? c.name : 'cannon') + ' will disassemble, assemble, aim and fire.';
       }
     } catch (e) {
       fireStatus.textContent = 'Could not reach the server.';
       fireStatus.classList.add('err');
     }
-    fireBtn.disabled = false;
-  });
+    updateFireControl();
+  }
 
   function renderRegistry() {
     const activeEl  = document.getElementById('cannon-active-list');
@@ -1715,6 +1856,21 @@
 
   document.getElementById('tab-calc').addEventListener('click', () => setTab('calc'));
   document.getElementById('tab-cannons').addEventListener('click', () => { setTab('cannons'); loadCannons(); });
+
+  // Keep the map dots fresh: sublevel cannons push new GPS coordinates every
+  // ~3s, so poll on the same cadence. While the registry tab is open we skip
+  // the full re-render (light mode) so in-progress edits aren't wiped —
+  // switching tabs, or accepting/declining/saving, does a full refresh.
+  function registryTabOpen() {
+    return document.getElementById('registry-panel').style.display !== 'none';
+  }
+  let cannonsPollBusy = false;
+  setInterval(async () => {
+    if (cannonsPollBusy) return;
+    cannonsPollBusy = true;
+    try { await loadCannons({ light: registryTabOpen() }); }
+    finally { cannonsPollBusy = false; }
+  }, 3000);
 
   // 9. AUTH — last, because showApp() needs `map` to already exist
   // ════════════════════════════════════════════════════════════
