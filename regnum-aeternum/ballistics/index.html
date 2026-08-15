@@ -1589,6 +1589,7 @@
       cannonsPending = data.pending || [];
       renderCannonDots();
       populateCannonDropdown();
+      refreshSelectedCannonCoords();
       if (!light) renderRegistry();
     } catch (e) { console.warn('Could not load cannon registry.', e); }
   }
@@ -1662,6 +1663,24 @@
     document.getElementById('cannon-len').value = c.length;
     placeCannon(c.x, c.z);
     updateCalcBtn();
+  }
+
+  // While a sublevel (mobile) cannon is selected, follow its GPS position:
+  // every poll refreshes the cannon coords in the form so a trajectory is
+  // always computed against the cannon's latest position, not the one it had
+  // when it was first picked. Static cannons and manual entry are left alone.
+  function refreshSelectedCannonCoords() {
+    if (!selectedCannonId) return;
+    const c = cannonsActive.find(x => String(x.id) === selectedCannonId);
+    if (!c || !c.sublevel) return;
+    const cx = document.getElementById('cx');
+    const cy = document.getElementById('cy');
+    const cz = document.getElementById('cz');
+    if (String(cx.value) === String(c.x) &&
+        String(cy.value) === String(c.y) &&
+        String(cz.value) === String(c.z)) return;
+    cy.value = c.y;
+    placeCannon(c.x, c.z);
   }
 
   staticCannonSel.addEventListener('change', () => {

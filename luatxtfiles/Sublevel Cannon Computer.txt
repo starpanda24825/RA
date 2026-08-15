@@ -307,6 +307,41 @@ local function gpsWorker()
   end
 end
 
+-- First-boot GPS self-check: prints the exact reason GPS is (or isn't)
+-- working before the daemon loop takes over the screen. A successful fix is
+-- reused as the daemon's starting position so it never flashes "no fix yet".
+local function gpsSelfCheck()
+  term.clear()
+  term.setCursorPos(1, 1)
+  print("=== GPS self-check ===")
+  if not (gps and gps.locate) then
+    print("FAIL: the gps API is unavailable on this computer.")
+    return
+  end
+  if not findWirelessModem() then
+    print("FAIL: no wireless modem attached.")
+    print("       Attach a wireless (or ender) modem so GPS can work.")
+    return
+  end
+  -- debug=true makes CC print its own diagnostics (the exact reason a fix
+  -- could not be established, distances to each host, etc.).
+  local ok, x, y, z = pcall(gps.locate, GPS_TIMEOUT, true)
+  if not ok then
+    print("FAIL: gps.locate errored: " .. tostring(x))
+    return
+  end
+  if x and y and z then
+    gpsState.x, gpsState.y, gpsState.z = x, y, z
+    gpsState.everFixed = true
+    gpsState.reason = nil
+    print("OK: position is " .. tostring(x) .. ", " .. tostring(y) .. ", " .. tostring(z))
+  else
+    print("FAIL: gps.locate could not establish a position.")
+    print("       GPS hosts must run 'gps host x y z', stay chunk-loaded,")
+    print("       and be within wireless range of this computer.")
+  end
+end
+
 -- ------------------------------------------------------------
 -- HTTP bridge
 -- ------------------------------------------------------------
@@ -428,6 +463,10 @@ if not readConfig() then
   setup()
   loadConfig()
 end
+
+-- Print a clear GPS diagnostic before the daemon loop takes over the screen.
+gpsSelfCheck()
+sleep(1)
 
 local lastSequence = 0
 
