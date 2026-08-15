@@ -34,6 +34,9 @@
 --        b) Redstone fire — run a redstone cable from a side of the
 --           computer to the firing block and set fireMode=redstone
 --           in subcannon_cfg.txt.
+--        c) Reload trigger — run a redstone cable from a side of the
+--           computer to the reloading mechanism. First boot asks which
+--           side this impulse is output on.
 --   4. Make sure the cannon is LOADED (shell + powder) before firing.
 --
 -- RUN
@@ -118,6 +121,8 @@ local cfg = {
   fireMode     = "peripheral",  -- "peripheral" or "redstone"
   redstoneSide = "",            -- e.g. "left", "right", "back", "top"
   firePulse    = 0.5,           -- redstone pulse length (seconds)
+  reloadRedstoneSide = "",      -- side that pulses to trigger the reload
+  reloadPulse  = 0.5,           -- reload redstone pulse length (seconds)
 }
 
 -- ------------------------------------------------------------
@@ -169,6 +174,8 @@ local function writeConfig()
   f.writeLine("fireMode=" .. tostring(cfg.fireMode))
   f.writeLine("redstoneSide=" .. tostring(cfg.redstoneSide))
   f.writeLine("firePulse=" .. tostring(cfg.firePulse))
+  f.writeLine("reloadRedstoneSide=" .. tostring(cfg.reloadRedstoneSide))
+  f.writeLine("reloadPulse=" .. tostring(cfg.reloadPulse))
   f.close()
 end
 
@@ -191,6 +198,8 @@ local function loadConfig()
     cfg.fireMode     = loaded.fireMode or cfg.fireMode
     cfg.redstoneSide = loaded.redstoneSide or cfg.redstoneSide
     cfg.firePulse    = tonumber(loaded.firePulse) or cfg.firePulse
+    cfg.reloadRedstoneSide = loaded.reloadRedstoneSide or cfg.reloadRedstoneSide
+    cfg.reloadPulse  = tonumber(loaded.reloadPulse) or cfg.reloadPulse
   end
 end
 
@@ -198,6 +207,8 @@ local function readLine(prompt)
   write(prompt)
   return trim(read())
 end
+
+local VALID_SIDES = { left = true, right = true, front = true, back = true, top = true, bottom = true }
 
 -- First-boot interactive setup.
 local function setup()
@@ -227,6 +238,17 @@ local function setup()
   end
   local reload = tonumber(readLine(reloadPrompt))
   cfg.reloadTime = reload and math.max(0, reload) or cfg.reloadTime
+
+  print("")
+  print("Reload trigger:")
+  print("  The computer sends a redstone impulse to start the reload.")
+  print("  Valid sides: left, right, front, back, top, bottom")
+  local rside = trim(readLine("Reload redstone side (blank = none): ")):lower()
+  if rside ~= "" and not VALID_SIDES[rside] then
+    print("  Unknown side \"" .. rside .. "\" — using \"back\".")
+    rside = "back"
+  end
+  cfg.reloadRedstoneSide = rside
 
   print("")
   print("Message shown to the officer reviewing your request.")
@@ -485,6 +507,14 @@ local function doFire(mount)
   return pcall(function() mount.fire() end)
 end
 
+local function triggerReload()
+  if cfg.reloadRedstoneSide and cfg.reloadRedstoneSide ~= "" then
+    redstone.setOutput(cfg.reloadRedstoneSide, true)
+    sleep(cfg.reloadPulse)
+    redstone.setOutput(cfg.reloadRedstoneSide, false)
+  end
+end
+
 local function runCommand(mount, cmd, shipYaw)
   print("Command #" .. tostring(cmd.sequence) .. ": aiming…")
 
@@ -492,6 +522,7 @@ local function runCommand(mount, cmd, shipYaw)
   -- assemble.
   pcall(function() mount.disassemble() end)
   if cfg.reloadType == "autoloader" then
+    triggerReload()
     sleep(cfg.reloadTime)
   end
 
@@ -501,6 +532,7 @@ local function runCommand(mount, cmd, shipYaw)
 
   -- A mechanical arm reloads after the cannon is assembled.
   if cfg.reloadType == "arm" then
+    triggerReload()
     sleep(cfg.reloadTime)
   end
 
