@@ -71,7 +71,9 @@ local MOUNT_TYPE = "cbc_cannon_mount"
 -- Sequence timing (seconds).
 local SEQ_DISASSEMBLE = 0.5
 local SEQ_ASSEMBLE    = 1.0
-local SEQ_AFTER_FIRE  = 0.5
+local SEQ_BEFORE_AIM  = 5.0   -- wait after assembling, before aiming
+local SEQ_BEFORE_FIRE = 7.0   -- wait after aiming, before firing
+local SEQ_AFTER_FIRE  = 2.0   -- wait after firing, before disassembling
 local AIM_TIMEOUT     = 8.0   -- max seconds to wait for aim to settle
 local AIM_TOLERANCE   = 0.5   -- degrees
 
@@ -313,7 +315,10 @@ local function runCommand(mount, cmd)
   pcall(function() mount.assemble() end)
   sleep(SEQ_ASSEMBLE)
 
-  -- 3. Aim
+  -- 3. Delay before aiming
+  sleep(SEQ_BEFORE_AIM)
+
+  -- 4. Aim
   local aimYaw   = (cmd.yaw or 0) + cfg.yawOffset
   local aimPitch = (cmd.pitch or 0) * cfg.pitchScale
   pcall(function() mount.setYaw(aimYaw) end)
@@ -323,7 +328,10 @@ local function runCommand(mount, cmd)
     print("Warning: aim did not settle — firing anyway")
   end
 
-  -- 4. Fire
+  -- 5. Delay before firing
+  sleep(SEQ_BEFORE_FIRE)
+
+  -- 6. Fire
   local fired = doFire(mount)
   if fired then
     print("Fired! (yaw " .. string.format("%.1f", aimYaw) .. ", pitch " .. string.format("%.1f", aimPitch) .. ")")
@@ -332,7 +340,7 @@ local function runCommand(mount, cmd)
   end
   sleep(SEQ_AFTER_FIRE)
 
-  -- 5. Disassemble
+  -- 7. Disassemble
   pcall(function() mount.disassemble() end)
 end
 
