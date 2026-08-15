@@ -59,6 +59,9 @@ export async function ccPoll(request, env) {
   // reported x/y/z are the meaningless 0 fallback, so we must not let them
   // overwrite the stored coordinates — otherwise the map dot jumps to origin.
   const gpsOk   = body.gpsOk === true;
+  // Sublevel cannons report their ship's heading (from the front + stern
+  // GPS pair) so the calculator can show and account for ship orientation.
+  const shipYaw = body.shipYaw == null ? null : num(body.shipYaw, null);
   const length  = clampLength(body.length);
   const facing  = num(body.facing, 0);
   const sublevel = body.sublevel ? 1 : 0;
@@ -66,7 +69,7 @@ export async function ccPoll(request, env) {
 
   let cannon = await store.findCannonByComputerId(env, computerId);
   if (!cannon) {
-    cannon = await store.insertCannon(env, { computerId, x, y, z, length, facing, sublevel, message });
+    cannon = await store.insertCannon(env, { computerId, x, y, z, length, facing, sublevel, message, shipYaw });
   } else if (cannon.status === 'pending' || Number(cannon.sublevel) === 1) {
     // Pending requests and sublevel (mobile) cannons keep their reported
     // coordinates fresh on every ping; accepted static cannons do not,
@@ -80,7 +83,7 @@ export async function ccPoll(request, env) {
       x: useReported ? x : cannon.x,
       y: useReported ? y : cannon.y,
       z: useReported ? z : cannon.z,
-      length, facing, sublevel, message,
+      length, facing, sublevel, message, shipYaw,
     });
   }
 

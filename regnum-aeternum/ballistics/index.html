@@ -772,6 +772,11 @@
     return Math.atan2(-(xt - x0), (zt - z0)) * 180 / Math.PI;
   }
 
+  function yawCardinal(y) {
+    const h = ((Number(y) || 0) % 360 + 360) % 360;
+    return (h < 45 || h >= 315) ? 'S' : (h < 135) ? 'W' : (h < 225) ? 'N' : 'E';
+  }
+
   // Height of the trajectory at a given horizontal distance from (x0,z0).
   // Returns null if the path never reaches that distance.
   function yAtHDist(path, x0, z0, hDist) {
@@ -1442,9 +1447,17 @@
       note: (direct && direct.undershoot) ? `<div class="result-note">${direct.undershoot}</div>` : '',
     });
 
+    const selCannon = selectedCannonId ? cannonsActive.find(x => String(x.id) === selectedCannonId) : null;
+    const shipYawStat = (selCannon && selCannon.sublevel)
+      ? (selCannon.ship_yaw != null
+          ? statBlock('Ship Heading', Number(selCannon.ship_yaw).toFixed(1) + '° (' + yawCardinal(selCannon.ship_yaw) + ')', '')
+          : statBlock('Ship Heading', 'No stern GPS', 'warn'))
+      : '';
+
     const sharedStats =
       statBlock('Cannon Turn', turnStr, 'highlight') +
       statBlock('Target Heading', yaw.toFixed(1) + '° (' + cardinal + ')', '') +
+      shipYawStat +
       statBlock('Muzzle Velocity', v0 + ' blk/tick', '') +
       statBlock('H. Distance', hDist.toFixed(1) + ' blk', '') +
       statBlock('&Delta; Altitude', (ty - by >= 0 ? '+' : '') + (ty - by).toFixed(1) + ' blk', '') +
@@ -1779,6 +1792,11 @@
       '<div class="cannon-card__meta">' +
         'Mount: X ' + c.x + ' · Y ' + c.y + ' · Z ' + c.z + '<br/>' +
         'Length ' + c.length + ' blocks · Facing ' + c.facing + '° · Last seen ' + (c.last_seen_at ? new Date(c.last_seen_at).toLocaleString() : 'never') +
+        (c.sublevel
+          ? (c.ship_yaw != null
+              ? '<br/>Ship heading ' + Number(c.ship_yaw).toFixed(1) + '° (' + yawCardinal(c.ship_yaw) + ')'
+              : '<br/>Ship heading: — (no stern GPS)')
+          : '') +
       '</div>' +
       '<div class="cannon-card__row">' +
         '<input class="cannon-mini-input" data-cannon-x="' + c.id + '" type="number" value="' + c.x + '" title="X"/>' +

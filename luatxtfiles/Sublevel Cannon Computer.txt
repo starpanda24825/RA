@@ -17,6 +17,11 @@
 --     network. The world is already set up so that gps.locate(2)
 --     returns this computer's coordinates — that is how the website
 --     knows where the moving cannon is on the map.
+--   - For ship heading: TWO more computers running the "Sublevel Ship
+--     GPS" program — one at the FRONT (bow) and one at the BACK
+--     (stern), as far apart as possible along the fore-aft centerline.
+--     This cannon computer listens to both and derives the ship's
+--     orientation.
 --
 -- BUILD
 --   1. Build your cannon on the ship's cannon mount (NOT the fixed
@@ -104,6 +109,9 @@ local cfg = {
   pollInterval = 1,      -- seconds after each poll; total loop ≈ 3s
   yawOffset    = 0,
   pitchScale   = 1,
+  shipRelativeYaw = true,  -- mount yaw is relative to the ship (normal for
+                           -- Create contraptions). Set false if getYaw/setYaw
+                           -- are already in absolute world coordinates.
   fireMode     = "peripheral",  -- "peripheral" or "redstone"
   redstoneSide = "",            -- e.g. "left", "right", "back", "top"
   firePulse    = 0.5,           -- redstone pulse length (seconds)
@@ -152,6 +160,7 @@ local function writeConfig()
   f.writeLine("pollInterval=" .. tostring(cfg.pollInterval))
   f.writeLine("yawOffset=" .. tostring(cfg.yawOffset))
   f.writeLine("pitchScale=" .. tostring(cfg.pitchScale))
+  f.writeLine("shipRelativeYaw=" .. tostring(cfg.shipRelativeYaw))
   f.writeLine("fireMode=" .. tostring(cfg.fireMode))
   f.writeLine("redstoneSide=" .. tostring(cfg.redstoneSide))
   f.writeLine("firePulse=" .. tostring(cfg.firePulse))
@@ -167,6 +176,9 @@ local function loadConfig()
     cfg.pollInterval = tonumber(loaded.pollInterval) or cfg.pollInterval
     cfg.yawOffset    = tonumber(loaded.yawOffset) or cfg.yawOffset
     cfg.pitchScale   = tonumber(loaded.pitchScale) or cfg.pitchScale
+    if loaded.shipRelativeYaw ~= nil then
+      cfg.shipRelativeYaw = (loaded.shipRelativeYaw ~= "false")
+    end
     cfg.fireMode     = loaded.fireMode or cfg.fireMode
     cfg.redstoneSide = loaded.redstoneSide or cfg.redstoneSide
     cfg.firePulse    = tonumber(loaded.firePulse) or cfg.firePulse
@@ -343,6 +355,52 @@ local function gpsSelfCheck()
 end
 
 -- ------------------------------------------------------------
+-- Ship heading (two-point GPS)
+-- ------------------------------------------------------------
+-- Two dedicated computers run the "Sublevel Ship GPS" program: one at the
+-- FRONT (bow) and one at the BACK (stern). Both broadcast their position on
+-- the shared channel; this cannon computer listens to both and derives the
+-- ship's heading as the direction from back to front, in the same yaw
+-- convention as the website (0 = south, 90 = west, 180 = north, 270 = east).
+local SHIP_GPS_CHANNEL = 4120   -- must match the Ship GPS program
+
+local frontX, frontY, frontZ = nil, nil, nil
+local backX,  backY,  backZ  = nil, nil, nil
+
+local function computeShipYaw()
+  if frontX == nil or backX == nil then return nil end
+  local dx = frontX - backX
+  local dz = frontZ - backZ
+  if math.abs(dx) < 0.001 and math.abs(dz) < 0.001 then return nil end
+  local deg = math.deg(math.atan2(-dx, dz))
+  return ((deg % 360) + 360) % 360
+end
+
+-- Concurrent listener for the front/back GPS computers' broadcasts.
+local function shipGpsListener()
+  while true do
+    local modem = findWirelessModem()
+    if modem then
+      modem.open(SHIP_GPS_CHANNEL)
+      while true do
+        local e, side, chan, replyChan, msg = os.pullEvent("modem_message")
+        if e == "modem_message" and chan == SHIP_GPS_CHANNEL then
+          local ok, data = pcall(textutils.unserializeJSON, msg)
+          if ok and type(data) == "table" and data.type == "ship_gps" and data.x and data.z then
+            if data.role == "back" then
+              backX, backY, backZ = data.x, data.y, data.z
+            else
+              frontX, frontY, frontZ = data.x, data.y, data.z
+            end
+          end
+        end
+      end
+    end
+    sleep(5)
+  end
+end
+
+-- ------------------------------------------------------------
 -- HTTP bridge
 -- ------------------------------------------------------------
 local function httpPost(path, body)
@@ -402,7 +460,7 @@ local function doFire(mount)
   return pcall(function() mount.fire() end)
 end
 
-local function runCommand(mount, cmd)
+local function runCommand(mount, cmd, shipYaw)
   print("Command #" .. tostring(cmd.sequence) .. ": aiming…")
 
   -- 1. Disassemble
@@ -416,8 +474,12 @@ local function runCommand(mount, cmd)
   -- 3. Delay before aiming
   sleep(SEQ_BEFORE_AIM)
 
-  -- 4. Aim
+  -- 4. Aim. The website sends an absolute world yaw; the mount's yaw is
+  -- measured relative to the ship, so subtract the ship's heading first.
   local aimYaw   = (cmd.yaw or 0) + cfg.yawOffset
+  if cfg.shipRelativeYaw and shipYaw then
+    aimYaw = aimYaw - shipYaw
+  end
   local aimPitch = (cmd.pitch or 0) * cfg.pitchScale
   pcall(function() mount.setYaw(aimYaw) end)
   pcall(function() mount.setPitch(aimPitch) end)
@@ -485,11 +547,13 @@ local function mainLoop()
     -- obtained a fix, x/y/z stay nil so the website keeps its last known
     -- position instead of snapping the cannon's dot to 0,0,0.
     local gpsOk = gpsState.everFixed
+    local shipYaw = computeShipYaw()
 
     local body = {
       computerId = computerId,
       x = gpsState.x, y = gpsState.y, z = gpsState.z,
       gpsOk = gpsOk,
+      shipYaw = shipYaw,
       length = cfg.length,
       facing = cfg.facing,
       sublevel = true,
@@ -512,6 +576,11 @@ local function mainLoop()
     if gpsState.reason then
       table.insert(lines, "GPS issue: " .. gpsState.reason)
     end
+    if shipYaw then
+      table.insert(lines, "Ship heading: " .. string.format("%.1f", shipYaw) .. "°")
+    elseif frontX == nil or backX == nil then
+      table.insert(lines, "Ship heading: waiting for front/back GPS…")
+    end
 
     if not mount then
       table.insert(lines, "Mount: not found")
@@ -533,7 +602,7 @@ local function mainLoop()
       if cmd and cmd.sequence ~= lastSequence then
         if mount then
           lastSequence = cmd.sequence   -- ack intent immediately (at-most-once fire)
-          local ok, err = pcall(runCommand, mount, cmd)
+          local ok, err = pcall(runCommand, mount, cmd, shipYaw)
           if not ok then
             print("Command #" .. tostring(cmd.sequence) .. " failed: " .. tostring(err))
           end
@@ -554,7 +623,7 @@ local function mainLoop()
   end
 end
 
--- Run the GPS worker and the poll/fire loop at the same time. Each gets its
--- own coroutine; gps.locate() and http.post() both yield, so neither blocks
--- the other.
-parallel.waitForAll(gpsWorker, mainLoop)
+-- Run the GPS worker, the ship-heading listener, and the poll/fire loop at
+-- the same time. Each gets its own coroutine; gps.locate(), the modem
+-- listener and http.post() all yield, so none blocks the others.
+parallel.waitForAll(gpsWorker, shipGpsListener, mainLoop)

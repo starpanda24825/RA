@@ -1161,27 +1161,29 @@ export async function findCannonByComputerId(env, computerId) {
 }
 
 // First ping from an unknown computer → a 'pending' registration request.
-export async function insertCannon(env, { computerId, x, y, z, length, facing, sublevel, message }) {
+export async function insertCannon(env, { computerId, x, y, z, length, facing, sublevel, message, shipYaw }) {
   const now = nowIso();
   const result = await env.DB.prepare(
     `INSERT INTO ballistics_cannons
-       (computer_id, name, x, y, z, length, facing, sublevel, message, status,
+       (computer_id, name, x, y, z, length, facing, sublevel, message, ship_yaw, status,
         last_seen_at, created_at, updated_at)
-     VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`
-  ).bind(computerId, x, y, z, length, facing, sublevel ? 1 : 0, message, now, now, now).run();
+     VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`
+  ).bind(computerId, x, y, z, length, facing, sublevel ? 1 : 0, message,
+         shipYaw == null ? null : Number(shipYaw), now, now, now).run();
   return findCannonById(env, result.meta.last_row_id);
 }
 
 // Refresh a cannon's registration fields on a ping. Used while a request is
 // still pending, and for sublevel (mobile) cannons on every ping so their
 // GPS coordinates keep the map dot moving even after acceptance.
-export async function refreshCannonFromComputer(env, id, { x, y, z, length, facing, sublevel, message }) {
+export async function refreshCannonFromComputer(env, id, { x, y, z, length, facing, sublevel, message, shipYaw }) {
   await env.DB.prepare(
     `UPDATE ballistics_cannons
         SET x = ?, y = ?, z = ?, length = ?, facing = ?, sublevel = ?, message = ?,
-            last_seen_at = ?, updated_at = ?
+            ship_yaw = ?, last_seen_at = ?, updated_at = ?
       WHERE id = ?`
-  ).bind(x, y, z, length, facing, sublevel ? 1 : 0, message, nowIso(), nowIso(), Number(id)).run();
+  ).bind(x, y, z, length, facing, sublevel ? 1 : 0, message,
+         shipYaw == null ? null : Number(shipYaw), nowIso(), nowIso(), Number(id)).run();
   return findCannonById(env, id);
 }
 

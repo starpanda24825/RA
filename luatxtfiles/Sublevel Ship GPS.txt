@@ -1,0 +1,137 @@
+-- ============================================================
+-- Sublevel Ship GPS — Regnum Aeternum
+-- ComputerCraft FRONT / BACK position beacon for mobile/sublevel
+-- ships.
+--
+-- ────────────────────────────────────────────────────────────
+-- WHAT THIS IS
+-- ────────────────────────────────────────────────────────────
+-- A sublevel ship needs two GPS points to know which way it is
+-- pointing. This program runs on TWO separate computers on the
+-- ship: one at the FRONT (bow) and one at the BACK (stern),
+-- placed as far apart as possible along the fore-aft centerline.
+-- Each broadcasts its gps.locate() position over the wireless
+-- modem. The Sublevel Cannon Computer (a third computer, connected
+-- to the cannon) listens to both and derives the ship's heading.
+--
+-- ────────────────────────────────────────────────────────────
+-- IN-GAME SETUP (run this on BOTH computers)
+-- ────────────────────────────────────────────────────────────
+--   1. Place a Computer at the bow and another at the stern, on
+--      the centerline, as far apart as the ship allows.
+--   2. Put a wireless (or ender) modem on each.
+--   3. Put this program on each as "startup" (it is a daemon).
+--   4. On first boot each asks whether it is the FRONT or BACK
+--      computer and saves that role. Answer FRONT for the bow
+--      computer and BACK for the stern one.
+--
+-- The cannon computer listens on the shared channel, pairs the two
+-- positions, and derives the ship's heading (shipYaw).
+-- ============================================================
+
+-- Channel the positions are broadcast on. MUST match the
+-- SHIP_GPS_CHANNEL constant in the Sublevel Cannon Computer program.
+local CHANNEL = 4120
+
+local GPS_TIMEOUT     = 2   -- seconds per gps.locate attempt
+local REPORT_INTERVAL = 1   -- seconds between broadcasts (≈3s cadence)
+local CFG_PATH        = "shipgps_cfg.txt"
+
+-- ------------------------------------------------------------
+-- Helpers
+-- ------------------------------------------------------------
+local function trim(s)
+  s = tostring(s or "")
+  s = s:gsub("^%s+", "")
+  s = s:gsub("%s+$", "")
+  return s
+end
+
+local function findWirelessModem()
+  for _, side in ipairs(peripheral.getNames()) do
+    if peripheral.getType(side) == "modem" then
+      local m = peripheral.wrap(side)
+      if m.isWireless and m.isWireless() then
+        return m
+      end
+    end
+  end
+  return nil
+end
+
+local function drawStatus(lines)
+  term.setBackgroundColor(colors.black)
+  term.clear()
+  term.setCursorPos(1, 1)
+  term.setTextColor(colors.white)
+  for _, line in ipairs(lines) do
+    print(line)
+  end
+end
+
+-- ------------------------------------------------------------
+-- Role (front / back)
+-- ------------------------------------------------------------
+local role = nil
+if fs.exists(CFG_PATH) then
+  local f = fs.open(CFG_PATH, "r")
+  local saved = trim(f.readLine())
+  f.close()
+  if saved == "front" or saved == "back" then role = saved end
+end
+
+if not role then
+  term.clear()
+  term.setCursorPos(1, 1)
+  print("=== Sublevel Ship GPS — first-time setup ===")
+  print("")
+  print("Which end of the ship is this computer on?")
+  print("  1 = FRONT (bow)   — the ship's forward end")
+  print("  2 = BACK  (stern) — the ship's rear")
+  print("")
+  write("Enter 1 or 2: ")
+  local choice = trim(read())
+  role = (choice == "2") and "back" or "front"
+  local f = fs.open(CFG_PATH, "w")
+  f.writeLine(role)
+  f.close()
+  print("")
+  print("Saved as " .. role .. ". Starting…")
+  sleep(1)
+end
+
+-- ------------------------------------------------------------
+-- Main
+-- ------------------------------------------------------------
+local lastX, lastY, lastZ
+
+while true do
+  local lines = { "Sublevel Ship GPS — " .. role .. " receiver" }
+  local modem = findWirelessModem()
+
+  if not modem then
+    table.insert(lines, "Status: no wireless modem attached")
+    table.insert(lines, "Attach a wireless/ender modem and reboot.")
+    drawStatus(lines)
+    sleep(2)
+  else
+    modem.open(CHANNEL)
+
+    local ok, x, y, z = pcall(gps.locate, GPS_TIMEOUT)
+    if ok and x and y and z then
+      lastX, lastY, lastZ = x, y, z
+      local msg = textutils.serializeJSON({ type = "ship_gps", role = role, x = x, y = y, z = z })
+      modem.transmit(CHANNEL, CHANNEL, msg)
+      table.insert(lines, "GPS: X " .. tostring(x) .. "  Y " .. tostring(y) .. "  Z " .. tostring(z))
+      table.insert(lines, "Broadcasting on channel " .. tostring(CHANNEL))
+    else
+      table.insert(lines, "GPS: no fix")
+      if lastX then
+        table.insert(lines, "Last fix: " .. tostring(lastX) .. ", " .. tostring(lastY) .. ", " .. tostring(lastZ))
+      end
+    end
+
+    drawStatus(lines)
+    sleep(REPORT_INTERVAL)
+  end
+end
