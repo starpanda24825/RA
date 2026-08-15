@@ -43,9 +43,11 @@
 --        a) Polls for fire commands (yaw + pitch). On a command it
 --           runs the same sequence as static cannons:
 --              disassemble → assemble → aim → fire → disassemble
---        b) Calls gps.locate(2) and pushes fresh coordinates to the
---           website roughly every 3 seconds, so its dot on the map
---           follows the cannon as the ship moves.
+--        b) A concurrent GPS worker keeps calling gps.locate() and the
+--           main loop pushes the freshest coordinates to the website
+--           roughly every 3 seconds, so its dot on the map follows the
+--           cannon as the ship moves. Until the first real fix is found
+--           it never reports a position, so the dot never snaps to 0,0,0.
 --
 -- DIRECTION FACED WHEN ASSEMBLED ("facing")
 --   Same convention as the static Cannon Computer:
@@ -74,9 +76,9 @@ local POLL_PATH = "/api/ballistics/cc/poll"
 -- Mount peripheral type from cbcperipheral.
 local MOUNT_TYPE = "cbc_cannon_mount"
 
--- How long (seconds) to let gps.locate run per fix. This also sets the
--- natural heartbeat cadence: locate (2s) + poll + sleep(pollInterval)
--- comes out to ~3 seconds, matching the website's dot-refresh cycle.
+-- How long (seconds) to let gps.locate run per fix attempt. GPS runs in a
+-- concurrent worker (see bottom of file), so this blocks that worker — not
+-- the poll / fire loop.
 local GPS_TIMEOUT = 2
 
 -- Sequence timing (seconds) — identical to the static cannon.
@@ -245,19 +247,64 @@ end
 -- ------------------------------------------------------------
 -- GPS location
 -- ------------------------------------------------------------
-local lastGpsX, lastGpsY, lastGpsZ = 0, 0, 0
+-- GPS runs in its own worker coroutine (see the bottom of this file) so a
+-- fresh fix is maintained continuously, even while the main loop is busy
+-- polling the website or running the multi-second fire sequence.
 
--- Returns x, y, z, fresh. If gps.locate fails we keep the last known
--- fix so the map dot stays put instead of jumping to 0,0,0.
-local function currentPosition()
-  if gps and gps.locate then
-    local ok, x, y, z = pcall(gps.locate, GPS_TIMEOUT)
-    if ok and x ~= nil and y ~= nil and z ~= nil then
-      lastGpsX, lastGpsY, lastGpsZ = x, y, z
-      return x, y, z, true
+-- Shared state: gpsWorker() updates this, the main loop reads it.
+local gpsState = {
+  x = nil, y = nil, z = nil,
+  everFixed = false,
+  reason = "Locating…",
+}
+
+-- Seconds to wait between GPS fix attempts. Combined with GPS_TIMEOUT this
+-- keeps a new fix flowing roughly every 3 seconds (matching the website).
+local GPS_POLL_INTERVAL = 1
+
+local function findWirelessModem()
+  for _, side in ipairs(peripheral.getNames()) do
+    if peripheral.getType(side) == "modem" then
+      local m = peripheral.wrap(side)
+      if m.isWireless and m.isWireless() then
+        return m
+      end
     end
   end
-  return lastGpsX, lastGpsY, lastGpsZ, false
+  return nil
+end
+
+-- One GPS fix attempt. On success stores the fix in gpsState; on failure
+-- records a human-readable reason for the status screen.
+local function gpsTick()
+  if not (gps and gps.locate) then
+    gpsState.reason = "gps API unavailable"
+    return
+  end
+  if not findWirelessModem() then
+    gpsState.reason = "No wireless modem attached"
+    return
+  end
+  local ok, x, y, z = pcall(gps.locate, GPS_TIMEOUT)
+  if ok and x ~= nil and y ~= nil and z ~= nil then
+    gpsState.x, gpsState.y, gpsState.z = x, y, z
+    gpsState.everFixed = true
+    gpsState.reason = nil
+  else
+    gpsState.reason = "No GPS fix — hosts out of range or not loaded"
+  end
+end
+
+-- Concurrent GPS worker. Never throws, so one bad fix attempt can't take
+-- down the whole daemon.
+local function gpsWorker()
+  while true do
+    local ok, err = pcall(gpsTick)
+    if not ok then
+      gpsState.reason = "GPS error: " .. tostring(err)
+    end
+    sleep(GPS_POLL_INTERVAL)
+  end
 end
 
 -- ------------------------------------------------------------
@@ -384,73 +431,91 @@ end
 
 local lastSequence = 0
 
-while true do
-  local lines = {}
-  local mount = findMount()
+local function mainLoop()
+  while true do
+    local lines = {}
+    local mount = findMount()
 
-  local curYaw, curPitch = 0, 0
-  if mount then
-    pcall(function() curYaw = mount.getYaw() or 0 end)
-    pcall(function() curPitch = mount.getPitch() or 0 end)
-  end
+    local curYaw, curPitch = 0, 0
+    if mount then
+      pcall(function() curYaw = mount.getYaw() or 0 end)
+      pcall(function() curPitch = mount.getPitch() or 0 end)
+    end
 
-  -- Fetch a fresh GPS fix (blocks ~2s), falling back to the last known.
-  local gx, gy, gz, gpsFresh = currentPosition()
+    -- Read the latest fix from the concurrent GPS worker. If we have never
+    -- obtained a fix, x/y/z stay nil so the website keeps its last known
+    -- position instead of snapping the cannon's dot to 0,0,0.
+    local gpsOk = gpsState.everFixed
 
-  local body = {
-    computerId = computerId,
-    x = gx, y = gy, z = gz,
-    length = cfg.length,
-    facing = cfg.facing,
-    sublevel = true,
-    message = cfg.message,
-    yaw = curYaw,
-    pitch = curPitch,
-    sequence = lastSequence,
-  }
+    local body = {
+      computerId = computerId,
+      x = gpsState.x, y = gpsState.y, z = gpsState.z,
+      gpsOk = gpsOk,
+      length = cfg.length,
+      facing = cfg.facing,
+      sublevel = true,
+      message = cfg.message,
+      yaw = curYaw,
+      pitch = curPitch,
+      sequence = lastSequence,
+    }
 
-  local resp = httpPost(POLL_PATH, body)
+    local resp = httpPost(POLL_PATH, body)
 
-  table.insert(lines, "Sublevel Cannon Computer")
-  table.insert(lines, "Computer ID: " .. computerId)
-  table.insert(lines, "GPS: X " .. tostring(gx) .. "  Y " .. tostring(gy) .. "  Z " .. tostring(gz) .. (gpsFresh and "" or " (stale)"))
+    table.insert(lines, "Sublevel Cannon Computer")
+    table.insert(lines, "Computer ID: " .. computerId)
+    if gpsState.x ~= nil then
+      local stale = gpsState.reason ~= nil
+      table.insert(lines, "GPS: X " .. tostring(gpsState.x) .. "  Y " .. tostring(gpsState.y) .. "  Z " .. tostring(gpsState.z) .. (stale and " (stale)" or ""))
+    else
+      table.insert(lines, "GPS: no fix yet")
+    end
+    if gpsState.reason then
+      table.insert(lines, "GPS issue: " .. gpsState.reason)
+    end
 
-  if not mount then
-    table.insert(lines, "Mount: not found")
-    table.insert(lines, "Place this computer touching the cannon mount.")
-  end
+    if not mount then
+      table.insert(lines, "Mount: not found")
+      table.insert(lines, "Place this computer touching the cannon mount.")
+    end
 
-  if resp == nil then
-    table.insert(lines, "Status: cannot reach website")
-    table.insert(lines, "Check " .. BASE_URL)
-  elseif not resp.success then
-    table.insert(lines, "Status: server error")
-    table.insert(lines, tostring(resp.response))
-  elseif resp.response.status == "pending" then
-    table.insert(lines, "Status: AWAITING APPROVAL")
-    table.insert(lines, "An officer must accept this cannon")
-    table.insert(lines, "from the website's Cannon Registry tab.")
-  elseif resp.response.status == "active" then
-    local cmd = resp.response.command
-    if cmd and cmd.sequence ~= lastSequence then
-      if mount then
-        lastSequence = cmd.sequence   -- ack intent immediately (at-most-once fire)
-        local ok, err = pcall(runCommand, mount, cmd)
-        if not ok then
-          print("Command #" .. tostring(cmd.sequence) .. " failed: " .. tostring(err))
+    if resp == nil then
+      table.insert(lines, "Status: cannot reach website")
+      table.insert(lines, "Check " .. BASE_URL)
+    elseif not resp.success then
+      table.insert(lines, "Status: server error")
+      table.insert(lines, tostring(resp.response))
+    elseif resp.response.status == "pending" then
+      table.insert(lines, "Status: AWAITING APPROVAL")
+      table.insert(lines, "An officer must accept this cannon")
+      table.insert(lines, "from the website's Cannon Registry tab.")
+    elseif resp.response.status == "active" then
+      local cmd = resp.response.command
+      if cmd and cmd.sequence ~= lastSequence then
+        if mount then
+          lastSequence = cmd.sequence   -- ack intent immediately (at-most-once fire)
+          local ok, err = pcall(runCommand, mount, cmd)
+          if not ok then
+            print("Command #" .. tostring(cmd.sequence) .. " failed: " .. tostring(err))
+          end
+        else
+          table.insert(lines, "Fire command queued — mount not found")
         end
       else
-        table.insert(lines, "Fire command queued — mount not found")
+        table.insert(lines, "Status: READY")
+        table.insert(lines, "Name: " .. tostring(resp.response.name))
+        table.insert(lines, "Aiming: yaw " .. string.format("%.1f", curYaw) .. " / pitch " .. string.format("%.1f", curPitch))
       end
     else
-      table.insert(lines, "Status: READY")
-      table.insert(lines, "Name: " .. tostring(resp.response.name))
-      table.insert(lines, "Aiming: yaw " .. string.format("%.1f", curYaw) .. " / pitch " .. string.format("%.1f", curPitch))
+      table.insert(lines, "Status: " .. tostring(resp.response.status))
     end
-  else
-    table.insert(lines, "Status: " .. tostring(resp.response.status))
-  end
 
-  drawStatus(lines)
-  sleep(cfg.pollInterval)
+    drawStatus(lines)
+    sleep(cfg.pollInterval)
+  end
 end
+
+-- Run the GPS worker and the poll/fire loop at the same time. Each gets its
+-- own coroutine; gps.locate() and http.post() both yield, so neither blocks
+-- the other.
+parallel.waitForAll(gpsWorker, mainLoop)

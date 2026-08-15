@@ -54,6 +54,11 @@ export async function ccPoll(request, env) {
   const x       = num(body.x, 0);
   const y       = num(body.y, 0);
   const z       = num(body.z, 0);
+  // Sublevel (mobile) cannons measure their position with gps.locate() and
+  // set gpsOk only once they've actually obtained a fix. Until then their
+  // reported x/y/z are the meaningless 0 fallback, so we must not let them
+  // overwrite the stored coordinates — otherwise the map dot jumps to origin.
+  const gpsOk   = body.gpsOk === true;
   const length  = clampLength(body.length);
   const facing  = num(body.facing, 0);
   const sublevel = body.sublevel ? 1 : 0;
@@ -66,7 +71,17 @@ export async function ccPoll(request, env) {
     // Pending requests and sublevel (mobile) cannons keep their reported
     // coordinates fresh on every ping; accepted static cannons do not,
     // so a website-side coordinate edit is never overwritten.
-    cannon = await store.refreshCannonFromComputer(env, cannon.id, { x, y, z, length, facing, sublevel, message });
+    //
+    // A sublevel cannon with no GPS fix yet must not overwrite its stored
+    // position with the 0 fallback — keep the last known (or officer-edited)
+    // coordinates instead.
+    const useReported = Number(cannon.sublevel) !== 1 || gpsOk;
+    cannon = await store.refreshCannonFromComputer(env, cannon.id, {
+      x: useReported ? x : cannon.x,
+      y: useReported ? y : cannon.y,
+      z: useReported ? z : cannon.z,
+      length, facing, sublevel, message,
+    });
   }
 
   // Report the current aim state (heartbeat) regardless of status.
