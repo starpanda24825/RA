@@ -1,0 +1,425 @@
+-- ============================================================
+-- Cannon Computer — Regnum Aeternum
+-- ComputerCraft bridge for STATIC cannons (Create: Big Cannons)
+--
+-- ────────────────────────────────────────────────────────────
+-- IN-GAME SETUP (read this first)
+-- ────────────────────────────────────────────────────────────
+--
+-- REQUIRED MODS
+--   1. Create: Big Cannons (CBC)
+--   2. CC: Tweaked
+--   3. Create Big Cannons: Peripherals (cbcperipheral)
+--      This is what lets a CC computer talk to a cannon mount.
+--
+-- BUILD
+--   1. Build your cannon on a *static* cannon mount (NOT the fixed
+--      mount — the fixed mount can't be aimed by a computer).
+--   2. Place an advanced Computer next to (touching) the cannon mount
+--      block so the computer can see the mount as a peripheral.
+--   3. Wire the cannon's firing mechanism. Two options:
+--        a) Peripheral fire (recommended) — cbcperipheral's fire()
+--           calls the cannon directly. Nothing else to place.
+--        b) Redstone fire — if your cannon is fired by a redstone
+--           pulse (e.g. a breech/controller wired to redstone), run a
+--           redstone cable from a side of the computer to the firing
+--           block and set fireMode=redstone in cannon_cfg.txt.
+--   4. Make sure the cannon is LOADED (shell + powder) before you fire.
+--
+-- RUN
+--   1. Put this program on the computer as "startup" (or run it once
+--      and keep it running — it is a daemon).
+--   2. First boot prompts for: cannon length (blocks), the direction
+--      the cannon faces when assembled (see below), whether it is on a
+--      sublevel, and a short message. These are saved to cannon_cfg.txt.
+--   3. The computer then pings the website. It shows "Awaiting
+--      approval" until an officer accepts it in the Ballistic
+--      Calculator → Cannon Registry tab (bottom section).
+--   4. Once accepted, it waits for fire commands. On a command it runs
+--      this exact sequence (static cannons only):
+--         disassemble → assemble → aim → fire → disassemble
+--
+-- DIRECTION FACED WHEN ASSEMBLED ("facing")
+--   This is the cannon's resting yaw in Minecraft degrees:
+--      0   = South (+Z)
+--      90  = West
+--      180 = North
+--      270 = East
+--   Find it with F3: face the direction your barrel points when the
+--   cannon is assembled, and read the "Facing" value. If your cannon
+--   ends up aimed the wrong way, adjust yawOffset in cannon_cfg.txt
+--   (see CALIBRATION below).
+--
+-- CALIBRATION
+--   CBC's yaw convention should match Minecraft (0 = south, positive
+--   clockwise). If a fire command turns the cannon the wrong way or is
+--   offset, tune these in cannon_cfg.txt:
+--     yawOffset  — added to the incoming yaw (degrees)
+--     pitchScale — multiplied by the incoming pitch (1 or -1)
+--   Aim at a known target and correct until shots land.
+-- ============================================================
+
+-- ------------------------------------------------------------
+-- Configuration
+-- ------------------------------------------------------------
+local BASE_URL = "https://regnumaeternum.starpanda24825.workers.dev"
+local POLL_PATH = "/api/ballistics/cc/poll"
+
+-- Mount peripheral type from cbcperipheral.
+local MOUNT_TYPE = "cbc_cannon_mount"
+
+-- Sequence timing (seconds).
+local SEQ_DISASSEMBLE = 0.5
+local SEQ_ASSEMBLE    = 1.0
+local SEQ_AFTER_FIRE  = 0.5
+local AIM_TIMEOUT     = 8.0   -- max seconds to wait for aim to settle
+local AIM_TOLERANCE   = 0.5   -- degrees
+
+-- Config file path.
+local CFG_PATH = "cannon_cfg.txt"
+local ID_PATH  = "cannon_id.txt"
+
+-- ------------------------------------------------------------
+-- Config defaults
+-- ------------------------------------------------------------
+local cfg = {
+  length     = 4,
+  facing     = 0,
+  sublevel   = false,
+  message    = "",
+  pollInterval = 1,      -- seconds between pings
+  yawOffset  = 0,
+  pitchScale = 1,
+  fireMode   = "peripheral",  -- "peripheral" or "redstone"
+  redstoneSide = "",          -- e.g. "left", "right", "back", "top"
+  firePulse  = 0.5,           -- redstone pulse length (seconds)
+}
+
+-- ------------------------------------------------------------
+-- Small helpers
+-- ------------------------------------------------------------
+local function trim(s)
+  return (tostring(s or "")):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function randomHex(len)
+  local chars = "0123456789abcdef"
+  local s = ""
+  for i = 1, len do
+    local r = math.random(1, #chars)
+    s = s .. chars:sub(r, r)
+  end
+  return s
+end
+
+local function readConfig()
+  if not fs.exists(CFG_PATH) then return nil end
+  local f = fs.open(CFG_PATH, "r")
+  if not f then return nil end
+  local loaded = {}
+  while true do
+    local line = f.readLine()
+    if line == nil then break end
+    local k, v = line:match("^([%w_]+)%s*=%s*(.-)%s*$")
+    if k then loaded[k] = v end
+  end
+  f.close()
+  return loaded
+end
+
+local function writeConfig()
+  local f = fs.open(CFG_PATH, "w")
+  f.writeLine("length=" .. tostring(cfg.length))
+  f.writeLine("facing=" .. tostring(cfg.facing))
+  f.writeLine("sublevel=" .. tostring(cfg.sublevel and "true" or "false"))
+  f.writeLine("message=" .. tostring(cfg.message))
+  f.writeLine("pollInterval=" .. tostring(cfg.pollInterval))
+  f.writeLine("yawOffset=" .. tostring(cfg.yawOffset))
+  f.writeLine("pitchScale=" .. tostring(cfg.pitchScale))
+  f.writeLine("fireMode=" .. tostring(cfg.fireMode))
+  f.writeLine("redstoneSide=" .. tostring(cfg.redstoneSide))
+  f.writeLine("firePulse=" .. tostring(cfg.firePulse))
+  f.close()
+end
+
+local function loadConfig()
+  local loaded = readConfig()
+  if loaded then
+    cfg.length        = tonumber(loaded.length) or cfg.length
+    cfg.facing        = tonumber(loaded.facing) or cfg.facing
+    cfg.sublevel      = (loaded.sublevel == "true")
+    cfg.message       = loaded.message or cfg.message
+    cfg.pollInterval  = tonumber(loaded.pollInterval) or cfg.pollInterval
+    cfg.yawOffset     = tonumber(loaded.yawOffset) or cfg.yawOffset
+    cfg.pitchScale    = tonumber(loaded.pitchScale) or cfg.pitchScale
+    cfg.fireMode      = loaded.fireMode or cfg.fireMode
+    cfg.redstoneSide  = loaded.redstoneSide or cfg.redstoneSide
+    cfg.firePulse     = tonumber(loaded.firePulse) or cfg.firePulse
+  end
+end
+
+local function readLine(prompt)
+  write(prompt)
+  return trim(read())
+end
+
+local function readYesNo(prompt)
+  while true do
+    local a = readLine(prompt .. " (y/n): "):lower()
+    if a == "y" or a == "yes" then return true end
+    if a == "n" or a == "no" then return false end
+  end
+end
+
+-- First-boot interactive setup.
+local function setup()
+  term.clear()
+  term.setCursorPos(1, 1)
+  print("=== Cannon Computer — first-time setup ===")
+  print("")
+
+  local len = tonumber(readLine("Cannon length in blocks (e.g. 4): "))
+  cfg.length = len and math.floor(len) or cfg.length
+
+  local face = tonumber(readLine("Direction faced when assembled (0=S,90=W,180=N,270=E): "))
+  cfg.facing = face or cfg.facing
+
+  cfg.sublevel = readYesNo("Is this cannon on a sublevel (Sable/VS ship)?")
+
+  print("")
+  print("Message shown to the officer reviewing your request.")
+  cfg.message = readLine("Message (leave blank for none): ")
+
+  writeConfig()
+  print("")
+  print("Saved " .. CFG_PATH .. ". Starting…")
+  sleep(1)
+end
+
+-- ------------------------------------------------------------
+-- Computer identity
+-- ------------------------------------------------------------
+local function resolveComputerId()
+  local id = nil
+  if os.getComputerID then
+    local cid = os.getComputerID()
+    if cid and cid ~= 0 then id = tostring(cid) end
+  end
+  if not id and fs.exists(ID_PATH) then
+    local f = fs.open(ID_PATH, "r")
+    if f then
+      id = trim(f.readAll())
+      f.close()
+    end
+  end
+  if not id or id == "" then
+    id = randomHex(16)
+    local f = fs.open(ID_PATH, "w")
+    f.write(id)
+    f.close()
+  end
+  return id
+end
+
+local computerId = resolveComputerId()
+
+-- ------------------------------------------------------------
+-- Mount peripheral discovery
+-- ------------------------------------------------------------
+local function findMount()
+  if peripheral.find then
+    local name, wrapped = peripheral.find(MOUNT_TYPE)
+    if wrapped then return wrapped end
+  end
+  for _, side in ipairs(peripheral.getNames()) do
+    if peripheral.getType(side) == MOUNT_TYPE then
+      return peripheral.wrap(side)
+    end
+  end
+  return nil
+end
+
+-- ------------------------------------------------------------
+-- HTTP bridge
+-- ------------------------------------------------------------
+local function httpPost(path, body)
+  local url = BASE_URL .. path
+  local headers = { ["Content-Type"] = "application/json" }
+  local bodyStr = textutils.serializeJSON(body)
+  local ok, result = pcall(function()
+    local req = http.post(url, bodyStr, headers)
+    if req then
+      local raw = req.readAll()
+      req.close()
+      return raw
+    end
+    return nil
+  end)
+  if not ok or result == nil then return nil end
+  local ok2, decoded = pcall(textutils.unserializeJSON, result)
+  if ok2 and decoded then return decoded end
+  return nil
+end
+
+-- ------------------------------------------------------------
+-- Firing sequence (static cannons):
+--   disassemble → assemble → aim → fire → disassemble
+-- ------------------------------------------------------------
+local function normDeg(d)
+  d = d % 360
+  if d > 180 then d = d - 360 end
+  return d
+end
+
+local function waitAimed(mount, aimYaw, aimPitch)
+  local start = os.clock()
+  while os.clock() - start < AIM_TIMEOUT do
+    local y, p
+    pcall(function() y = mount.getYaw() end)
+    pcall(function() p = mount.getPitch() end)
+    if y ~= nil and p ~= nil then
+      local dy = math.abs(normDeg(y - aimYaw))
+      local dp = math.abs(p - aimPitch)
+      if dy <= AIM_TOLERANCE and dp <= AIM_TOLERANCE then
+        return true
+      end
+    end
+    sleep(0.1)
+  end
+  return false
+end
+
+local function doFire(mount)
+  if cfg.fireMode == "redstone" and cfg.redstoneSide ~= "" then
+    redstone.setOutput(cfg.redstoneSide, true)
+    sleep(cfg.firePulse)
+    redstone.setOutput(cfg.redstoneSide, false)
+    return true
+  end
+  return pcall(function() mount.fire() end)
+end
+
+local function runCommand(mount, cmd)
+  print("Command #" .. tostring(cmd.sequence) .. ": aiming…")
+
+  -- 1. Disassemble
+  pcall(function() mount.disassemble() end)
+  sleep(SEQ_DISASSEMBLE)
+
+  -- 2. Assemble
+  pcall(function() mount.assemble() end)
+  sleep(SEQ_ASSEMBLE)
+
+  -- 3. Aim
+  local aimYaw   = (cmd.yaw or 0) + cfg.yawOffset
+  local aimPitch = (cmd.pitch or 0) * cfg.pitchScale
+  pcall(function() mount.setYaw(aimYaw) end)
+  pcall(function() mount.setPitch(aimPitch) end)
+  local settled = waitAimed(mount, aimYaw, aimPitch)
+  if not settled then
+    print("Warning: aim did not settle — firing anyway")
+  end
+
+  -- 4. Fire
+  local fired = doFire(mount)
+  if fired then
+    print("Fired! (yaw " .. string.format("%.1f", aimYaw) .. ", pitch " .. string.format("%.1f", aimPitch) .. ")")
+  else
+    print("Fire failed — is the cannon loaded and assembled?")
+  end
+  sleep(SEQ_AFTER_FIRE)
+
+  -- 5. Disassemble
+  pcall(function() mount.disassemble() end)
+end
+
+-- ------------------------------------------------------------
+-- Status screen
+-- ------------------------------------------------------------
+local function drawStatus(lines)
+  term.setBackgroundColor(colors.black)
+  term.clear()
+  term.setCursorPos(1, 1)
+  term.setTextColor(colors.white)
+  for _, line in ipairs(lines) do
+    print(line)
+  end
+end
+
+-- ------------------------------------------------------------
+-- Main
+-- ------------------------------------------------------------
+loadConfig()
+if not readConfig() then
+  setup()
+  loadConfig()
+end
+
+local lastSequence = 0
+
+while true do
+  local lines = {}
+  local mount = findMount()
+
+  if not mount then
+    table.insert(lines, "Cannon Computer")
+    table.insert(lines, "Status: mount peripheral not found")
+    table.insert(lines, "Place this computer touching a static cannon mount.")
+    drawStatus(lines)
+    sleep(cfg.pollInterval)
+  else
+    local curYaw, curPitch = 0, 0
+    pcall(function() curYaw = mount.getYaw() or 0 end)
+    pcall(function() curPitch = mount.getPitch() or 0 end)
+
+    local body = {
+      computerId = computerId,
+      x = 0, y = 0, z = 0,
+      length = cfg.length,
+      facing = cfg.facing,
+      sublevel = cfg.sublevel,
+      message = cfg.message,
+      yaw = curYaw,
+      pitch = curPitch,
+      sequence = lastSequence,
+    }
+    pcall(function() body.x = mount.getX() end)
+    pcall(function() body.y = mount.getY() end)
+    pcall(function() body.z = mount.getZ() end)
+
+    local resp = httpPost(POLL_PATH, body)
+
+    table.insert(lines, "Cannon Computer")
+    table.insert(lines, "Computer ID: " .. computerId)
+
+    if resp == nil then
+      table.insert(lines, "Status: cannot reach website")
+      table.insert(lines, "Check " .. BASE_URL)
+    elseif not resp.success then
+      table.insert(lines, "Status: server error")
+      table.insert(lines, tostring(resp.response))
+    elseif resp.response.status == "pending" then
+      table.insert(lines, "Status: AWAITING APPROVAL")
+      table.insert(lines, "An officer must accept this cannon")
+      table.insert(lines, "from the website's Cannon Registry tab.")
+    elseif resp.response.status == "active" then
+      local cmd = resp.response.command
+      if cmd and cmd.sequence ~= lastSequence then
+        lastSequence = cmd.sequence   -- ack intent immediately (at-most-once fire)
+        local ok, err = pcall(runCommand, mount, cmd)
+        if not ok then
+          print("Command #" .. tostring(cmd.sequence) .. " failed: " .. tostring(err))
+        end
+      else
+        table.insert(lines, "Status: READY")
+        table.insert(lines, "Name: " .. tostring(resp.response.name))
+        table.insert(lines, "Aiming: yaw " .. string.format("%.1f", curYaw) .. " / pitch " .. string.format("%.1f", curPitch))
+      end
+    else
+      table.insert(lines, "Status: " .. tostring(resp.response.status))
+    end
+
+    drawStatus(lines)
+    sleep(cfg.pollInterval)
+  end
+end

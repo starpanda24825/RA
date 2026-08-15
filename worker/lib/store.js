@@ -1150,3 +1150,112 @@ export async function deleteNewspaperById(env, id) {
   await env.DB.prepare('DELETE FROM newspapers WHERE id = ?').bind(Number(id)).run();
 }
 
+// ---------- ballistics: static cannons ----------
+
+export async function findCannonById(env, id) {
+  return env.DB.prepare('SELECT * FROM ballistics_cannons WHERE id = ?').bind(Number(id)).first();
+}
+
+export async function findCannonByComputerId(env, computerId) {
+  return env.DB.prepare('SELECT * FROM ballistics_cannons WHERE computer_id = ?').bind(String(computerId)).first();
+}
+
+// First ping from an unknown computer → a 'pending' registration request.
+export async function insertCannon(env, { computerId, x, y, z, length, facing, sublevel, message }) {
+  const now = nowIso();
+  const result = await env.DB.prepare(
+    `INSERT INTO ballistics_cannons
+       (computer_id, name, x, y, z, length, facing, sublevel, message, status,
+        last_seen_at, created_at, updated_at)
+     VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`
+  ).bind(computerId, x, y, z, length, facing, sublevel ? 1 : 0, message, now, now, now).run();
+  return findCannonById(env, result.meta.last_row_id);
+}
+
+// While a request is still pending, keep its registration fields fresh on every ping.
+export async function refreshPendingCannon(env, id, { x, y, z, length, facing, sublevel, message }) {
+  await env.DB.prepare(
+    `UPDATE ballistics_cannons
+        SET x = ?, y = ?, z = ?, length = ?, facing = ?, sublevel = ?, message = ?,
+            last_seen_at = ?, updated_at = ?
+      WHERE id = ?`
+  ).bind(x, y, z, length, facing, sublevel ? 1 : 0, message, nowIso(), nowIso(), Number(id)).run();
+  return findCannonById(env, id);
+}
+
+// Heartbeat for any cannon (pending or active): refresh last_seen + aim state.
+export async function heartbeatCannon(env, id, { yaw, pitch }) {
+  await env.DB.prepare(
+    `UPDATE ballistics_cannons SET last_seen_at = ?, last_yaw = ?, last_pitch = ?, updated_at = ? WHERE id = ?`
+  ).bind(nowIso(), Number(yaw) || 0, Number(pitch) || 0, nowIso(), Number(id)).run();
+  return findCannonById(env, id);
+}
+
+export async function listCannons(env) {
+  const { results } = await env.DB.prepare('SELECT * FROM ballistics_cannons ORDER BY id ASC').all();
+  return results;
+}
+
+// Default names are "Cannon 1", "Cannon 2", … — pick the next free number by
+// scanning the highest existing default number (renames and deletes don't matter).
+export async function nextCannonName(env) {
+  const { results } = await env.DB.prepare('SELECT name FROM ballistics_cannons').all();
+  let max = 0;
+  for (const row of results || []) {
+    const m = String(row.name || '').match(/^Cannon\s+(\d+)$/i);
+    if (m) max = Math.max(max, parseInt(m[1], 10));
+  }
+  return 'Cannon ' + (max + 1);
+}
+
+export async function acceptCannon(env, id) {
+  const cannon = await findCannonById(env, id);
+  if (!cannon || cannon.status !== 'pending') return null;
+  const name = await nextCannonName(env);
+  await env.DB.prepare(
+    `UPDATE ballistics_cannons SET status = 'active', name = ?, updated_at = ? WHERE id = ?`
+  ).bind(name, nowIso(), Number(id)).run();
+  return findCannonById(env, id);
+}
+
+// Website-side edit (name / coords / length / facing / sublevel).
+export async function updateCannon(env, id, fields) {
+  const sets = [];
+  const binds = [];
+  if (fields.name !== undefined)     { sets.push('name = ?');     binds.push(String(fields.name).slice(0, 80)); }
+  if (fields.x !== undefined)        { sets.push('x = ?');        binds.push(Number(fields.x) || 0); }
+  if (fields.y !== undefined)        { sets.push('y = ?');        binds.push(Number(fields.y) || 0); }
+  if (fields.z !== undefined)        { sets.push('z = ?');        binds.push(Number(fields.z) || 0); }
+  if (fields.length !== undefined)   { sets.push('length = ?');   binds.push(Math.max(1, Math.min(64, Math.round(Number(fields.length) || 4)))); }
+  if (fields.facing !== undefined)   { sets.push('facing = ?');   binds.push(Number(fields.facing) || 0); }
+  if (fields.sublevel !== undefined) { sets.push('sublevel = ?'); binds.push(fields.sublevel ? 1 : 0); }
+  if (!sets.length) return findCannonById(env, id);
+  sets.push('updated_at = ?');
+  binds.push(nowIso(), Number(id));
+  await env.DB.prepare(`UPDATE ballistics_cannons SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
+  return findCannonById(env, id);
+}
+
+export async function deleteCannon(env, id) {
+  await env.DB.prepare('DELETE FROM ballistics_cannons WHERE id = ?').bind(Number(id)).run();
+}
+
+export async function dispatchCannonFire(env, id, { yaw, pitch }) {
+  const cannon = await findCannonById(env, id);
+  if (!cannon || cannon.status !== 'active') return null;
+  const next = (Number(cannon.command_sequence) || 0) + 1;
+  await env.DB.prepare(
+    `UPDATE ballistics_cannons
+        SET command_sequence = ?, command_yaw = ?, command_pitch = ?, command_fire = 1,
+            command_at = ?, updated_at = ?
+      WHERE id = ?`
+  ).bind(next, Number(yaw), Number(pitch), nowIso(), nowIso(), Number(id)).run();
+  return findCannonById(env, id);
+}
+
+export async function ackCannonCommand(env, id, sequence) {
+  await env.DB.prepare(
+    `UPDATE ballistics_cannons SET acked_sequence = MAX(acked_sequence, ?), updated_at = ? WHERE id = ?`
+  ).bind(Number(sequence), nowIso(), Number(id)).run();
+}
+

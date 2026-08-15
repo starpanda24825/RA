@@ -20,6 +20,8 @@ import * as bankingCC from './routes/banking-cc.js';
 import * as exchange from './routes/exchange.js';
 import * as exchangeAdmin from './routes/exchange-admin.js';
 import * as exchangeCC from './routes/exchange-cc.js';
+import * as ballistics from './routes/ballistics.js';
+import * as ballisticsCC from './routes/ballistics-cc.js';
 import { runMarketTick, syncFundamentalsFromBank } from './lib/market-engine.js';
 import * as store from './lib/store.js';
 
@@ -391,6 +393,20 @@ export default {
         if (pathname === '/api/banking/cc/get-portfolio' && method === 'POST') return await bankingCC.ccGetPortfolio(request, env);
         if (pathname === '/api/banking/cc/top-companies' && method === 'POST') return await bankingCC.ccTopCompanies(request, env);
         if (pathname === '/api/banking/cc/apply-taxes' && method === 'POST') return await bankingCC.ccApplyTaxes(request, env);
+
+        // ---- Ballistic Calculator: static cannon registry + CC bridge ----
+        if (pathname === '/api/ballistics/cannons' && method === 'GET') return await ballistics.listCannons(request, env);
+        if (pathname === '/api/ballistics/cc/poll' && method === 'POST') return await ballisticsCC.ccPoll(request, env);
+
+        m = pathname.match(/^\/api\/ballistics\/cannons\/(\d+)\/accept$/);
+        if (m && method === 'POST') return await ballistics.acceptCannon(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/ballistics\/cannons\/(\d+)\/fire$/);
+        if (m && method === 'POST') return await ballistics.fireCannon(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/ballistics\/cannons\/(\d+)$/);
+        if (m && method === 'PUT') return await ballistics.updateCannon(request, env, m[1]);
+        if (m && method === 'DELETE') return await ballistics.deleteCannon(request, env, m[1]);
 
         // ---- Ballistic Calculator / Land Registry: BlueMap proxy ----
         if (pathname === '/api/bluemap-config' && method === 'GET') return await bluemap.getConfig(request, env);

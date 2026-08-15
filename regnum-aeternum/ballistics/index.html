@@ -389,6 +389,112 @@
 
 .cannon-icon { width:18px; height:18px; background:var(--crimson-bright); border:2px solid var(--parchment); border-radius:50%; }
 .target-icon { width:18px; height:18px; background:var(--gold-bright);    border:2px solid var(--ink);        border-radius:50%; }
+/* ---------- Tabs ---------- */
+.bc-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 12px 28px 0;
+  max-width: 860px;
+  margin: 0 auto;
+}
+.bc-tab {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: transparent;
+  border: 1px solid var(--slate-line);
+  border-bottom: none;
+  color: var(--parchment-dim);
+  border-radius: 8px 8px 0 0;
+  padding: 9px 16px 10px;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+.bc-tab:hover { color: var(--parchment); border-color: var(--gold-dim); }
+.bc-tab.active { background: var(--ink-elevated); color: var(--parchment); border-color: var(--slate-line); }
+
+/* ---------- Cannon registry ---------- */
+.registry-list { display: flex; flex-direction: column; gap: 10px; }
+.cannon-card {
+  background: var(--ink-elevated);
+  border: 1px solid var(--slate-line);
+  border-radius: 9px;
+  padding: 12px 14px;
+}
+.cannon-card__head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cannon-card__name {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--parchment);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 4px 6px;
+  min-width: 120px;
+}
+.cannon-card__name:hover, .cannon-card__name:focus { border-color: var(--slate-line); outline: none; }
+.cannon-badge {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 100px;
+  border: 1px solid var(--slate-line);
+  color: var(--parchment-dim);
+  white-space: nowrap;
+}
+.cannon-badge.online { color: var(--teal-bright); border-color: rgba(46,142,150,0.4); }
+.cannon-badge.offline { color: var(--parchment-faint); }
+.cannon-badge.sublevel { color: var(--gold-bright); border-color: var(--gold-dim); }
+.cannon-card__meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--parchment-dim);
+  margin: 8px 0 0;
+  line-height: 1.7;
+}
+.cannon-card__msg {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--gold-bright);
+  background: rgba(201,162,39,0.08);
+  border: 1px solid var(--gold-dim);
+  border-radius: 7px;
+  padding: 8px 10px;
+  margin: 8px 0 0;
+}
+.cannon-card__row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; align-items: center; }
+.cannon-mini-input {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--parchment);
+  background: var(--ink-soft);
+  border: 1px solid var(--slate-line);
+  border-radius: 6px;
+  padding: 5px 8px;
+  width: 76px;
+}
+.registry-actions { display: flex; gap: 8px; margin-top: 10px; }
+.registry-actions .calc-btn, .registry-actions .map-btn { margin-top: 0; width: auto; padding: 8px 14px; }
+.registry-empty {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--parchment-faint);
+  padding: 14px;
+  border: 1px dashed var(--slate-line);
+  border-radius: 8px;
+}
+#fire-control { margin-top: 14px; }
+#fire-status {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--teal-bright);
+  margin: 8px 0 0;
+}
+#fire-status.err { color: #e3a3a3; }
 </style>
 </head>
 <body>
@@ -482,7 +588,12 @@
   </div>
 
   <div id="panel">
-    <div class="panel-inner">
+    <div class="bc-tabs">
+      <button class="bc-tab active" id="tab-calc" type="button">Calculator</button>
+      <button class="bc-tab" id="tab-cannons" type="button">Cannon Registry</button>
+    </div>
+
+    <div class="panel-inner" id="calc-panel">
 
       <div class="field-group">
         <label>Cannon Mount (X, Y, Z)</label>
@@ -499,6 +610,11 @@
           <option value="90">West (90°)</option>
         </select>
         <div class="field-hint">Click "Cannon" then click the map, or type coordinates directly</div>
+        <label style="margin-top:12px;">Registered Static Cannon</label>
+        <select class="bc-select" id="static-cannon">
+          <option value="">— None (manual entry) —</option>
+        </select>
+        <div class="field-hint">Auto-fills the mount, facing and length from the registry</div>
       </div>
 
       <div class="field-group">
@@ -533,7 +649,27 @@
 
       <div class="results-wrap" id="results-wrap">
         <div id="result-stats"></div>
+        <div id="fire-control" style="display:none;">
+          <button class="calc-btn" id="fire-btn" type="button">Fire Cannon</button>
+          <p id="fire-status"></p>
+        </div>
         <canvas id="height-canvas"></canvas>
+      </div>
+
+    </div>
+
+    <div class="panel-inner" id="registry-panel" style="display:none;">
+
+      <div class="field-group" style="grid-column:1/-1;">
+        <label>Registered Cannons</label>
+        <p class="field-hint">Static cannons that have been accepted. Edit a name or detail here, then fire from the Calculator tab.</p>
+        <div class="registry-list" id="cannon-active-list"></div>
+      </div>
+
+      <div class="field-group" style="grid-column:1/-1;">
+        <label>Pending Requests</label>
+        <p class="field-hint">Computers that have pinged in but are not yet accepted. Accept to register, or decline to remove.</p>
+        <div class="registry-list" id="cannon-pending-list"></div>
       </div>
 
     </div>
@@ -1155,6 +1291,7 @@
     if (trajLayer) trajLayer.remove(); trajLayer = null;
     ['cx','cz','tx','tz'].forEach(id => { const el = document.getElementById(id); el.value = ''; el.classList.remove('set'); });
     document.getElementById('results-wrap').classList.remove('visible');
+    updateFireControl(null);
     updateCalcBtn();
   }
 
@@ -1272,6 +1409,7 @@
 
     lastResult = sol; lastMode = directHit ? 'direct' : 'optimal'; lastBy = by; lastTy = ty;
     document.getElementById('results-wrap').classList.add('visible');
+    updateFireControl(sol ? { yaw, pitch: sol.pitch } : null);
     drawHeightProfile();
 
     const bounds = [];
@@ -1348,6 +1486,236 @@
   }
 
   // ════════════════════════════════════════════════════════════
+  // 8b. STATIC CANNON CONTROL
+  let cannonsActive    = [];
+  let cannonsPending   = [];
+  let selectedCannonId = null;        // '' = manual entry
+  let lastFireSolution = null;        // { yaw, pitch } from the last calculation
+
+  const staticCannonSel = document.getElementById('static-cannon');
+  const fireControl     = document.getElementById('fire-control');
+  const fireBtn         = document.getElementById('fire-btn');
+  const fireStatus      = document.getElementById('fire-status');
+
+  function escHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  async function loadCannons() {
+    try {
+      const r = await fetch('/api/ballistics/cannons');
+      if (!r.ok) return;
+      const data = await r.json();
+      cannonsActive  = data.active  || [];
+      cannonsPending = data.pending || [];
+      populateCannonDropdown();
+      renderRegistry();
+    } catch (e) { console.warn('Could not load cannon registry.', e); }
+  }
+
+  function populateCannonDropdown() {
+    const prev = staticCannonSel.value;
+    const staticCannons = cannonsActive.filter(c => !c.sublevel);
+    staticCannonSel.innerHTML = '<option value="">— None (manual entry) —</option>' +
+      staticCannons.map(c =>
+        '<option value="' + c.id + '">' + escHtml(c.name || ('Cannon ' + c.id)) + '</option>'
+      ).join('');
+    if (prev && staticCannons.some(c => String(c.id) === prev)) staticCannonSel.value = prev;
+  }
+
+  function cannonOnline(c) {
+    if (!c.last_seen_at) return false;
+    return (Date.now() - new Date(c.last_seen_at).getTime()) < 30000;
+  }
+
+  function applyCannonToForm(c) {
+    if (!c) return;
+    document.getElementById('cx').value = c.x;
+    document.getElementById('cy').value = c.y;
+    document.getElementById('cz').value = c.z;
+    ['cx','cz'].forEach(id => document.getElementById(id).classList.add('set'));
+    const facing = String((Math.round(Number(c.facing) || 0) % 360 + 360) % 360);
+    const sel = document.getElementById('cannon-facing');
+    if (!Array.from(sel.options).some(o => o.value === facing)) {
+      const opt = document.createElement('option');
+      opt.value = facing;
+      opt.textContent = facing + '° (registered)';
+      sel.appendChild(opt);
+    }
+    sel.value = facing;
+    document.getElementById('cannon-len').value = c.length;
+    placeCannon(c.x, c.z);
+    updateCalcBtn();
+  }
+
+  staticCannonSel.addEventListener('change', () => {
+    selectedCannonId = staticCannonSel.value || null;
+    if (selectedCannonId) {
+      const c = cannonsActive.find(x => String(x.id) === selectedCannonId);
+      if (c) applyCannonToForm(c);
+    }
+    updateFireControl(lastFireSolution);
+  });
+
+  function updateFireControl(solution) {
+    lastFireSolution = solution || null;
+    if (solution && selectedCannonId) {
+      fireControl.style.display = 'block';
+      fireBtn.disabled = false;
+    } else {
+      fireControl.style.display = 'none';
+    }
+  }
+
+  fireBtn.addEventListener('click', async () => {
+    if (!lastFireSolution || !selectedCannonId) return;
+    const c = cannonsActive.find(x => String(x.id) === selectedCannonId);
+    fireBtn.disabled = true;
+    fireStatus.textContent = 'Queuing fire command for ' + (c ? c.name : 'cannon') + '…';
+    fireStatus.classList.remove('err');
+    try {
+      const r = await fetch('/api/ballistics/cannons/' + selectedCannonId + '/fire', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ yaw: lastFireSolution.yaw, pitch: lastFireSolution.pitch })
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        fireStatus.textContent = data.error || 'Could not send fire command.';
+        fireStatus.classList.add('err');
+      } else {
+        fireStatus.textContent = 'Fire command sent — ' + (c ? c.name : 'cannon') + ' will disassemble, assemble, aim and fire.';
+      }
+    } catch (e) {
+      fireStatus.textContent = 'Could not reach the server.';
+      fireStatus.classList.add('err');
+    }
+    fireBtn.disabled = false;
+  });
+
+  function renderRegistry() {
+    const activeEl  = document.getElementById('cannon-active-list');
+    const pendingEl = document.getElementById('cannon-pending-list');
+    activeEl.innerHTML = cannonsActive.length
+      ? cannonsActive.map(cannonCard).join('')
+      : '<div class="registry-empty">No registered cannons yet. Accept a pending request below, or run the Cannon Computer program on an in-game computer.</div>';
+    pendingEl.innerHTML = cannonsPending.length
+      ? cannonsPending.map(pendingCard).join('')
+      : '<div class="registry-empty">No pending requests. In-game computers that ping the website appear here.</div>';
+    wireRegistryButtons();
+  }
+
+  function cannonCard(c) {
+    const online = cannonOnline(c);
+    const sub    = c.sublevel ? '<span class="cannon-badge sublevel">Sublevel</span>' : '';
+    const status = online ? '<span class="cannon-badge online">Online</span>' : '<span class="cannon-badge offline">Offline</span>';
+    return '<div class="cannon-card" data-cannon-id="' + c.id + '">' +
+      '<div class="cannon-card__head">' +
+        '<input class="cannon-card__name" data-cannon-name="' + c.id + '" value="' + escHtml(c.name) + '"/>' +
+        status + sub +
+      '</div>' +
+      '<div class="cannon-card__meta">' +
+        'Mount: X ' + c.x + ' · Y ' + c.y + ' · Z ' + c.z + '<br/>' +
+        'Length ' + c.length + ' blocks · Facing ' + c.facing + '° · Last seen ' + (c.last_seen_at ? new Date(c.last_seen_at).toLocaleString() : 'never') +
+      '</div>' +
+      '<div class="cannon-card__row">' +
+        '<input class="cannon-mini-input" data-cannon-x="' + c.id + '" type="number" value="' + c.x + '" title="X"/>' +
+        '<input class="cannon-mini-input" data-cannon-y="' + c.id + '" type="number" value="' + c.y + '" title="Y"/>' +
+        '<input class="cannon-mini-input" data-cannon-z="' + c.id + '" type="number" value="' + c.z + '" title="Z"/>' +
+        '<input class="cannon-mini-input" data-cannon-len="' + c.id + '" type="number" value="' + c.length + '" title="Length"/>' +
+        '<input class="cannon-mini-input" data-cannon-facing="' + c.id + '" type="number" value="' + c.facing + '" title="Facing"/>' +
+        '<label style="display:flex;align-items:center;gap:5px;font-family:var(--font-mono);font-size:11px;color:var(--parchment-dim);">' +
+          '<input type="checkbox" data-cannon-sub="' + c.id + '"' + (c.sublevel ? ' checked' : '') + '/> sublevel' +
+        '</label>' +
+      '</div>' +
+      '<div class="registry-actions">' +
+        '<button class="map-btn" data-cannon-save="' + c.id + '">Save</button>' +
+        '<button class="map-btn danger" data-cannon-delete="' + c.id + '">Delete</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function pendingCard(p) {
+    const sub = p.sublevel ? '<span class="cannon-badge sublevel">Sublevel</span>' : '';
+    const msg = p.message ? '<div class="cannon-card__msg">' + escHtml(p.message) + '</div>' : '';
+    return '<div class="cannon-card" data-cannon-id="' + p.id + '">' +
+      '<div class="cannon-card__head">' +
+        '<span class="cannon-card__name" style="cursor:default;">' + escHtml('Computer ' + p.computer_id) + '</span>' +
+        sub +
+      '</div>' +
+      '<div class="cannon-card__meta">' +
+        'Mount: X ' + p.x + ' · Y ' + p.y + ' · Z ' + p.z + '<br/>' +
+        'Length ' + p.length + ' blocks · Facing ' + p.facing + '° · Last seen ' + (p.last_seen_at ? new Date(p.last_seen_at).toLocaleString() : 'never') +
+      '</div>' +
+      msg +
+      '<div class="registry-actions">' +
+        '<button class="calc-btn" data-cannon-accept="' + p.id + '">Accept</button>' +
+        '<button class="map-btn danger" data-cannon-decline="' + p.id + '">Decline</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function wireRegistryButtons() {
+    document.querySelectorAll('[data-cannon-accept]').forEach(btn => btn.addEventListener('click', () => acceptCannon(btn.dataset.cannonAccept)));
+    document.querySelectorAll('[data-cannon-decline]').forEach(btn => btn.addEventListener('click', () => declineCannon(btn.dataset.cannonDecline)));
+    document.querySelectorAll('[data-cannon-delete]').forEach(btn => btn.addEventListener('click', () => removeCannon(btn.dataset.cannonDelete)));
+    document.querySelectorAll('[data-cannon-save]').forEach(btn => btn.addEventListener('click', () => saveCannon(btn.dataset.cannonSave)));
+  }
+
+  async function acceptCannon(id) {
+    const r = await fetch('/api/ballistics/cannons/' + id + '/accept', { method: 'POST' });
+    const data = await r.json();
+    if (!r.ok) { alert(data.error || 'Could not accept request.'); return; }
+    await loadCannons();
+  }
+
+  async function declineCannon(id) {
+    if (!confirm('Decline and remove this request?')) return;
+    await fetch('/api/ballistics/cannons/' + id, { method: 'DELETE' });
+    await loadCannons();
+  }
+
+  async function removeCannon(id) {
+    if (!confirm('Remove this cannon from the registry?')) return;
+    await fetch('/api/ballistics/cannons/' + id, { method: 'DELETE' });
+    if (selectedCannonId === id) { selectedCannonId = null; staticCannonSel.value = ''; }
+    await loadCannons();
+  }
+
+  async function saveCannon(id) {
+    const name = document.querySelector('[data-cannon-name="' + id + '"]').value.trim();
+    const payload = {
+      name: name,
+      x: Number(document.querySelector('[data-cannon-x="' + id + '"]').value),
+      y: Number(document.querySelector('[data-cannon-y="' + id + '"]').value),
+      z: Number(document.querySelector('[data-cannon-z="' + id + '"]').value),
+      length: Number(document.querySelector('[data-cannon-len="' + id + '"]').value),
+      facing: Number(document.querySelector('[data-cannon-facing="' + id + '"]').value),
+      sublevel: document.querySelector('[data-cannon-sub="' + id + '"]').checked,
+    };
+    const r = await fetch('/api/ballistics/cannons/' + id, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await r.json();
+    if (!r.ok) { alert(data.error || 'Could not save cannon.'); return; }
+    await loadCannons();
+  }
+
+  function setTab(which) {
+    const calc = which === 'calc';
+    document.getElementById('tab-calc').classList.toggle('active', calc);
+    document.getElementById('tab-cannons').classList.toggle('active', !calc);
+    document.getElementById('calc-panel').style.display = calc ? '' : 'none';
+    document.getElementById('registry-panel').style.display = calc ? 'none' : '';
+  }
+
+  document.getElementById('tab-calc').addEventListener('click', () => setTab('calc'));
+  document.getElementById('tab-cannons').addEventListener('click', () => { setTab('cannons'); loadCannons(); });
+
   // 9. AUTH — last, because showApp() needs `map` to already exist
   // ════════════════════════════════════════════════════════════
   function userHasRole(user, r) { return (user && user.role ? user.role.split(',') : []).map(function(x){return x.trim();}).indexOf(r) !== -1; }
@@ -1364,6 +1732,7 @@
     gate.style.display = 'none';
     app.style.display  = 'flex';
     userBadge.textContent = user.username + ' · ' + user.role;
+    loadCannons();
     setTimeout(() => map.invalidateSize(), 50);
   }
 
