@@ -86,8 +86,9 @@ local MOUNT_TYPE = "cbc_cannon_mount"
 -- the poll / fire loop.
 local GPS_TIMEOUT = 2
 
--- Sequence timing (seconds) — identical to the static cannon.
-local SEQ_DISASSEMBLE = 0.5
+-- Sequence timing (seconds). reloadTime is user-configurable and set during
+-- first-boot setup; its placement depends on reloadType (auto-loader reloads
+-- between disassemble/assemble, mechanical arm after assemble).
 local SEQ_ASSEMBLE    = 1.0
 local SEQ_BEFORE_AIM  = 4.0   -- wait after assembling, before aiming
 local SEQ_BEFORE_FIRE = 5.0   -- wait after aiming, before firing
@@ -105,6 +106,8 @@ local ID_PATH  = "subcannon_id.txt"
 local cfg = {
   length       = 4,
   facing       = 0,
+  reloadType   = "autoloader",  -- "autoloader" or "arm"
+  reloadTime   = 0.5,    -- reload delay (seconds); placement depends on reloadType
   message      = "",
   pollInterval = 1,      -- seconds after each poll; total loop ≈ 3s
   yawOffset    = 0,
@@ -156,6 +159,8 @@ local function writeConfig()
   local f = fs.open(CFG_PATH, "w")
   f.writeLine("length=" .. tostring(cfg.length))
   f.writeLine("facing=" .. tostring(cfg.facing))
+  f.writeLine("reloadType=" .. tostring(cfg.reloadType))
+  f.writeLine("reloadTime=" .. tostring(cfg.reloadTime))
   f.writeLine("message=" .. tostring(cfg.message))
   f.writeLine("pollInterval=" .. tostring(cfg.pollInterval))
   f.writeLine("yawOffset=" .. tostring(cfg.yawOffset))
@@ -172,6 +177,10 @@ local function loadConfig()
   if loaded then
     cfg.length       = tonumber(loaded.length) or cfg.length
     cfg.facing       = tonumber(loaded.facing) or cfg.facing
+    if loaded.reloadType == "arm" or loaded.reloadType == "autoloader" then
+      cfg.reloadType = loaded.reloadType
+    end
+    cfg.reloadTime   = tonumber(loaded.reloadTime) or cfg.reloadTime
     cfg.message      = loaded.message or cfg.message
     cfg.pollInterval = tonumber(loaded.pollInterval) or cfg.pollInterval
     cfg.yawOffset    = tonumber(loaded.yawOffset) or cfg.yawOffset
@@ -202,6 +211,22 @@ local function setup()
 
   local face = tonumber(readLine("Direction faced when assembled (0=S,90=W,180=N,270=E): "))
   cfg.facing = face or cfg.facing
+
+  print("")
+  print("Reload method:")
+  print("  1 = Auto-Loader    — reloads between disassemble and assemble")
+  print("  2 = Mechanical arm — reloads after the cannon is assembled")
+  local rt = readLine("Enter 1 or 2: ")
+  cfg.reloadType = (rt == "2") and "arm" or "autoloader"
+
+  local reloadPrompt
+  if cfg.reloadType == "arm" then
+    reloadPrompt = "Reload time in seconds (mechanical arm delay after assemble, e.g. 10): "
+  else
+    reloadPrompt = "Reload time in seconds (auto-loader delay between disassemble and assemble, e.g. 10): "
+  end
+  local reload = tonumber(readLine(reloadPrompt))
+  cfg.reloadTime = reload and math.max(0, reload) or cfg.reloadTime
 
   print("")
   print("Message shown to the officer reviewing your request.")
@@ -463,13 +488,21 @@ end
 local function runCommand(mount, cmd, shipYaw)
   print("Command #" .. tostring(cmd.sequence) .. ": aiming…")
 
-  -- 1. Disassemble
+  -- 1. Disassemble. An auto-loader reloads here, between disassemble and
+  -- assemble.
   pcall(function() mount.disassemble() end)
-  sleep(SEQ_DISASSEMBLE)
+  if cfg.reloadType == "autoloader" then
+    sleep(cfg.reloadTime)
+  end
 
   -- 2. Assemble
   pcall(function() mount.assemble() end)
   sleep(SEQ_ASSEMBLE)
+
+  -- A mechanical arm reloads after the cannon is assembled.
+  if cfg.reloadType == "arm" then
+    sleep(cfg.reloadTime)
+  end
 
   -- 3. Delay before aiming
   sleep(SEQ_BEFORE_AIM)
