@@ -99,7 +99,10 @@ local cfg = {
 -- Small helpers
 -- ------------------------------------------------------------
 local function trim(s)
-  return (tostring(s or "")):gsub("^%s+", ""):gsub("%s+$", "")
+  s = tostring(s or "")
+  s = s:gsub("^%s+", "")
+  s = s:gsub("%s+$", "")
+  return s
 end
 
 local function randomHex(len)
