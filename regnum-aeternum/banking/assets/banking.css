@@ -371,6 +371,25 @@
 
 .bank-card__status--active  { color: var(--teal-bright); }
 .bank-card__status--cancelled { color: var(--slate-soft); }
+.bank-card__status--reissue { color: var(--gold-bright); }
+
+.bank-card__action {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--parchment);
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--crimson-bright);
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  align-self: flex-start;
+  position: relative;
+  z-index: 1;
+}
+
+.bank-card__action:hover { background: rgba(0, 0, 0, 0.4); }
 
 /* ── Transaction rows ──────────────────────────────────────── */
 .tx-row {

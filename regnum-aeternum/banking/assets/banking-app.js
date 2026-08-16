@@ -139,6 +139,17 @@
   }
 
   // ── Dashboard ──────────────────────────────────────────────
+  function reportCardLost(cardId) {
+    if (!confirm('Report this card as lost? It will be cancelled immediately and a replacement will be requested for a banker to issue.')) return;
+    api('/api/banking/me/cards/' + encodeURIComponent(cardId) + '/report-lost', {
+      method: 'POST',
+      body: JSON.stringify({ reason: 'Reported lost by owner' })
+    }).then(function (res) {
+      if (!res.ok) { alert(res.data.error || 'Could not report card lost.'); return; }
+      loadDashboard();
+    });
+  }
+
   function loadDashboard() {
     if (!account) return;
     $('bal-amount').textContent = fmt(account.balance);
@@ -152,7 +163,7 @@
     });
 
     // Load cards
-    api('/api/banking/admin/accounts/' + encodeURIComponent(account.key) + '/cards').then(function (r) {
+    api('/api/banking/me/cards').then(function (r) {
       var list = $('dash-cards-list');
       var empty = $('dash-cards-empty');
       list.innerHTML = '';
@@ -161,23 +172,30 @@
         return;
       }
       empty.style.display = 'none';
-      var activeCards = r.data.filter(function (c) { return c.status !== 'cancelled'; });
-      if (activeCards.length === 0) {
-        empty.style.display = '';
-        return;
-      }
-      activeCards.forEach(function (card) {
+      r.data.forEach(function (card) {
         var div = document.createElement('div');
         div.className = 'bank-card';
         div.style.marginBottom = '10px';
+        var reissueNote = card.reissue_requested
+          ? '<span class="bank-card__status bank-card__status--reissue">Reissue requested</span>'
+          : '';
+        var actions = card.status === 'active'
+          ? '<button class="bank-card__action" data-bc-lost="' + esc(card.card_id) + '">Report lost</button>'
+          : '';
         div.innerHTML =
           '<span class="bank-card__name">' + esc(account.name) + '</span>' +
-          '<span class="bank-card__key">' + esc(card.id) + '</span>' +
+          '<span class="bank-card__key">' + esc(card.card_id) + '</span>' +
           '<div class="bank-card__meta">' +
-            '<span>' + fmtDate(card.issued_at) + '</span>' +
+            '<span>' + fmtDate(card.created_at) + '</span>' +
             '<span class="bank-card__status bank-card__status--' + esc(card.status) + '">' + esc(card.status) + '</span>' +
-          '</div>';
+            reissueNote +
+          '</div>' +
+          actions;
         list.appendChild(div);
+      });
+
+      list.querySelectorAll('[data-bc-lost]').forEach(function (btn) {
+        btn.addEventListener('click', function () { reportCardLost(btn.dataset.bcLost); });
       });
     });
 

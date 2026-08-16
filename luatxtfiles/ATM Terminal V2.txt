@@ -91,6 +91,7 @@ if (diskdrive.isDiskPresent() and ensureSafeDisk()) then
                         bankapi.errorScreen("Account is frozen")
                     else
                         currentAccount = key
+                        bankapi.setCard(key, id)
                     end
                 else
                     currentAccount = 0
@@ -204,6 +205,7 @@ while true do
 			local accKey, accName = bankapi.loginScreen()
 			if (accKey ~= nil) then
 				currentAccount = accKey
+				bankapi.clearCard()
 				bankapi.successScreen("Welcome, "..tostring(accName or accKey).."!")
 			end
 		elseif (command == "info") then

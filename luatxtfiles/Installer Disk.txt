@@ -20,6 +20,17 @@ function quit()
     os.reboot()
 end
 
+-- Installs the Bank API, preferring the copy on the installer disk so the
+-- installer works even without an internet connection.
+function installBankApi()
+    fs.delete("bankapi.lua")
+    if fs.exists("disk/Bank API V2.txt") then
+        fs.copy("disk/Bank API V2.txt", "bankapi.lua")
+    else
+        shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Bank%20API%20V2.txt", "bankapi.lua")
+    end
+end
+
 function optionsMenu(title, description, options)
     local selectedOption = 1
     while true do
@@ -66,8 +77,7 @@ function installClerkTurtle()
     print("Installing Fiducia Store Clerk Turtle...")
     settings.set("shell.allow_disk_startup", false)
     settings.save()
-    fs.delete("bankapi.lua")
-    shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Bank%20API%20V2.txt", "bankapi.lua") -- Bank API
+    installBankApi() -- Bank API
     fs.delete("startup.lua")
     shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Clerk%20Turtle%20V2.txt", "startup.lua") 
     -- For now, copy from disk if available
@@ -97,8 +107,7 @@ function installClerkInterface()
     print("Installing Fiducia Store Clerk terminal...")
     settings.set("shell.allow_disk_startup", false)
     settings.save()
-    fs.delete("bankapi.lua")
-    shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Bank%20API%20V2.txt", "bankapi.lua") -- Bank API
+    installBankApi() -- Bank API
     fs.delete("startup.lua")
     shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Clerk%20Computer%20V2.txt", "startup.lua") -- Clerk Computer
     if fs.exists("disk/Clerk Computer V2.txt") then
@@ -111,8 +120,7 @@ function installATMTurtle()
     print("Installing Fiducia ATM Assistant ...")
     settings.set("shell.allow_disk_startup", false)
     settings.save()
-    fs.delete("bankapi.lua")
-    shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Bank%20API%20V2.txt", "bankapi.lua") -- Bank API
+    installBankApi() -- Bank API
     fs.delete("startup.lua")
     shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/ATM%20Assistant%20V2.txt", "startup.lua") -- ATM Assistant
     if fs.exists("disk/ATM Assistant V2.txt") then
@@ -140,8 +148,7 @@ function installBankServer()
     print("Installing Fiducia Bank Server...")
     settings.set("shell.allow_disk_startup", false)
     settings.save()
-    fs.delete("bankapi.lua")
-    shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Bank%20API%20V2.txt", "bankapi.lua") -- Bank API
+    installBankApi() -- Bank API
     fs.delete("startup.lua")
     shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Bank%20Server%20V2.txt", "startup.lua") -- Bank Server
     if fs.exists("disk/Bank Server V2.txt") then
@@ -154,8 +161,7 @@ function installAdminTerminal()
     print("Installing Fiducia Admin terminal...")
     settings.set("shell.allow_disk_startup", false)
     settings.save()
-    fs.delete("bankapi.lua")
-    shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Bank%20API%20V2.txt", "bankapi.lua") -- Bank API
+    installBankApi() -- Bank API
     fs.delete("startup.lua")
     shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Admin%20Terminal%20V2.txt", "startup.lua") -- Admin Terminal
     if fs.exists("disk/Admin Terminal V2.txt") then
@@ -168,8 +174,7 @@ function installATMInterface()
     print("Installing Fiducia ATM terminal...")
     settings.set("shell.allow_disk_startup", false)
     settings.save()
-    fs.delete("bankapi.lua")
-    shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Bank%20API%20V2.txt", "bankapi.lua") -- Bank API
+    installBankApi() -- Bank API
     fs.delete("startup.lua")
     shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/ATM%20Terminal%20V2.txt", "startup.lua") -- ATM Terminal
     if fs.exists("disk/ATM Terminal V2.txt") then

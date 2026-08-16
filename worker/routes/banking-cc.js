@@ -201,7 +201,7 @@ export async function ccListCards(request, env) {
   let body; try { body = await request.json(); } catch { return ccJson(false, 'Invalid body.'); }
   if (!body.key) return ccJson(false, 'key required.');
   const cards = await store.listBankingCards(env, String(body.key));
-  return ccJson(true, cards.map(c => ({ id: c.card_id, date: c.created_at, status: c.status })));
+  return ccJson(true, cards.map(c => ({ id: c.card_id, date: c.created_at, status: c.status, reissue: !!c.reissue_requested, reason: c.reissue_reason || '' })));
 }
 
 // POST /api/banking/cc/new-account
@@ -247,7 +247,7 @@ export async function ccDeleteAccount(request, env) {
 }
 
 // POST /api/banking/cc/set-password
-// Stores in PBKDF2 format; Patch 8 adds ASHA-512 dual-hash for full CC compatibility.
+// Stores in PBKDF2 format (the single credential source of truth).
 export async function ccSetPassword(request, env) {
   const auth = await authenticateCC(request, env, 'admin');
   if (auth.error) return auth.error;
@@ -303,6 +303,25 @@ export async function ccLogin(request, env) {
     color: account.color,
     balance: account.balance,
   });
+}
+
+// POST /api/banking/cc/treasury-login
+// Verifies a treasury account's password server-side (PBKDF2 only). The Admin
+// Terminal uses this to unlock its assigned Treasury instead of hashing the
+// password client-side.
+export async function ccTreasuryLogin(request, env) {
+  const auth = await authenticateCC(request, env, 'admin');
+  if (auth.error) return auth.error;
+  let body; try { body = await request.json(); } catch { return ccJson(false, 'Invalid body.'); }
+  const key = String(body.key || '').trim();
+  const password = String(body.password || '');
+  if (!key || !password) return ccJson(false, 'key and password required.');
+  const account = await store.findBankingAccountByKeyWithHash(env, key);
+  if (!account || account.type !== 'treasury') return ccJson(false, 'Treasury not found.');
+  if (!account.password_hash) return ccJson(false, 'No password set for this treasury.');
+  const ok = await compare(password, account.password_hash);
+  if (!ok) return ccJson(false, 'Incorrect treasury password.');
+  return ccJson(true, 'Password verified');
 }
 
 // POST /api/banking/cc/reset-password

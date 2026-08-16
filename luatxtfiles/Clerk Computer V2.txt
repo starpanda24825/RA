@@ -231,6 +231,7 @@ local function readDisk()
                             bankapi.errorScreen("Account is frozen")
                         else
                             currentAccount = key
+                            bankapi.setCard(key, id)
                         end
                     else
                         currentAccount = 0
@@ -974,6 +975,7 @@ while true do
     end
 end
 
+end
 while true do
     local ok, err = pcall(main)
     if not ok then

@@ -147,6 +147,7 @@ local ACTION_ENDPOINTS = {
     newCompany         = "/api/banking/cc/new-company",
     ["delete"]         = "/api/banking/cc/delete-account",
     login              = "/api/banking/cc/login",
+    treasuryLogin      = "/api/banking/cc/treasury-login",
     resetPassword      = "/api/banking/cc/reset-password",
     validateCard       = "/api/banking/cc/validate-card",
     registerCard       = "/api/banking/cc/register-card",
@@ -327,7 +328,13 @@ function drawAcceptButton()
 	return drawButton(acceptButtonColor, acceptSecondaryColor, buttonTextColor, scrW-width-7, y, width+6, text)
 end
 
+local currentCardKey = nil
+local currentCardId = nil
+
 function transaction(from, to, amount, description)
+	if not revalidateCard(currentCardKey, currentCardId) then
+		return false, "Card is no longer valid. Please log in again."
+	end
 	--local success, response = transaction(from, to, amount, description)
 	local message = {
 		action = "transaction",
@@ -341,6 +348,9 @@ function transaction(from, to, amount, description)
 end
 
 function deposit(key, amount)
+	if not revalidateCard(currentCardKey, currentCardId) then
+		return false, "Card is no longer valid. Please log in again."
+	end
 	local message = {
 		action = "deposit",
 		key = key,
@@ -351,6 +361,9 @@ function deposit(key, amount)
 end
 
 function withdraw(key, amount)
+	if not revalidateCard(currentCardKey, currentCardId) then
+		return false, "Card is no longer valid. Please log in again."
+	end
 	local message = {
 		action = "withdraw",
 		key = key,
@@ -1230,108 +1243,13 @@ function resetPassword(key)
     return resp.success, resp.response
 end
 
--- Hashing helpers: ASHA-512-inspired with salt and iterations
-local function api_rightRotate(n, b)
-    return bit32.band(bit32.bor(bit32.rshift(n, b), bit32.lshift(n, 32 - b)), 0xFFFFFFFF)
-end
-
-local function api_rightShift(n, b)
-    return bit32.rshift(n, b)
-end
-
-local function api_toBytes(str)
-    local bytes = {}
-    for i = 1, #str do bytes[#bytes + 1] = string.byte(str:sub(i, i)) end
-    return bytes
-end
-
-local api_k = {
-    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
-    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
-    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
-    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
-    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
-    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
-    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
-    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
-}
-
-local function api_ASHA512(password, salt, iterations)
-    salt = salt or ""
-    iterations = iterations or 10000
-    local h = {0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19}
-    local function compress(chunk)
-        local w = {}
-        for i = 1, 16 do
-            local o = (i - 1) * 4 + 1
-            w[i] = bit32.band(bit32.bor(bit32.lshift(chunk[o] or 0, 24), bit32.lshift(chunk[o+1] or 0, 16), bit32.lshift(chunk[o+2] or 0, 8), (chunk[o+3] or 0)), 0xFFFFFFFF)
-        end
-        for i = 17, 64 do
-            local s0 = bit32.bxor(api_rightRotate(w[i-15],7), api_rightRotate(w[i-15],18), api_rightShift(w[i-15],3))
-            local s1 = bit32.bxor(api_rightRotate(w[i-2],17), api_rightRotate(w[i-2],19), api_rightShift(w[i-2],10))
-            w[i] = bit32.band((w[i-16] + s0 + w[i-7] + s1), 0xFFFFFFFF)
-        end
-        local a,b,c,d,e,f,g,hh = h[1],h[2],h[3],h[4],h[5],h[6],h[7],h[8]
-        for i = 1, 64 do
-            local S1 = bit32.bxor(api_rightRotate(e,6), api_rightRotate(e,11), api_rightRotate(e,25))
-            local ch = bit32.bxor(bit32.band(e,f), bit32.band(bit32.bnot(e), g))
-            local temp1 = bit32.band((hh + S1 + ch + api_k[i] + w[i]), 0xFFFFFFFF)
-            local S0 = bit32.bxor(api_rightRotate(a,2), api_rightRotate(a,13), api_rightRotate(a,22))
-            local maj = bit32.bxor(bit32.band(a,b), bit32.band(a,c), bit32.band(b,c))
-            local temp2 = bit32.band((S0 + maj), 0xFFFFFFFF)
-            hh = g; g = f; f = e; e = bit32.band((d + temp1), 0xFFFFFFFF)
-            d = c; c = b; b = a; a = bit32.band((temp1 + temp2), 0xFFFFFFFF)
-        end
-        h[1] = bit32.band(h[1] + a, 0xFFFFFFFF)
-        h[2] = bit32.band(h[2] + b, 0xFFFFFFFF)
-        h[3] = bit32.band(h[3] + c, 0xFFFFFFFF)
-        h[4] = bit32.band(h[4] + d, 0xFFFFFFFF)
-        h[5] = bit32.band(h[5] + e, 0xFFFFFFFF)
-        h[6] = bit32.band(h[6] + f, 0xFFFFFFFF)
-        h[7] = bit32.band(h[7] + g, 0xFFFFFFFF)
-        h[8] = bit32.band(h[8] + hh, 0xFFFFFFFF)
-    end
-    local message = password .. salt
-    local msgBytes = api_toBytes(message)
-    local originalBitLength = #message * 8
-    msgBytes[#msgBytes + 1] = 0x80
-    while (#msgBytes % 64) ~= 56 do msgBytes[#msgBytes + 1] = 0x00 end
-    -- Append 8-byte big-endian length: high 4 bytes zero, low 4 bytes from originalBitLength
-    for i = 1, 4 do msgBytes[#msgBytes + 1] = 0 end
-    for i = 3, 0, -1 do
-        msgBytes[#msgBytes + 1] = bit32.band(bit32.rshift(originalBitLength, i * 8), 0xFF)
-    end
-    for i = 1, #msgBytes, 64 do
-        local chunk = {}
-        for j = i, i + 63 do chunk[#chunk + 1] = msgBytes[j] or 0 end
-        compress(chunk)
-    end
-    local hash = ""
-    for i = 1, 8 do hash = hash .. string.format("%08x", h[i]) end
-    if iterations > 1 then return api_ASHA512(hash, salt, iterations - 1) end
-    return hash
-end
-
-function hashPassword(password, customSalt, iterations)
-    local salt = customSalt or ""
-    if salt == "" then
-        math.randomseed(os.time())
-        local chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/"
-        for i = 1, 32 do
-            local idx = math.random(1, #chars)
-            salt = salt .. chars:sub(idx, idx)
-        end
-    end
-    local iters = iterations or 10000
-    local hash = api_ASHA512(password, salt, iters)
-    return hash .. ":" .. salt .. ":" .. tostring(iters)
-end
-
-function verifyPasswordAgainstFullHash(password, fullHash)
-    local storedHash, salt, iters = fullHash:match("([^:]+):([^:]+):(%d+)")
-    if not storedHash or not salt or not iters then return false end
-    local computed = api_ASHA512(password, salt, tonumber(iters))
-    return computed == storedHash
+-- Treasury password verification is server-side (PBKDF2). The CC client no
+-- longer hashes passwords itself; it asks the worker to verify instead.
+function treasuryLogin(key, password)
+    local message = { action = "treasuryLogin", key = key, password = password }
+    local resp = sendRequest(message)
+    if resp == nil then return false end
+    return resp.success
 end
 
 -- Card registry API
@@ -1356,10 +1274,29 @@ function cancelCard(key, id)
     return resp.success, resp.response
 end
 
-function deleteCardRecord(key, id)
-    -- Card deletion is only available through the web admin panel.
-    -- The CC bridge does not expose a delete-card endpoint for security.
-    return false, "Card deletion requires the web admin panel"
+-- Re-validate a card before a sensitive operation (transfer/deposit/withdraw/
+-- purchase). Pass id = nil/"" for password logins (no card). Returns false if
+-- the card was cancelled or the account was frozen server-side mid-session.
+-- Active card tracking for this session. Clients call setCard after a
+-- successful card validation and clearCard on logout/password login. The
+-- transaction/deposit/withdraw functions re-validate this card so a card
+-- cancelled server-side mid-session stops working immediately.
+function setCard(key, id)
+    currentCardKey = key
+    currentCardId = id
+end
+
+function clearCard()
+    currentCardKey = nil
+    currentCardId = nil
+end
+
+function revalidateCard(key, id)
+    if id == nil or id == "" then
+        return true -- password login: frozen state is still enforced server-side
+    end
+    local ok = validateCard(key, id)
+    return ok
 end
 
 function validateCard(key, id)

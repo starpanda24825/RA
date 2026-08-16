@@ -578,19 +578,26 @@
   function renderCardsTable(cards, accountKey) {
     var tbody = document.getElementById('ba-cards-tbody');
     tbody.innerHTML = cards.map(function (c) {
+      var reissue = c.reissue_requested
+        ? '<span class="a-pill a-pill--banker">reissue requested</span>'
+        : '';
       return '<tr>' +
-        '<td style="font-family:var(--font-mono);">' + esc(c.cardId) + '</td>' +
-        '<td><span class="a-pill a-pill--' + (c.status === 'active' ? 'editor' : 'citizen') + '">' + esc(c.status) + '</span></td>' +
+        '<td style="font-family:var(--font-mono);">' + esc(c.card_id) + '</td>' +
+        '<td><span class="a-pill a-pill--' + (c.status === 'active' ? 'editor' : 'citizen') + '">' + esc(c.status) + '</span> ' + reissue + '</td>' +
         '<td>' + esc(c.created_at || '') + '</td>' +
         '<td>' +
-          (c.status === 'active' ? '<button class="a-btn" data-bc-cancel="' + esc(c.cardId) + '">Cancel</button>' : '') +
-          (isAdmin ? '<button class="a-btn danger" data-bc-del="' + esc(c.cardId) + '">Delete</button>' : '') +
+          (c.status === 'active' ? '<button class="a-btn" data-bc-cancel="' + esc(c.card_id) + '">Cancel</button>' : '') +
+          (c.reissue_requested ? '<button class="a-btn" data-bc-reissue="' + esc(c.card_id) + '">Reissue</button>' : '') +
+          (isAdmin ? '<button class="a-btn danger" data-bc-del="' + esc(c.card_id) + '">Delete</button>' : '') +
         '</td>' +
       '</tr>';
     }).join('');
 
     tbody.querySelectorAll('[data-bc-cancel]').forEach(function (btn) {
       btn.addEventListener('click', function () { cancelCard(accountKey, btn.dataset.bcCancel); });
+    });
+    tbody.querySelectorAll('[data-bc-reissue]').forEach(function (btn) {
+      btn.addEventListener('click', function () { issueCard(accountKey); });
     });
     tbody.querySelectorAll('[data-bc-del]').forEach(function (btn) {
       btn.addEventListener('click', function () { deleteCard(accountKey, btn.dataset.bcDel); });

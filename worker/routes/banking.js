@@ -46,6 +46,32 @@ export async function getMe(request, env) {
   return json(result.account);
 }
 
+// ── GET /api/banking/me/cards ─────────────────────────────────
+// Lists the cards linked to the citizen's own banking account, including
+// reissue-request status so lost/cancelled cards can be self-serviced.
+export async function getMyCards(request, env) {
+  const result = await requireLinkedAccount(request, env);
+  if (result.error) return result.error;
+  return json(await store.listBankingCards(env, result.account.key));
+}
+
+// ── POST /api/banking/me/cards/:cardId/report-lost ────────────
+// Citizen reports a card lost: cancels it immediately and requests a reissue
+// that a banker can fulfil in-game.
+export async function reportCardLost(request, env, cardId) {
+  const result = await requireLinkedAccount(request, env);
+  if (result.error) return result.error;
+
+  let body = {};
+  try { body = await request.json(); } catch {}
+
+  const card = await store.reportBankingCardLost(
+    env, result.account.key, cardId, body.reason || 'Reported lost'
+  );
+  if (!card) return json({ error: 'Card not found.' }, { status: 404 });
+  return json({ ok: true, card });
+}
+
 // ── GET /api/banking/me/transactions?limit=50&offset=0 ────────────
 export async function getMyTransactions(request, env) {
   const result = await requireLinkedAccount(request, env);

@@ -175,6 +175,10 @@ export default {
         // ---- Banking: Citizen Portal ----
         if (pathname === '/api/banking/me' && method === 'GET') return await banking.getMe(request, env);
         if (pathname === '/api/banking/me/transactions' && method === 'GET') return await banking.getMyTransactions(request, env);
+        if (pathname === '/api/banking/me/cards' && method === 'GET') return await banking.getMyCards(request, env);
+
+        m = pathname.match(/^\/api\/banking\/me\/cards\/([^/]+)\/report-lost$/);
+        if (m && method === 'POST') return await banking.reportCardLost(request, env, m[1]);
         if (pathname === '/api/banking/me/portfolio' && method === 'GET') return await banking.getMyPortfolio(request, env);
         if (pathname === '/api/banking/transfer' && method === 'POST') return await banking.transfer(request, env);
         if (pathname === '/api/banking/accounts/search' && method === 'GET') return await banking.searchAccounts(request, env);
@@ -387,6 +391,7 @@ export default {
         if (pathname === '/api/banking/cc/set-password' && method === 'POST') return await bankingCC.ccSetPassword(request, env);
         if (pathname === '/api/banking/cc/change-password' && method === 'POST') return await bankingCC.ccChangePassword(request, env);
         if (pathname === '/api/banking/cc/login' && method === 'POST') return await bankingCC.ccLogin(request, env);
+        if (pathname === '/api/banking/cc/treasury-login' && method === 'POST') return await bankingCC.ccTreasuryLogin(request, env);
         if (pathname === '/api/banking/cc/reset-password' && method === 'POST') return await bankingCC.ccResetPassword(request, env);
         if (pathname === '/api/banking/cc/freeze-account' && method === 'POST') return await bankingCC.ccFreezeAccount(request, env);
 

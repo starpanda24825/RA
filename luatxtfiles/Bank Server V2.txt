@@ -1880,6 +1880,7 @@ function main()
 	end
 end
 
+end
 while true do
     local ok, err = pcall(function()
         parallel.waitForAll(listen, main)

@@ -118,6 +118,7 @@ while true do
     end
 end
 
+end
 while true do
     local ok, err = pcall(main)
     if not ok then

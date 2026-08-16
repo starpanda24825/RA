@@ -92,10 +92,7 @@ repeat
     term.setTextColor(colors.yellow)
     term.setCursorPos((scrW/2-(string.len(title1)+string.len(title2))/2)+5, scrH/2+1)
     pass = bankapi.readPassword(64)
-until (
-    (tempClientData[assignedTreasuryKey] ~= nil and tostring(tempClientData[assignedTreasuryKey].password or ""):match("^[^:]+:[^:]+:%d+$") ~= nil and bankapi.verifyPasswordAgainstFullHash(pass, tempClientData[assignedTreasuryKey].password))
-    or (tempClientData[assignedTreasuryKey] ~= nil and pass == tostring(tempClientData[assignedTreasuryKey].password or ""))
-)
+until (bankapi.treasuryLogin(assignedTreasuryKey, pass))
 
 while true do -- Second while to allow the use of breaks as continues
 while true do
@@ -503,7 +500,7 @@ while true do
 		end
 
 	elseif (command == "managecards") then
-		-- Manage cards: list, cancel, delete (Admin Terminal only)
+		-- Manage cards: list, cancel, reissue (Admin Terminal only)
 		local tempData = bankapi.getClientData()
 		local internal = {}
 		-- Include personal accounts under this Treasury, the Treasury itself, and companies whose owner belongs to this Treasury
@@ -530,7 +527,9 @@ while true do
 		while true do
 			local options = {}
 			for i, c in ipairs(cards) do
-				options[#options+1] = { option = tostring(c.id), text = "ID "..tostring(c.id).." | "..tostring(c.status).." | "..tostring(c.date) }
+				local reissueNote = ""
+			if c.reissue then reissueNote = " | REISSUE REQUESTED" end
+			options[#options+1] = { option = tostring(c.id), text = "ID "..tostring(c.id).." | "..tostring(c.status)..reissueNote.." | "..tostring(c.date) }
 			end
 			options[#options+1] = { option = "back", text = "Back" }
 			local choice = bankapi.optionMenu("Cards for "..tostring(tempData[account].name), options, 2, 40)
@@ -541,15 +540,31 @@ while true do
 			if selected == nil then bankapi.errorScreen("Card not found"); break end
 			local action = bankapi.optionMenu("Card "..tostring(selected.id), {
 				{ option = "cancel", text = "Cancel card" },
-				{ option = "delete", text = "Delete record" },
+				{ option = "reissue", text = "Issue replacement card" },
 				{ option = "back", text = "Back" }
 			}, 2, 36)
 			if action == "cancel" then
 				local aok, aresp = bankapi.cancelCard(account, selected.id)
 				bankapi.responseScreen(aok, aresp)
-			elseif action == "delete" then
-				local dok, dresp = bankapi.deleteCardRecord(account, selected.id)
-				bankapi.responseScreen(dok, dresp)
+			elseif action == "reissue" then
+				if (fs.exists("disk")) then
+					local rok, rid = bankapi.registerCard(account)
+					if rok then
+						local newId = rid
+						local f = fs.open("disk/fiducia.txt", "w")
+						f.write(tostring(account).."|"..tostring(newId))
+						f.close()
+						local drive = peripheral.find("drive")
+						if drive and drive.setDiskLabel then
+							pcall(drive.setDiskLabel, "Fiducia | "..tostring(tempData[account].name))
+						end
+						bankapi.successScreen("Replacement card issued: "..tostring(newId))
+					else
+						bankapi.errorScreen("Reissue failed: "..tostring(rid))
+					end
+				else
+					bankapi.errorScreen("Insert a blank disk to write the replacement card")
+				end
 			end
 			-- refresh list
 			local rok, rcards = bankapi.listCards(account)
@@ -567,13 +582,7 @@ while true do
 		if (selected == nil) then break end
 		local tpass = bankapi.inputTextScreen(steps, 2, 64)
 		if (tpass == nil or tpass == "") then break end
-		local stored = tostring((temp[selected] or {}).password or "")
-		local ok = false
-		if stored:match("^[^:]+:[^:]+:%d+$") ~= nil then
-			ok = bankapi.verifyPasswordAgainstFullHash(tpass, stored)
-		else
-			ok = (tpass == stored)
-		end
+		local ok = bankapi.treasuryLogin(selected, tpass)
 		if not ok then bankapi.errorScreen("Incorrect Treasury password"); break end
 		assignedTreasuryKey = selected
 		local tfw = fs.open("terminal_treasury.txt", "w")
@@ -623,6 +632,7 @@ end
 
 end
 
+end
 while true do
     local ok, err = pcall(main)
     if not ok then

@@ -1,0 +1,97 @@
+-- Fiducia Installer Disk Writer
+-- Creates a Fiducia Installer Disk from a blank floppy disk.
+-- Run this program once on a computer with a disk drive:
+--    wget run https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Installer%20Disk%20Writer.txt
+-- It writes the Fiducia installer (as disk/startup.lua) plus every program
+-- file onto the disk. Insert the finished disk into any computer's disk drive
+-- (with shell.allow_disk_startup enabled) and the installer boots so the user
+-- can pick which program to install.
+
+os.pullEvent = os.pullEventRaw
+
+local BASE = "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/"
+
+local FILES = {
+    { url = "Installer%20Disk.txt",           name = "startup.lua" },
+    { url = "Bank%20API%20V2.txt",            name = "Bank API V2.txt" },
+    { url = "Clerk%20Turtle%20V2.txt",        name = "Clerk Turtle V2.txt" },
+    { url = "Clerk%20Autosetup%20V2.txt",     name = "Clerk Autosetup V2.txt" },
+    { url = "Clerk%20Computer%20V2.txt",      name = "Clerk Computer V2.txt" },
+    { url = "ATM%20Assistant%20V2.txt",       name = "ATM Assistant V2.txt" },
+    { url = "ATM%20Autosetup%20V2.txt",       name = "ATM Autosetup V2.txt" },
+    { url = "ATM%20Terminal%20V2.txt",        name = "ATM Terminal V2.txt" },
+    { url = "Bank%20Server%20V2.txt",         name = "Bank Server V2.txt" },
+    { url = "Admin%20Terminal%20V2.txt",      name = "Admin Terminal V2.txt" },
+    { url = "Exchange%20Terminal%20V1.txt",   name = "Exchange Terminal V1.txt" },
+    { url = "Fiduciapp%20V1.txt",             name = "Fiduciapp V1.txt" },
+}
+
+local function waitForDisk(drive)
+    if not drive.isDiskPresent() then
+        print("Please insert a blank floppy disk into the disk drive.")
+        while not drive.isDiskPresent() do
+            os.pullEvent("disk")
+        end
+    end
+end
+
+local function main()
+    term.clear()
+    term.setCursorPos(1, 1)
+    print("=== Fiducia Installer Disk Writer ===")
+    print()
+
+    local drive = peripheral.find("drive")
+    if drive == nil then
+        print("No disk drive found. Attach a disk drive and run again.")
+        return
+    end
+
+    waitForDisk(drive)
+
+    print("WARNING: This will OVERWRITE the inserted disk with the")
+    print("Fiducia installer and all of its program files.")
+    print()
+    print("Press [y] to continue, or any other key to cancel.")
+    local event, key = os.pullEvent("key")
+    if keys.getName(key) ~= "y" then
+        print("Cancelled.")
+        return
+    end
+
+    print()
+    print("Writing installer disk...")
+    for i, file in ipairs(FILES) do
+        print("  [" .. i .. "/" .. #FILES .. "] " .. file.name .. " ...")
+        local target = "disk/" .. file.name
+        shell.run("wget", BASE .. file.url, target)
+        if not fs.exists(target) then
+            print("  FAILED to download: " .. file.url)
+            print("Check the internet connection and try again.")
+            return
+        end
+    end
+
+    pcall(drive.setDiskLabel, "Fiducia Installer")
+
+    print()
+    print("Done! Installer disk created.")
+    print()
+    print("Insert this disk into any computer's disk drive with")
+    print("shell.allow_disk_startup enabled to run the installer.")
+    print("Ejecting disk...")
+    drive.ejectDisk()
+    sleep(1)
+    print("Disk ejected. Use it on any computer now.")
+end
+
+local ok, err = pcall(main)
+if not ok then
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.red)
+    term.clear()
+    term.setCursorPos(1, 1)
+    print("Writer error: " .. tostring(err))
+    print("Press any key to exit.")
+    os.pullEvent("key")
+end

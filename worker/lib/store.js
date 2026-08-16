@@ -777,6 +777,12 @@ export async function insertBankingCard(env, { cardId, accountKey, issuedBy = ''
   await env.DB.prepare(
     'INSERT INTO banking_cards (card_id, account_key, status, issued_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
   ).bind(cardId, accountKey, 'active', issuedBy, now, now).run();
+
+  // Issuing a new card fulfils any pending reissue requests for this account.
+  await env.DB.prepare(
+    "UPDATE banking_cards SET reissue_requested = 0, updated_at = ? WHERE account_key = ? AND reissue_requested = 1"
+  ).bind(now, accountKey).run();
+
   return { cardId, accountKey, status: 'active', issuedBy, created_at: now };
 }
 
@@ -801,6 +807,19 @@ export async function deleteBankingCard(env, cardId) {
 
 export async function deleteBankingCardById(env, id) {
   await env.DB.prepare('DELETE FROM banking_cards WHERE id = ?').bind(Number(id)).run();
+}
+
+export async function reportBankingCardLost(env, accountKey, cardId, reason = '') {
+  const card = await env.DB.prepare(
+    'SELECT * FROM banking_cards WHERE card_id = ? AND account_key = ?'
+  ).bind(cardId, accountKey).first();
+  if (!card) return null;
+  const now = nowIso();
+  await env.DB.prepare(
+    `UPDATE banking_cards SET status = 'canceled', reissue_requested = 1, reissue_reason = ?, reissue_requested_at = ?, updated_at = ?
+     WHERE card_id = ?`
+  ).bind(String(reason || 'Reported lost').slice(0, 200), now, now, cardId).run();
+  return findBankingCard(env, cardId);
 }
 
 export async function validateBankingCard(env, accountKey, cardId) {
