@@ -12,6 +12,7 @@ local currentAccount = 0
 local STR_WELCOME = "Welcome!"
 local STR_UNREGISTERED = {"Please register","this device with","a Fiducia","employee"}
 local STR_LOGIN = "Log In"
+local STR_LOGIN_PASSWORD = "Log in with password"
 local STR_INFO = "What is Fiducia"
 local STR_INFO_SCREEN = {
     "Welcome to Fiducia!",
@@ -89,14 +90,21 @@ while true do
     if (tempClientData[currentAccount] == nil) then -- Guest screen
         command = bankapi.optionMenu(STR_WELCOME, {
             [1] = {option = "login", text = STR_LOGIN},
-            [2] = {option = "info", text = STR_INFO},
-            [3] = {option = "createaccount", text = STR_CREATE_ACCOUNT},
+            [2] = {option = "passwordlogin", text = STR_LOGIN_PASSWORD},
+            [3] = {option = "info", text = STR_INFO},
+            [4] = {option = "createaccount", text = STR_CREATE_ACCOUNT},
         })
  
         if (command == "login") then
             local accept = bankapi.confirmScreen(STR_UNREGISTERED)
             if (accept) then
                 os.reboot()
+            end
+        elseif (command == "passwordlogin") then
+            local accKey, accName = bankapi.loginScreen()
+            if (accKey ~= nil) then
+                currentAccount = accKey
+                bankapi.successScreen("Welcome, "..tostring(accName or accKey).."!")
             end
         elseif (command == "info") then
             bankapi.textScreen(STR_INFO_SCREEN)

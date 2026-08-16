@@ -272,6 +272,39 @@ export async function ccChangePassword(request, env) {
   return ccJson(true, 'Update successful');
 }
 
+// POST /api/banking/cc/login
+// Verifies an account's password (the same password set when the account was
+// created/linked on the website) and returns the account summary. Lets CC
+// terminals log in without a physical card.
+export async function ccLogin(request, env) {
+  const auth = await authenticateCC(request, env);
+  if (auth.error) return auth.error;
+  let body; try { body = await request.json(); } catch { return ccJson(false, 'Invalid body.'); }
+  const identifier = String(body.identifier || body.key || '').trim();
+  const password = String(body.password || '');
+  if (!identifier || !password) return ccJson(false, 'identifier and password required.');
+
+  let account = await store.findBankingAccountByKeyWithHash(env, identifier);
+  if (!account) {
+    account = await env.DB.prepare(
+      'SELECT * FROM banking_accounts WHERE name = ? COLLATE NOCASE LIMIT 1'
+    ).bind(identifier).first();
+  }
+  if (!account) return ccJson(false, 'Invalid account or password.');
+  if (account.type === 'treasury') return ccJson(false, 'Treasury accounts cannot log in here.');
+  if (account.frozen) return ccJson(false, 'Account is frozen.');
+  if (!account.password_hash) return ccJson(false, 'No password set for this account.');
+  const ok = await compare(password, account.password_hash);
+  if (!ok) return ccJson(false, 'Invalid account or password.');
+  return ccJson(true, {
+    key: account.key,
+    name: account.name,
+    type: account.type,
+    color: account.color,
+    balance: account.balance,
+  });
+}
+
 // POST /api/banking/cc/reset-password
 export async function ccResetPassword(request, env) {
   const auth = await authenticateCC(request, env, 'admin');
@@ -293,55 +326,4 @@ export async function ccFreezeAccount(request, env) {
   if (auth.token.treasury_key && account.treasury_key !== auth.token.treasury_key) return ccJson(false, 'Account outside terminal treasury scope.');
   await store.updateBankingAccount(env, String(body.key), { frozen: body.frozen ? 1 : 0 });
   return ccJson(true, `Account ${body.frozen ? 'frozen' : 'unfrozen'}`);
-}
-
-// POST /api/banking/cc/list-shareholders
-export async function ccListShareholders(request, env) {
-  const auth = await authenticateCC(request, env);
-  if (auth.error) return auth.error;
-  let body; try { body = await request.json(); } catch { return ccJson(false, 'Invalid body.'); }
-  if (!body.company) return ccJson(false, 'company required.');
-  const account = await store.findBankingAccountByKey(env, String(body.company));
-  if (!account || account.type !== 'company') return ccJson(false, 'Invalid company account.');
-  return ccJson(true, await store.listShareholders(env, String(body.company)));
-}
-
-// POST /api/banking/cc/issue-shares
-export async function ccIssueShares(request, env) {
-  const auth = await authenticateCC(request, env, 'admin');
-  if (auth.error) return auth.error;
-  let body; try { body = await request.json(); } catch { return ccJson(false, 'Invalid body.'); }
-  if (!body.issuer || !body.company || !body.buyer || !body.count) return ccJson(false, 'issuer, company, buyer, count required.');
-  try {
-    const r = await store.atomicIssueShares(env, { issuerKey: String(body.issuer), companyKey: String(body.company), buyerKey: String(body.buyer), shareCount: Number(body.count) });
-    return ccJson(true, r);
-  } catch (err) { return ccJson(false, err.message || 'Failed to issue shares.'); }
-}
-
-// POST /api/banking/cc/get-portfolio
-export async function ccGetPortfolio(request, env) {
-  const auth = await authenticateCC(request, env);
-  if (auth.error) return auth.error;
-  let body; try { body = await request.json(); } catch { return ccJson(false, 'Invalid body.'); }
-  if (!body.account) return ccJson(false, 'account required.');
-  const { results } = await env.DB.prepare(
-    `SELECT bs.company_key, bs.shares, ba.name, ba.balance, ba.shares AS total_shares
-     FROM banking_shareholders bs JOIN banking_accounts ba ON ba.key = bs.company_key
-     WHERE bs.holder_key = ? AND bs.shares > 0`
-  ).bind(String(body.account)).all();
-  return ccJson(true, results.map(h => ({ company: h.company_key, name: h.name, shares: h.shares, estimated_value: h.total_shares > 0 ? Math.round((h.balance / h.total_shares) * h.shares * 100) / 100 : 0 })));
-}
-
-// POST /api/banking/cc/top-companies
-export async function ccTopCompanies(request, env) {
-  const auth = await authenticateCC(request, env);
-  if (auth.error) return auth.error;
-  return ccJson(true, await store.getTopCompanies(env, 10));
-}
-
-// POST /api/banking/cc/apply-taxes
-export async function ccApplyTaxes(request, env) {
-  const auth = await authenticateCC(request, env, 'admin');
-  if (auth.error) return auth.error;
-  return ccJson(true, await store.applyTaxes(env, `cc:admin:${auth.token.id}`));
 }

@@ -186,9 +186,9 @@ settings.set("shell.allow_disk_startup", false)
 settings.save()
 print("Installing Clerk Turtle software...")
 fs.delete("bankapi.lua")
-shell.run("pastebin get mWQN0120 bankapi.lua")
+shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Bank%20API%20V2.txt", "bankapi.lua")
 fs.delete("startup.lua")
-shell.run("pastebin get KD8K55DM startup.lua")
+shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Clerk%20Turtle%20V2.txt", "startup.lua")
 if fs.exists("disk/Clerk Turtle V2.txt") then
     fs.copy("disk/Clerk Turtle V2.txt", "startup.lua")
 end

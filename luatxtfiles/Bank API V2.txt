@@ -146,18 +146,13 @@ local ACTION_ENDPOINTS = {
     ["new"]            = "/api/banking/cc/new-account",
     newCompany         = "/api/banking/cc/new-company",
     ["delete"]         = "/api/banking/cc/delete-account",
-    setPassword        = "/api/banking/cc/set-password",
-    changePassword     = "/api/banking/cc/change-password",
+    login              = "/api/banking/cc/login",
     resetPassword      = "/api/banking/cc/reset-password",
     validateCard       = "/api/banking/cc/validate-card",
     registerCard       = "/api/banking/cc/register-card",
     listCards          = "/api/banking/cc/list-cards",
     cancelCard         = "/api/banking/cc/cancel-card",
     freezeAccount      = "/api/banking/cc/freeze-account",
-    listShareholders   = "/api/banking/cc/list-shareholders",
-    issueShares        = "/api/banking/cc/issue-shares",
-    getPortfolio       = "/api/banking/cc/get-portfolio",
-    topCompanies       = "/api/banking/cc/top-companies",
 }
 
 function sendRequest(message)
@@ -402,16 +397,6 @@ function deleteAccount(key)
 	}
 	local resp = sendRequest(message)
 	return resp.success, resp.response
-end
-
-function setPassword(key, password)
-    local message = {
-        action = "setPassword",
-        key = key,
-        password = password
-    }
-    local resp = sendRequest(message)
-    return resp.success, resp.response
 end
 
 function getTransactionLog(key)
@@ -1191,15 +1176,49 @@ function textScreen(message)
 	safePullEvent("mouse_click")
 end
 
-function changePassword(key, current, new)
+function login(identifier, password)
     local message = {
-        action = "changePassword",
-        key = key,
-        current = current,
-        new = new
+        action = "login",
+        identifier = identifier,
+        password = password
     }
     local resp = sendRequest(message)
     return resp.success, resp.response
+end
+
+-- In-game password login screen. Accepts an account key or the account's
+-- name (username), verifies the password server-side, and returns the
+-- account key + name on success (nil on failure/cancel).
+function loginScreen()
+    drawBackground()
+    local scrW, scrH = term.getSize()
+    term.setTextColor(colors.white)
+    term.setCursorPos(scrW/2 - string.len("Log in with password")/2 + 1, 2)
+    term.write("Log in with password")
+
+    term.setTextColor(colors.white)
+    term.setCursorPos(3, 4)
+    term.write("Account key or username:")
+    term.setCursorPos(3, 5)
+    term.setTextColor(colors.yellow)
+    local identifier = tostring(read() or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if identifier == "" then return nil end
+
+    term.setTextColor(colors.white)
+    term.setCursorPos(3, 7)
+    term.write("Password:")
+    term.setCursorPos(3, 8)
+    term.setTextColor(colors.yellow)
+    local password = readPassword(64)
+    if password == "" then return nil end
+
+    local ok, resp = login(identifier, password)
+    if ok then
+        return resp.key, resp.name
+    else
+        errorScreen(tostring(resp))
+        return nil
+    end
 end
 
 function resetPassword(key)
@@ -1315,501 +1334,6 @@ function verifyPasswordAgainstFullHash(password, fullHash)
     return computed == storedHash
 end
 
--- Show company details in the same style as transactionInfoScreen
-function companyInfoScreen(key)
-    local tempClientData = getClientData()
-    local acct = tempClientData[key]
-    if acct == nil then
-        errorScreen("Invalid company")
-        return
-    end
-    drawBackground()
-    term.setCursorPos(1,2)
-    term.setTextColor(colors.white)
-    print("Company: "..tostring(acct.name))
-    local ownerName = "- not assigned -"
-    if acct.owner ~= nil and tempClientData[acct.owner] ~= nil then
-        ownerName = tempClientData[acct.owner].name
-    elseif acct.owner ~= nil and tostring(acct.owner) ~= "" then
-        ownerName = "- deleted -"
-    end
-    print("Owner: "..ownerName)
-    print("Balance: $"..tostring(acct.balance))
-    local sharesText = tonumber(acct.shares or 0) or 0
-    print("Shares: "..tostring(sharesText))
-
-    drawBackButton()
-    os.pullEvent("mouse_click")
-end
-
--- Paginated list of registered companies, styled like transactionLogScreen
-function companyListScreen(viewerKey)
-    local tempClientData = getClientData()
-    local companies = {}
-    for k, v in pairs(tempClientData) do
-        if tostring(v.type or "personal") == "company" then
-            companies[#companies+1] = { key = k, name = v.name or k, owner = v.owner, balance = tonumber(v.balance) or 0 }
-        end
-    end
-
-    if (#companies == 0) then
-        errorScreen("There are no registered companies")
-        return nil
-    end
-
-    table.sort(companies, function(a,b) return tostring(a.name) < tostring(b.name) end)
-
-    local scrW, scrH = term.getSize()
-    local y = 2
-    local floor = 1
-    local x = 1
-    local w = scrW
-
-    if (pocket) then floor = 2 end
-
-    local first = 0
-    local rowHeight = 2
-    local max = math.floor((scrH - floor - rowHeight) / rowHeight)
-
-    local scrollButtonY = scrH - 1
-    local scrollButtonCenterX = math.floor(scrW/2) + 10
-    if (pocket) then
-        scrollButtonY = scrH - 3
-        scrollButtonCenterX = math.floor(scrW/2) + 1
-    end
-
-    while true do
-        drawBackground()
-
-        local prevPage = drawButton(buttonColor, secondaryButtonColor, buttonTextColor, scrollButtonCenterX-13, scrollButtonY, 7, string.char(27))
-        if (first <= 0) then
-    drawButton(colors.lightGray, colors.gray, buttonTextColor, scrollButtonCenterX-13, scrollButtonY, 7, string.char(27))
-        end
-
-        local total = 0
-        local i = 0
-        local buttons = {}
-        for idx, c in ipairs(companies) do
-            if (total >= first and total < first+max) then
-                local order = idx
-                local text = "#"..order.." "..c.name
-
-                -- box
-                if (i > 0) then
-                    term.setCursorPos(1, y+i-1)
-                    term.setBackgroundColor(colors.white)
-                    term.setTextColor(colors.lightGray)
-                    print(string.rep(string.char(140), scrW))
-                    term.setBackgroundColor(colors.white)
-                    print(string.rep(" ", scrW))
-                else
-                    term.setCursorPos(1, y+i)
-                    term.setBackgroundColor(colors.white)
-                    print(string.rep(" ", scrW))
-                end
-
-                -- content
-                term.setCursorPos(1, y+i)
-                buttons[y+i] = c.key
-                term.setTextColor(colors.lightGray)
-                term.write("#"..order.." ")
-                term.setTextColor(colors.black)
-                term.write(c.name.." ")
-
-                -- balance column
-                local balText = "$"..tostring(c.balance)
-                if (pocket) then
-                    term.setCursorPos(scrW*0.5, y+i)
-                else
-                    term.setCursorPos(scrW*0.3, y+i)
-                end
-                term.setTextColor(colors.black)
-                term.write(balText)
-
-                -- owner column (right side)
-                local ownerName = "- not assigned -"
-                if c.owner ~= nil and tempClientData[c.owner] ~= nil then
-                    ownerName = tempClientData[c.owner].name
-                elseif c.owner ~= nil and tostring(c.owner) ~= "" then
-                    ownerName = "- deleted -"
-                end
-                local ownerText = ownerName
-                term.setTextColor(colors.lightGray)
-                term.setCursorPos(scrW - string.len(ownerText), y+i)
-                term.write(" "..ownerText)
-
-                i = i + rowHeight
-            end
-            total = total + 1
-        end
-
-        local nextPage = drawButton(buttonColor, secondaryButtonColor, buttonTextColor, scrollButtonCenterX+5, scrollButtonY, 7, string.char(26))
-        if (first+max >= total) then
-    drawButton(colors.lightGray, colors.gray, buttonTextColor, scrollButtonCenterX+5, scrollButtonY, 7, string.char(26))
-        end
-
-        -- page indicator
-        local pages = math.max(1, math.ceil(total/max))
-        local pageText = tostring((first/max)+1).."/"..pages
-        term.setCursorPos(scrollButtonCenterX-string.len(pageText)/2, scrollButtonY)
-        term.setBackgroundColor(backgroundColor)
-        term.setTextColor(colors.orange)
-        term.write(pageText)
-
-        local backButton = drawBackButton()
-
-        term.setCursorPos(scrW/2 - string.len("Click Company for more Info")/2 + 1, 1)
-        term.setBackgroundColor(backgroundColor)
-        term.setTextColor(grayedOutColor)
-        term.write("Click Company for more Info")
-
-        local eventData = {os.pullEvent()}
-        local event = eventData[1]
-        if event == "mouse_click" then
-            local cx = eventData[3]
-            local cy = eventData[4]
-            if (mouseInButton(prevPage, cx, cy)) then
-                if (first > 0) then first = first - max end
-            end
-            if (mouseInButton(nextPage, cx, cy)) then
-                if (first + max < total) then first = first + max end
-            end
-            if (cx >= x and cx <= x+w and cy >= y) then
-                if buttons[cy] ~= nil then
-                    companyMarketScreen(buttons[cy], viewerKey)
-                end
-            end
-            if (mouseInButton(backButton, cx, cy)) then
-                return nil
-            end
-        elseif event == "mouse_scroll" then
-            local scroll = eventData[2]
-            if (scroll < 0) then
-                if (first > 0) then first = first - max end
-            else
-                if (first + max < total) then first = first + max end
-            end
-        end
-    end
-end
-
--- Paginated list of companies owned by a specific account
-function companyOwnedListScreen(ownerKey)
-    local tempClientData = getClientData()
-    local companies = {}
-    for k, v in pairs(tempClientData) do
-        if tostring(v.type or "personal") == "company" and tostring(v.owner or "") == tostring(ownerKey or "") then
-            companies[#companies+1] = { key = k, name = v.name or k, owner = v.owner, balance = tonumber(v.balance) or 0 }
-        end
-    end
-
-    if (#companies == 0) then
-        errorScreen("You do not own any companies")
-        return nil
-    end
-
-    table.sort(companies, function(a,b) return tostring(a.name) < tostring(b.name) end)
-
-    local scrW, scrH = term.getSize()
-    local y = 2
-    local floor = 1
-    local x = 1
-    local w = scrW
-
-    if (pocket) then floor = 2 end
-
-    local first = 0
-    local rowHeight = 2
-    local max = math.floor((scrH - floor - rowHeight) / rowHeight)
-
-    local scrollButtonY = scrH - 1
-    local scrollButtonCenterX = math.floor(scrW/2) + 10
-    if (pocket) then
-        scrollButtonY = scrH - 3
-        scrollButtonCenterX = math.floor(scrW/2) + 1
-    end
-
-    while true do
-        drawBackground()
-
-        local prevPage = drawButton(buttonColor, secondaryButtonColor, buttonTextColor, scrollButtonCenterX-13, scrollButtonY, 7, string.char(27))
-        if (first <= 0) then
-    drawButton(colors.lightGray, colors.gray, buttonTextColor, scrollButtonCenterX-13, scrollButtonY, 7, string.char(27))
-        end
-
-        local total = 0
-        local i = 0
-        local buttons = {}
-        for idx, c in ipairs(companies) do
-            if (total >= first and total < first+max) then
-                local order = idx
-                local text = "#"..order.." "..c.name
-
-                -- box
-                if (i > 0) then
-                    term.setCursorPos(1, y+i-1)
-                    term.setBackgroundColor(colors.white)
-                    term.setTextColor(colors.lightGray)
-                    print(string.rep(string.char(140), scrW))
-                    term.setBackgroundColor(colors.white)
-                    print(string.rep(" ", scrW))
-                else
-                    term.setCursorPos(1, y+i)
-                    term.setBackgroundColor(colors.white)
-                    print(string.rep(" ", scrW))
-                end
-
-                -- content
-                term.setCursorPos(1, y+i)
-                buttons[y+i] = c.key
-                term.setTextColor(colors.lightGray)
-                term.write("#"..order.." ")
-                term.setTextColor(colors.black)
-                term.write(c.name.." ")
-
-                -- balance column
-                local balText = "$"..tostring(c.balance)
-                if (pocket) then
-                    term.setCursorPos(scrW*0.5, y+i)
-                else
-                    term.setCursorPos(scrW*0.3, y+i)
-                end
-                term.setTextColor(colors.black)
-                term.write(balText)
-
-                -- owner column (right side)
-                local ownerName = "- not assigned -"
-                if c.owner ~= nil and tempClientData[c.owner] ~= nil then
-                    ownerName = tempClientData[c.owner].name
-                elseif c.owner ~= nil and tostring(c.owner) ~= "" then
-                    ownerName = "- deleted -"
-                end
-                local ownerText = ownerName
-                term.setTextColor(colors.lightGray)
-                term.setCursorPos(scrW - string.len(ownerText), y+i)
-                term.write(" "..ownerText)
-
-                i = i + rowHeight
-            end
-            total = total + 1
-        end
-
-        local nextPage = drawButton(buttonColor, secondaryButtonColor, buttonTextColor, scrollButtonCenterX+5, scrollButtonY, 7, string.char(26))
-        if (first+max >= total) then
-    drawButton(colors.lightGray, colors.gray, buttonTextColor, scrollButtonCenterX+5, scrollButtonY, 7, string.char(26))
-        end
-
-        -- page indicator
-        local pages = math.max(1, math.ceil(total/max))
-        local pageText = tostring((first/max)+1).."/"..pages
-        term.setCursorPos(scrollButtonCenterX-string.len(pageText)/2, scrollButtonY)
-        term.setBackgroundColor(backgroundColor)
-        term.setTextColor(colors.orange)
-        term.write(pageText)
-
-        local backButton = drawBackButton()
-
-        term.setCursorPos(scrW/2 - string.len("Click Company for more Info")/2 + 1, 1)
-        term.setBackgroundColor(backgroundColor)
-        term.setTextColor(grayedOutColor)
-        term.write("Click Company for more Info")
-
-        local eventData = {os.pullEvent()}
-        local event = eventData[1]
-        if event == "mouse_click" then
-            local cx = eventData[3]
-            local cy = eventData[4]
-            if (mouseInButton(prevPage, cx, cy)) then
-                if (first > 0) then first = first - max end
-            end
-            if (mouseInButton(nextPage, cx, cy)) then
-                if (first + max < total) then first = first + max end
-            end
-            if (cx >= x and cx <= x+w and cy >= y) then
-                if buttons[cy] ~= nil then
-                    companyMarketScreen(buttons[cy])
-                end
-            end
-            if (mouseInButton(backButton, cx, cy)) then
-                return nil
-            end
-        elseif event == "mouse_scroll" then
-            local scroll = eventData[2]
-            if (scroll < 0) then
-                if (first > 0) then first = first - max end
-            else
-                if (first + max < total) then first = first + max end
-            end
-        end
-    end
-end
-
--- Value/Price helpers (currently value = balance)
-function estimateCompanyValue(key)
-    local tempClientData = getClientData()
-    local acct = tempClientData[key]
-    if acct == nil then return 0 end
-    return tonumber(acct.balance or 0) or 0
-end
-
-function estimateSharePrice(key)
-    local tempClientData = getClientData()
-    local acct = tempClientData[key]
-    if acct == nil then return 0 end
-    local value = estimateCompanyValue(key)
-    local shares = tonumber(acct.shares or 0) or 0
-    if shares <= 0 then return 0 end
-    return math.floor((value / shares) * 100 + 0.5) / 100
-end
-
--- Special market page for company details with value and share price
-function companyMarketScreen(key, viewerKey)
-    local tempClientData = getClientData()
-    local acct = tempClientData[key]
-    if acct == nil then
-        errorScreen("Invalid company")
-        return
-    end
-    drawBackground()
-    term.setCursorPos(1,2)
-    term.setTextColor(colors.white)
-    print("Company: "..tostring(acct.name))
-    local ownerName = "- not assigned -"
-    if acct.owner ~= nil and tempClientData[acct.owner] ~= nil then
-        ownerName = tempClientData[acct.owner].name
-    elseif acct.owner ~= nil and tostring(acct.owner) ~= "" then
-        ownerName = "- deleted -"
-    end
-    print("Owner: "..ownerName)
-    print("Balance: $"..tostring(acct.balance))
-    local sharesText = tonumber(acct.shares or 0) or 0
-    print("Shares: "..tostring(sharesText))
-    local value = estimateCompanyValue(key)
-    local price = estimateSharePrice(key)
-    print("Estimated Value: $"..tostring(value))
-    print("Estimated Share Price: $"..tostring(price))
-
-    -- Buttons: View Ownership (always), Issue Shares (owner only)
-    local scrW, scrH = term.getSize()
-    local bx = scrW/2 - 20
-    local by = scrH - 5
-    local viewBtn = drawButton(buttonColor, secondaryButtonColor, buttonTextColor, bx, by, 20, "View Ownership")
-    local issueBtn = nil
-    local isOwner = (viewerKey ~= nil and tostring(acct.owner or "") == tostring(viewerKey or ""))
-    if isOwner then
-        issueBtn = drawButton(buttonColor, secondaryButtonColor, buttonTextColor, bx + 22, by, 20, "Issue Shares")
-    else
-        -- Render disabled Issue button
-        drawButton(colors.lightGray, colors.gray, buttonTextColor, bx + 22, by, 20, "Issue Shares")
-    end
-    local backButton = drawBackButton()
-
-    while true do
-        local event, button, cx, cy = safePullEvent("mouse_click")
-        if mouseInButton(backButton, cx, cy) then
-            return nil
-        elseif mouseInButton(viewBtn, cx, cy) then
-            showShareholdersScreen(key)
-            drawBackground()
-            -- redraw summary and buttons
-            term.setCursorPos(1,2)
-            term.setTextColor(colors.white)
-            print("Company: "..tostring(acct.name))
-            print("Owner: "..ownerName)
-            print("Balance: $"..tostring(acct.balance))
-            print("Shares: "..tostring(sharesText))
-            print("Estimated Value: $"..tostring(value))
-            print("Estimated Share Price: $"..tostring(price))
-            viewBtn = drawButton(buttonColor, secondaryButtonColor, buttonTextColor, bx, by, 20, "View Ownership")
-            if isOwner then
-                issueBtn = drawButton(buttonColor, secondaryButtonColor, buttonTextColor, bx + 22, by, 20, "Issue Shares")
-            else
-                drawButton(colors.lightGray, colors.gray, buttonTextColor, bx + 22, by, 20, "Issue Shares")
-            end
-            backButton = drawBackButton()
-        elseif isOwner and issueBtn ~= nil and mouseInButton(issueBtn, cx, cy) then
-            issueSharesFlow(key, viewerKey)
-            -- refresh client data to reflect changes
-            tempClientData = getClientData()
-            acct = tempClientData[key]
-            sharesText = tonumber(acct.shares or 0) or 0
-            value = estimateCompanyValue(key)
-            price = estimateSharePrice(key)
-            drawBackground()
-            term.setCursorPos(1,2)
-            term.setTextColor(colors.white)
-            print("Company: "..tostring(acct.name))
-            print("Owner: "..ownerName)
-            print("Balance: $"..tostring(acct.balance))
-            print("Shares: "..tostring(sharesText))
-            print("Estimated Value: $"..tostring(value))
-            print("Estimated Share Price: $"..tostring(price))
-            viewBtn = drawButton(buttonColor, secondaryButtonColor, buttonTextColor, bx, by, 20, "View Ownership")
-            issueBtn = drawButton(buttonColor, secondaryButtonColor, buttonTextColor, bx + 22, by, 20, "Issue Shares")
-            backButton = drawBackButton()
-        end
-    end
-end
-
-function showShareholdersScreen(companyKey)
-    local ok, list = listShareholders(companyKey)
-    if not ok then
-        errorScreen(tostring(list))
-        return
-    end
-    drawBackground()
-    local scrW, scrH = term.getSize()
-    term.setCursorPos(1,2)
-    term.setTextColor(specialTextColor)
-    print("Shareholders")
-    term.setTextColor(colors.white)
-    local y = 4
-    if #list == 0 then
-        term.setCursorPos(2,y)
-        print("No shareholders recorded")
-    else
-        for i, entry in ipairs(list) do
-            term.setCursorPos(2, y + i - 1)
-            print(string.format("%s: %d", tostring(entry.name), tonumber(entry.shares or 0)))
-        end
-    end
-    local back = drawBackButton()
-    while true do
-        local e, b, cx, cy = safePullEvent("mouse_click")
-        if mouseInButton(back, cx, cy) then
-            return nil
-        end
-    end
-end
-
-function issueSharesFlow(companyKey, ownerKey)
-    local steps = { "Select buyer", "Number of shares" }
-    -- Build recipients: personal and company accounts only
-    local data = getClientData()
-    local filtered = {}
-    for k, v in pairs(data) do
-        local t = tostring(v.type or "personal")
-        if t == "personal" or t == "company" then
-            filtered[k] = v
-        end
-    end
-    local buyer = selectAccountScreen(steps, 1, 0, filtered)
-    if buyer == nil then return nil end
-    local countStr = inputNumberScreen(steps, 2, 0, "shares count")
-    if countStr == nil then return nil end
-    local count = tonumber(countStr)
-    if count == nil or count <= 0 or count % 1 ~= 0 then
-        errorScreen("Invalid share count")
-        return
-    end
-    local ok, resp = issueShares(ownerKey, companyKey, buyer, count)
-    if not ok then
-        errorScreen(tostring(resp))
-    else
-        successScreen("Issued "..tostring(count).." shares to "..(getClientData()[buyer].name or buyer).."\nTotal: $"..tostring(resp.total_price))
-    end
-end
-
 -- Card registry API
 function listCards(key)
     local message = { action = "listCards", key = key }
@@ -1843,138 +1367,6 @@ function validateCard(key, id)
     local resp = sendRequest(message)
     if resp == nil then return false, text_error_noconnection end
     return resp.success, resp.response
-end
-
--- Share registry API wrappers
-function listShareholders(companyKey)
-    local message = { action = "listShareholders", company = companyKey }
-    local resp = sendRequest(message)
-    if resp == nil then return false, text_error_noconnection end
-    return resp.success, resp.response
-end
-
-function issueShares(issuerKey, companyKey, buyerKey, count)
-    local message = { action = "issueShares", issuer = issuerKey, company = companyKey, buyer = buyerKey, count = count }
-    local resp = sendRequest(message)
-    if resp == nil then return false, text_error_noconnection end
-    return resp.success, resp.response
-end
-
--- Portfolio API wrapper
-function getPortfolio(accountKey)
-    local message = { action = "getPortfolio", account = accountKey }
-    local resp = sendRequest(message)
-    if resp == nil then return false, text_error_noconnection end
-    return resp.success, resp.response
-end
-
--- Top companies API wrapper
-function getTopCompanies()
-    local message = { action = "getTopCompanies" }
-    local resp = sendRequest(message)
-    if resp == nil then return false, text_error_noconnection end
-    return resp.success, resp.response
-end
-
--- Portfolio UI screen
-function showPortfolioScreen(accountKey)
-    local ok, items = getPortfolio(accountKey)
-    if not ok then
-        errorScreen(tostring(items))
-        return nil
-    end
-    local scrW, scrH = term.getSize()
-    local y = 2
-    local floor = 1
-    local x = 1
-    local w = scrW
-    local first = 0
-    local rowHeight = 2
-    local max = math.floor((scrH - floor - rowHeight) / rowHeight)
-    local scrollButtonY = scrH - 1
-    local scrollButtonCenterX = math.floor(scrW/2) + 10
-    drawBackground()
-    term.setCursorPos(1,1)
-    term.setBackgroundColor(backgroundColor)
-    term.setTextColor(specialTextColor)
-    print("My Portfolio")
-
-    while true do
-        drawBackground()
-        local prevPage = drawButton(buttonColor, secondaryButtonColor, buttonTextColor, scrollButtonCenterX-13, scrollButtonY, 7, string.char(27))
-        if (first <= 0) then
-            drawButton(colors.lightGray, colors.gray, buttonTextColor, scrollButtonCenterX-13, scrollButtonY, 7, string.char(27))
-        end
-        local total = 0
-        local i = 0
-        for idx, it in ipairs(items) do
-            if (total >= first and total < first+max) then
-                if (i > 0) then
-                    term.setCursorPos(1, y+i-1)
-                    term.setBackgroundColor(colors.white)
-                    term.setTextColor(colors.lightGray)
-                    print(string.rep(string.char(140), scrW))
-                    term.setBackgroundColor(colors.white)
-                    print(string.rep(" ", scrW))
-                else
-                    term.setCursorPos(1, y+i)
-                    term.setBackgroundColor(colors.white)
-                    print(string.rep(" ", scrW))
-                end
-                term.setCursorPos(1, y+i)
-                term.setTextColor(colors.black)
-                term.write(tostring(it.name).." ")
-                -- shares column
-                local sharesText = tostring(it.shares).." sh"
-                term.setCursorPos(scrW*0.5, y+i)
-                term.setTextColor(colors.black)
-                term.write(sharesText)
-                -- value column (right)
-                local valText = "$"..tostring(it.estimated_value)
-                term.setTextColor(colors.lightGray)
-                term.setCursorPos(scrW - string.len(valText), y+i)
-                term.write(" "..valText)
-                i = i + rowHeight
-            end
-            total = total + 1
-        end
-        local nextPage = drawButton(buttonColor, secondaryButtonColor, buttonTextColor, scrollButtonCenterX+5, scrollButtonY, 7, string.char(26))
-        if (first+max >= total) then
-            drawButton(colors.lightGray, colors.gray, buttonTextColor, scrollButtonCenterX+5, scrollButtonY, 7, string.char(26))
-        end
-        local pages = math.max(1, math.ceil(total/max))
-        local pageText = tostring((first/max)+1).."/"..pages
-        term.setCursorPos(scrollButtonCenterX-string.len(pageText)/2, scrollButtonY)
-        term.setBackgroundColor(backgroundColor)
-        term.setTextColor(colors.orange)
-        term.write(pageText)
-
-        local backButton = drawBackButton()
-        term.setCursorPos(scrW/2 - string.len("Your holdings and estimated value")/2 + 1, 1)
-        term.setBackgroundColor(backgroundColor)
-        term.setTextColor(grayedOutColor)
-        term.write("Your holdings and estimated value")
-
-        local ev = {os.pullEvent()}
-        if ev[1] == "mouse_click" then
-            local cx = ev[3]
-            local cy = ev[4]
-            if mouseInButton(prevPage, cx, cy) then
-                if (first > 0) then first = first - max end
-            elseif mouseInButton(nextPage, cx, cy) then
-                if (first + max < total) then first = first + max end
-            elseif mouseInButton(backButton, cx, cy) then
-                return nil
-            end
-        elseif ev[1] == "mouse_scroll" then
-            local scroll = ev[2]
-            if (scroll < 0) then
-                if (first > 0) then first = first - max end
-            else
-                if (first + max < total) then first = first + max end
-            end
-        end
-    end
 end
 
 -- Security hardening: ignore Ctrl+T terminate and only emit desired events

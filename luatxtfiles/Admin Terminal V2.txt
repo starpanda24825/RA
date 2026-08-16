@@ -1,5 +1,5 @@
 -- Admin Terminal
---(called using "pastebin run 2RAZwkys")
+--(installed via wget: https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Admin%20Terminal%20V2.txt)
 os.pullEvent = os.pullEventRaw -- Lock the shell (No Ctrl+T)
 
 
@@ -593,11 +593,11 @@ while true do
 			term.clear()
 			print("Installing Fiducia app in inserted phone...")
 			shell.run("delete disk/startup.lua")
-			shell.run("pastebin get XpFw5fV5 disk/startup.lua")
+			shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Fiduciapp%20V1.txt", "disk/startup.lua")
 			shell.run("delete disk/bankapi.lua")
-			shell.run("pastebin get mWQN0120 disk/bankapi.lua")
+			shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Bank%20API%20V2.txt", "disk/bankapi.lua")
 			shell.run("delete disk/fiduciapp.lua")
-			shell.run("pastebin get JsAAxYaL disk/fiduciapp.lua")
+			-- fiduciapp.lua no longer needed: Fiduciapp V1 now runs directly as disk/startup.lua
 			bankapi.successScreen("Application installed!")
 		else
 			bankapi.errorScreen("Please insert phone into disk drive")

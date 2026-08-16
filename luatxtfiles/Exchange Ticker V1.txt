@@ -8,7 +8,23 @@
 local API_BASE = "https://YOUR_WORKER_DOMAIN/api/exchange/cc"
 local MONITOR_SIDE = "right"  -- Which side the monitor is connected to
 
--- ↑↑↑ SET YOUR WORKER DOMAIN AND MONITOR SIDE ABOVE ↑↑↑
+-- ── Monitor dimensions ─────────────────────────────────────────
+-- Built for a 3-block-tall × 2-block-wide monitor (6 monitor blocks
+-- arranged as 2 columns × 3 rows). The code calls setTextScale(0.5),
+-- where each block is 14 columns × 10 rows, so the full display is
+-- 28 columns × 30 rows.
+--
+-- To set up:
+--   1. Place 6 monitor blocks in a 2-wide × 3-tall rectangle. Adjacent
+--      monitor blocks merge into a single multi-block monitor.
+--   2. Place this computer touching any block on the MONITOR_SIDE above
+--      (default "right").
+--
+-- Scaling: at text scale 0.5, every extra 16 columns of monitor width
+-- adds one more ticker column, and every extra 3 rows adds one more
+-- ticker row. A 2×3 monitor shows 9 tickers at a time (1 column × 9
+-- rows) and scrolls through the rest over time.
+-- ================================================================
 
 local monitor = peripheral.wrap(MONITOR_SIDE)
 if not monitor then
@@ -42,57 +58,50 @@ local function fmtChg(ch, chp)
   return string.format("%s%s %s%%", arrow, fmt(ch), fmt(chp or 0, 1))
 end
 
--- Draw the header bar
-local function drawHeader()
-  monitor.setBackgroundColor(colors.black)
-  monitor.clear()
-  monitor.setTextColor(colors.gray)
-  monitor.setCursorPos(2, 1)
-  monitor.write("FDX")
+-- Layout constants
+local TICKER_W = 16     -- columns per ticker block (symbol / price / change)
+local TICKER_H = 3      -- rows per ticker block
+local BANNER_ROWS = 2   -- row 1 = "FDX COMPOSITE", row 2 = index value
+
+local function drawTickerBlock(stock, x, y)
+  monitor.setTextColor(colors.yellow)
+  monitor.setCursorPos(x, y)
+  monitor.write(tostring(stock.t or "---"):sub(1, TICKER_W - 1))
+
   monitor.setTextColor(colors.white)
-  monitor.write(" EXCHANGE")
+  monitor.setCursorPos(x, y + 1)
+  monitor.write(fmt(stock.p))
+
+  if stock.ch > 0 then
+    monitor.setTextColor(colors.green)
+  elseif stock.ch < 0 then
+    monitor.setTextColor(colors.red)
+  else
+    monitor.setTextColor(colors.gray)
+  end
+  monitor.setCursorPos(x, y + 2)
+  monitor.write(fmtChg(stock.ch, stock.chp))
 end
 
--- Draw a row of tickers
-local function drawRow(stocks, startIdx)
-  local x = 1
-  local y = 3  -- start below header
-  local maxPerRow = math.floor(w / 16)  -- ~16 chars per ticker block
-
-  for i = startIdx, math.min(startIdx + maxPerRow - 1, #stocks) do
-    local s = stocks[i]
-    if x + 15 <= w then
-      -- Reset to default colors before each ticker block
-      monitor.setTextColor(colors.yellow)
-      monitor.setCursorPos(x, y)
-      monitor.write(s.t)
-      monitor.setTextColor(colors.white)
-      monitor.setCursorPos(x, y + 1)
-      monitor.write(fmt(s.p))
-      if s.ch > 0 then
-        monitor.setTextColor(colors.green)
-      elseif s.ch < 0 then
-        monitor.setTextColor(colors.red)
-      else
-        monitor.setTextColor(colors.gray)
-      end
-      monitor.setCursorPos(x, y + 2)
-      monitor.write(fmtChg(s.ch, s.chp))
-      x = x + 16
-    end
-  end
-  monitor.setTextColor(colors.white)  -- reset after row
-
-  -- Fill remaining rows
-  if y + 4 <= h then
-    local nextStart = startIdx + maxPerRow
-    if nextStart <= #stocks then
-      drawRow(stocks, nextStart)
-    end
+-- Draw the visible grid of tickers, starting from startIdx (1-based),
+-- wrapping around and scrolling through the full list over time.
+local function drawTickers(stocks, startIdx)
+  if #stocks == 0 then return end
+  local perRow = math.max(1, math.floor(w / TICKER_W))
+  local rows = math.max(1, math.floor((h - BANNER_ROWS) / TICKER_H))
+  local visible = perRow * rows
+  for i = 0, visible - 1 do
+    local stock = stocks[((startIdx + i - 1) % #stocks) + 1]
+    local col = i % perRow
+    local row = math.floor(i / perRow)
+    local x = 1 + col * TICKER_W
+    local y = BANNER_ROWS + 1 + row * TICKER_H
+    drawTickerBlock(stock, x, y)
   end
 end
 
 -- Main loop
+local scrollOffset = 0
 while true do
   local idxData = httpGet("/index")
   local marketData = httpGet("/market")
@@ -100,7 +109,7 @@ while true do
   monitor.setBackgroundColor(colors.black)
   monitor.clear()
 
-  -- Draw index banner
+  -- Index banner
   monitor.setCursorPos(1, 1)
   monitor.setTextColor(colors.gray)
   monitor.write("FDX COMPOSITE")
@@ -116,11 +125,12 @@ while true do
     monitor.write("----")
   end
 
-  -- Draw ticker rows
+  -- Ticker grid
   if marketData and marketData.success then
     local stocks = marketData.response or {}
+    drawTickers(stocks, scrollOffset + 1)
     if #stocks > 0 then
-      drawRow(stocks, 1)
+      scrollOffset = (scrollOffset + 1) % #stocks
     end
   end
 

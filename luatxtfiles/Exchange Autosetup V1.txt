@@ -1,13 +1,11 @@
 -- ============================================================
 -- Regnum Aeternum — Exchange Autosetup V1
 -- Self-installing script for exchange floor computers.
--- Downloads the terminal or ticker, prompts for config,
--- and saves everything to disk.
+-- Downloads the terminal or ticker from GitHub, prompts for
+-- config (worker domain, token, monitor side), and saves it.
 -- ============================================================
 
-local PASTE_URL = "https://YOUR_WORKER_DOMAIN/"  -- Base URL for raw file downloads
-
--- ↑↑↑ SET YOUR WORKER DOMAIN ABOVE ↑↑↑
+local RAW_BASE = "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/"
 
 print("=== Fiducia Exchange — Autosetup ===")
 print("")
@@ -15,73 +13,53 @@ print("1) Exchange Terminal (interactive trading)")
 print("2) Exchange Ticker (wall-mounted display)")
 print("")
 write("Choose [1/2]: ")
-local choice = read()
+local choice = (read() or ""):gsub("%s+$", "")
 
-local filename, description
+local filename, description, url
 if choice == "2" then
   filename = "ticker"
   description = "Exchange Ticker"
+  url = RAW_BASE .. "Exchange%20Ticker%20V1.txt"
 else
   filename = "exchange"
   description = "Exchange Terminal"
+  url = RAW_BASE .. "Exchange%20Terminal%20V1.txt"
+end
+
+-- Worker domain (the API_BASE host the scripts talk to)
+print("")
+print("Worker domain (no https://, no trailing slash).")
+print("Example: regnumaeternum.starpanda24825.workers.dev")
+write("> ")
+local domain = (read() or ""):gsub("^%s+", ""):gsub("%s+$", "")
+if domain == "" then
+  domain = "regnumaeternum.starpanda24825.workers.dev"
+  print("Using default: " .. domain)
 end
 
 print("")
 print("Installing " .. description .. "...")
-print("")
 
--- Try to download from paste URL (or use bundled copy)
-local function download(url, dest)
-  local ok, resp = pcall(http.get, url)
-  if not ok or not resp then return false end
-  local body = resp.readAll()
-  resp.close()
-  if not body or #body < 100 then return false end
-  local f = fs.open(dest, "w")
-  f.write(body)
-  f.close()
-  return true
-end
-
--- Since CC can't download raw .lua files from the same worker easily,
--- we include the full scripts here and write them directly.
-
-local TERMINAL_SCRIPT = [[
--- Exchange Terminal V1
--- Placeholder: copy the full Exchange Terminal V1.lua content here
--- or configure this autosetup to write it from the included source.
-print("Terminal script placeholder — install manually or update PASTE_URL.")
-print("The full terminal source should be written here.")
-]]
-
-local TICKER_SCRIPT = [[
--- Exchange Ticker V1
--- Placeholder: copy the full Exchange Ticker V1.lua content here
-print("Ticker script placeholder — install manually or update PASTE_URL.")
-]]
-
-local script
-if choice == "2" then
-  script = TICKER_SCRIPT
-else
-  script = TERMINAL_SCRIPT
-end
-
--- Write the script to disk
+-- Download the script via wget (GitHub raw link)
 local outFile = filename .. ".lua"
-local f = fs.open(outFile, "w")
-f.write(script)
-f.close()
+fs.delete(outFile)
+shell.run("wget", url, outFile)
 
-print("Script written to " .. outFile)
+if not fs.exists(outFile) then
+  print("Download failed. Check that HTTP is enabled and the URL is reachable.")
+  return
+end
 
--- Prompt for token (terminal only)
-if choice == "1" or choice == "" then
+local content = fs.open(outFile, "r").readAll()
+content = content:gsub("YOUR_WORKER_DOMAIN", domain)
+
+-- Token (terminal only)
+if choice ~= "2" then
   print("")
-  print("Enter your CC token (from admin panel):")
+  print("Enter your CC token (from the admin panel):")
   write("> ")
-  local token = read()
-  if token and #token > 0 then
+  local token = (read() or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  if token ~= "" then
     local tf = fs.open(".fdxtoken", "w")
     tf.write(token)
     tf.close()
@@ -89,34 +67,26 @@ if choice == "1" or choice == "" then
   end
 end
 
--- Prompt for monitor side (ticker only)
+-- Monitor side (ticker only)
 if choice == "2" then
   print("")
   print("Monitor side (left/right/top/bottom/back/front):")
   write("> ")
-  local side = read()
-  if side and #side > 0 then
-    -- Update the MONITOR_SIDE in the file
-    local content = fs.open(outFile, "r").readAll()
-    fs.delete(outFile)
+  local side = (read() or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  if side ~= "" then
     content = content:gsub('MONITOR_SIDE = "right"', 'MONITOR_SIDE = "' .. side .. '"')
-    local f2 = fs.open(outFile, "w")
-    f2.write(content)
-    f2.close()
     print("Monitor side set to: " .. side)
   end
 end
 
--- Create startup script
-local startupContent
-if choice == "2" then
-  startupContent = 'shell.run("' .. outFile .. '")'
-else
-  startupContent = 'shell.run("' .. outFile .. '")'
-end
+-- Write the patched script back to disk
+local f = fs.open(outFile, "w")
+f.write(content)
+f.close()
 
+-- Create startup script
 local sf = fs.open("startup.lua", "w")
-sf.write(startupContent)
+sf.write('shell.run("' .. outFile .. '")')
 sf.close()
 
 print("")

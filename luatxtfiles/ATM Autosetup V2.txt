@@ -257,9 +257,9 @@ print("Installing Fiducia ATM Assistant ...")
 settings.set("shell.allow_disk_startup", false)
 settings.save()
 fs.delete("bankapi.lua")
-shell.run("pastebin get mWQN0120 bankapi.lua") -- Bank API
+shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Bank%20API%20V2.txt", "bankapi.lua") -- Bank API
 fs.delete("startup.lua")
-shell.run("pastebin get inz5qQ37 startup.lua") -- ATM Assistant
+shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/ATM%20Assistant%20V2.txt", "startup.lua") -- ATM Assistant
 if fs.exists("disk/ATM Assistant V2.txt") then
     fs.copy("disk/ATM Assistant V2.txt", "startup.lua")
 end

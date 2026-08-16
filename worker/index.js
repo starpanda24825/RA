@@ -386,13 +386,9 @@ export default {
         if (pathname === '/api/banking/cc/delete-account' && method === 'POST') return await bankingCC.ccDeleteAccount(request, env);
         if (pathname === '/api/banking/cc/set-password' && method === 'POST') return await bankingCC.ccSetPassword(request, env);
         if (pathname === '/api/banking/cc/change-password' && method === 'POST') return await bankingCC.ccChangePassword(request, env);
+        if (pathname === '/api/banking/cc/login' && method === 'POST') return await bankingCC.ccLogin(request, env);
         if (pathname === '/api/banking/cc/reset-password' && method === 'POST') return await bankingCC.ccResetPassword(request, env);
         if (pathname === '/api/banking/cc/freeze-account' && method === 'POST') return await bankingCC.ccFreezeAccount(request, env);
-        if (pathname === '/api/banking/cc/list-shareholders' && method === 'POST') return await bankingCC.ccListShareholders(request, env);
-        if (pathname === '/api/banking/cc/issue-shares' && method === 'POST') return await bankingCC.ccIssueShares(request, env);
-        if (pathname === '/api/banking/cc/get-portfolio' && method === 'POST') return await bankingCC.ccGetPortfolio(request, env);
-        if (pathname === '/api/banking/cc/top-companies' && method === 'POST') return await bankingCC.ccTopCompanies(request, env);
-        if (pathname === '/api/banking/cc/apply-taxes' && method === 'POST') return await bankingCC.ccApplyTaxes(request, env);
 
         // ---- Ballistic Calculator: static cannon registry + CC bridge ----
         if (pathname === '/api/ballistics/cannons' && method === 'GET') return await ballistics.listCannons(request, env);
