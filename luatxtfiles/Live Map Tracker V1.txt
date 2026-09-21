@@ -5,8 +5,12 @@ local OVERWORLD = "world"
 local CFG_PATH = "mapview_cfg.txt"
 local BLOCK = string.char(223)
 local ZOOMS = { 1, 2, 3, 4, 6, 8 }
-local CFG_VERSION = 2
+local CFG_VERSION = 3
 local DEFAULT_ZOOM = 3
+local DEFAULT_REFRESH = 2
+local PICKER_REFRESH = 5
+local FRAME_MIN_GAP = 1.5
+local FRAME_KEEPALIVE = 30
 local COLOR_BIT = { 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768 }
 local HEADER_ROWS = 1
 local FOOTER_ROWS = 1
@@ -24,12 +28,14 @@ local DIGIT_CODES = {
   [79] = "1", [80] = "2", [81] = "3", [75] = "4", [76] = "5", [77] = "6", [71] = "7", [72] = "8", [73] = "9", [82] = "0",
 }
 
-local cfg = { player = "", zoom = DEFAULT_ZOOM, refresh = 5, v = CFG_VERSION }
+local cfg = { player = "", zoom = DEFAULT_ZOOM, refresh = DEFAULT_REFRESH, v = CFG_VERSION }
 
 local mon
 local monSide
 local lastPalette
 local lastPx
+local lastHeader
+local lastFooter
 local pickerIndex = 1
 
 local function isEnter(code)
@@ -85,14 +91,16 @@ local function loadConfig()
   local ok, data = pcall(textutils.unserializeJSON, raw)
   if not ok or type(data) ~= "table" then return end
   if type(data.player) == "string" then cfg.player = data.player end
+  if tonumber(data.v) ~= CFG_VERSION then return end
   local stored = tonumber(data.zoom)
   if stored and math.floor(stored) ~= stored then stored = nil end
   local ladder = false
   for _, value in ipairs(ZOOMS) do
     if value == stored then ladder = true end
   end
-  if stored and ladder and tonumber(data.v) == CFG_VERSION then cfg.zoom = stored end
-  if tonumber(data.refresh) then cfg.refresh = math.max(2, math.floor(tonumber(data.refresh))) end
+  if stored and ladder then cfg.zoom = stored end
+  local wait = tonumber(data.refresh)
+  if wait then cfg.refresh = math.max(1, math.floor(wait)) end
 end
 
 local function saveConfig()
@@ -112,6 +120,8 @@ local function findMonitor()
         pcall(mon.setTextScale, 0.5)
         lastPalette = nil
         lastPx = nil
+        lastHeader = nil
+        lastFooter = nil
         return true
       end
     end
@@ -142,6 +152,24 @@ local function fetchPlayers()
   end
   table.sort(players, function(a, b) return a.name < b.name end)
   return players, true
+end
+
+local function yawOctant(yaw)
+  local angle = (tonumber(yaw) or 0) % 360
+  if angle < 0 then angle = angle + 360 end
+  return math.floor(angle / 45 + 0.5) % 8
+end
+
+local function snapTo(value, step)
+  if step < 1 then step = 1 end
+  return math.floor((tonumber(value) or 0) / step) * step
+end
+
+local function frameKey(x, z, yaw, w, h, zoom)
+  local sx = snapTo(x, zoom * 4)
+  local sz = snapTo(z, zoom * 3)
+  local dir = yawOctant(yaw) * 45
+  return string.format("%d:%d:%d:%d:%d:%d", sx, sz, dir, w, h, zoom), sx, sz, dir
 end
 
 local function fetchView(x, z, w, h, zoom, yaw)
@@ -207,16 +235,26 @@ local function drawMonitorFrame(headerLeft, headerRight, footerLeft, footerRight
   if mh < 3 or mw < 4 then return end
   mon.setBackgroundColor(colors.black)
   mon.setTextColor(colors.white)
-  mon.setCursorPos(1, 1)
-  mon.write(twoColumn(mw, " " .. headerLeft, headerRight .. " "))
-  mon.setCursorPos(1, mh)
-  mon.write(twoColumn(mw, " " .. footerLeft, footerRight .. " "))
+  local header = twoColumn(mw, " " .. headerLeft, headerRight .. " ")
+  local footer = twoColumn(mw, " " .. footerLeft, footerRight .. " ")
+  if header ~= lastHeader then
+    lastHeader = header
+    mon.setCursorPos(1, 1)
+    mon.write(header)
+  end
+  if footer ~= lastFooter then
+    lastFooter = footer
+    mon.setCursorPos(1, mh)
+    mon.write(footer)
+  end
 end
 
 local function drawIdleMonitor(players, note)
   if not mon then return end
   local ok = pcall(function()
     local mw, mh = mon.getSize()
+    lastHeader = nil
+    lastFooter = nil
     mon.setBackgroundColor(colors.black)
     mon.setTextColor(colors.white)
     mon.clear()
@@ -259,6 +297,7 @@ local function drawConsole(name, x, y, z, logged, count, reachable, view)
     putLine(1, 7, string.format("Zoom:     %d blocks/px", view.bx or 0), colors.lightGray)
     putLine(1, 8, string.format("Frame:    %dx%d pixels", view.w or 0, view.h or 0), colors.lightGray)
   end
+  putLine(1, 9, string.format("Refresh:  %ds, map redraws on movement", cfg.refresh), colors.lightGray)
   if not reachable then
     putLine(1, 10, "BlueMap unreachable from this computer.", colors.red)
   elseif not logged then
@@ -417,7 +456,7 @@ local function pickPlayer(players, reachable)
   end
 
   draw()
-  local timer = os.startTimer(cfg.refresh)
+  local timer = os.startTimer(PICKER_REFRESH)
   local heldDigit
   local heldTimer
 
@@ -434,7 +473,7 @@ local function pickPlayer(players, reachable)
       if a == timer then
         drawPicker(list, selected, typed, offset, "Refreshing the player list...")
         reload()
-        timer = os.startTimer(cfg.refresh)
+        timer = os.startTimer(PICKER_REFRESH)
       elseif a == heldTimer then
         local digit = heldDigit
         clearHeld()
@@ -478,7 +517,7 @@ local function pickPlayer(players, reachable)
         return nil
       elseif key == "r" then
         reload()
-        timer = os.startTimer(cfg.refresh)
+        timer = os.startTimer(PICKER_REFRESH)
       end
 
     elseif event == "monitor_touch" then
@@ -532,6 +571,9 @@ local function track(name)
   local reachable = true
   local view
   local waiting = false
+  local frameId
+  local frameAt
+  local attemptAt
   local players = {}
   local zoomIndex = 1
   for i, value in ipairs(ZOOMS) do
@@ -561,8 +603,22 @@ local function track(name)
     if mon then
       local sized, mw, mh = pcall(mon.getSize)
       if sized and x and mw > 1 and mh > HEADER_ROWS + FOOTER_ROWS + 1 then
-        local drawn = fetchView(x, z, mw, 2 * (mh - HEADER_ROWS - FOOTER_ROWS), ZOOMS[zoomIndex], yaw)
-        if drawn then view = drawn end
+        local zoom = ZOOMS[zoomIndex]
+        local frameW = mw
+        local frameH = 2 * (mh - HEADER_ROWS - FOOTER_ROWS)
+        local id, sx, sz, dir = frameKey(x, z, yaw, frameW, frameH, zoom)
+        local now = os.clock()
+        local age = frameAt and (now - frameAt) or nil
+        local due = id ~= frameId or age == nil or age >= FRAME_KEEPALIVE
+        if due and (attemptAt == nil or now - attemptAt >= FRAME_MIN_GAP) then
+          attemptAt = now
+          local drawn = fetchView(sx, sz, frameW, frameH, zoom, dir)
+          if drawn then
+            view = drawn
+            frameId = id
+            frameAt = now
+          end
+        end
       end
       local drawnOk = pcall(function()
         local frameWidth, frameHeight = mon.getSize()
@@ -572,6 +628,8 @@ local function track(name)
           waiting = false
         elseif not waiting then
           waiting = true
+          lastHeader = nil
+          lastFooter = nil
           mon.setBackgroundColor(colors.black)
           mon.setTextColor(colors.white)
           mon.clear()
@@ -602,8 +660,6 @@ local function track(name)
           cfg.zoom = ZOOMS[zoomIndex]
           saveConfig()
           lastPx = nil
-          view = nil
-          waiting = false
           redraw = true
         elseif key == "p" then
           return
@@ -615,8 +671,6 @@ local function track(name)
           cfg.player = name
           saveConfig()
           x, y, z, yaw = nil, nil, nil, nil
-          view = nil
-          waiting = false
           lastPx = nil
           redraw = true
         end
@@ -668,6 +722,8 @@ local function main()
       if mon then
         pcall(function()
           local mw = mon.getSize()
+          lastHeader = nil
+          lastFooter = nil
           mon.setBackgroundColor(colors.black)
           mon.clear()
           mon.setTextColor(colors.white)
