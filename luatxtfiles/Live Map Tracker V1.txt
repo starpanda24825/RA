@@ -4,7 +4,7 @@ local BLUEMAP_URL = "http://regnumaeternum.enderman.cloud:50500"
 local OVERWORLD = "world"
 local CFG_PATH = "mapview_cfg.txt"
 local BLOCK = string.char(223)
-local ZOOMS = { 1, 2, 3, 4, 6, 8 }
+local ZOOMS = { 1, 2, 3, 4, 6, 8, 10, 12, 16 }
 local CFG_VERSION = 3
 local DEFAULT_ZOOM = 3
 local DEFAULT_REFRESH = 2
@@ -13,7 +13,7 @@ local FRAME_MIN_GAP = 1.5
 local FRAME_KEEPALIVE = 30
 local COLOR_BIT = { 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768 }
 local HEADER_ROWS = 1
-local FOOTER_ROWS = 1
+local FOOTER_ROWS = 0
 
 local KEY_ENTER = (keys and keys.enter) or 28
 local KEY_NUMPAD_ENTER = (keys and keys.numPadEnter) or 156
@@ -35,8 +35,8 @@ local monSide
 local lastPalette
 local lastPx
 local lastHeader
-local lastFooter
 local pickerIndex = 1
+local frameFit = {}
 
 local function isEnter(code)
   if code == KEY_ENTER then return true end
@@ -49,18 +49,6 @@ local function pad(text, width)
   if width < 1 then return "" end
   if #text >= width then return text:sub(1, width) end
   return text .. string.rep(" ", width - #text)
-end
-
-local function twoColumn(width, left, right)
-  left = tostring(left or "")
-  right = tostring(right or "")
-  if #right > width then right = right:sub(1, width) end
-  if #left + #right + 1 > width then
-    left = left:sub(1, math.max(0, width - #right - 1))
-  end
-  local gap = width - #left - #right
-  if gap < 0 then gap = 0 end
-  return left .. string.rep(" ", gap) .. right
 end
 
 local function round(value)
@@ -121,7 +109,6 @@ local function findMonitor()
         lastPalette = nil
         lastPx = nil
         lastHeader = nil
-        lastFooter = nil
         return true
       end
     end
@@ -166,8 +153,11 @@ local function snapTo(value, step)
 end
 
 local function frameKey(x, z, yaw, w, h, zoom)
-  local sx = snapTo(x, zoom * 4)
-  local sz = snapTo(z, zoom * 3)
+  local fit = frameFit[zoom .. ":" .. w .. ":" .. h]
+  local bx = fit and fit.bx or zoom * 4
+  local by = fit and fit.by or zoom * 3
+  local sx = snapTo(x, bx)
+  local sz = snapTo(z, by)
   local dir = yawOctant(yaw) * 45
   return string.format("%d:%d:%d:%d:%d:%d", sx, sz, dir, w, h, zoom), sx, sz, dir
 end
@@ -229,23 +219,17 @@ local function drawMap(view)
   lastPx = px
 end
 
-local function drawMonitorFrame(headerLeft, headerRight, footerLeft, footerRight)
+local function drawMonitorHeader(name)
   if not mon then return end
   local mw, mh = mon.getSize()
-  if mh < 3 or mw < 4 then return end
-  mon.setBackgroundColor(colors.black)
-  mon.setTextColor(colors.white)
-  local header = twoColumn(mw, " " .. headerLeft, headerRight .. " ")
-  local footer = twoColumn(mw, " " .. footerLeft, footerRight .. " ")
+  if mh < 2 or mw < 3 then return end
+  local header = pad(" " .. tostring(name or ""), mw)
   if header ~= lastHeader then
     lastHeader = header
+    mon.setBackgroundColor(colors.black)
+    mon.setTextColor(colors.white)
     mon.setCursorPos(1, 1)
     mon.write(header)
-  end
-  if footer ~= lastFooter then
-    lastFooter = footer
-    mon.setCursorPos(1, mh)
-    mon.write(footer)
   end
 end
 
@@ -254,7 +238,6 @@ local function drawIdleMonitor(players, note)
   local ok = pcall(function()
     local mw, mh = mon.getSize()
     lastHeader = nil
-    lastFooter = nil
     mon.setBackgroundColor(colors.black)
     mon.setTextColor(colors.white)
     mon.clear()
@@ -298,6 +281,7 @@ local function drawConsole(name, x, y, z, logged, count, reachable, view)
     putLine(1, 8, string.format("Frame:    %dx%d pixels", view.w or 0, view.h or 0), colors.lightGray)
   end
   putLine(1, 9, string.format("Refresh:  %ds, map redraws on movement", cfg.refresh), colors.lightGray)
+  putLine(1, 11, "Monitor shows only the tracked player's name.", colors.gray)
   if not reachable then
     putLine(1, 10, "BlueMap unreachable from this computer.", colors.red)
   elseif not logged then
@@ -546,25 +530,6 @@ local function nextPlayerName(players, current)
   return players[index % #players + 1].name
 end
 
-local function footerText(x, z, logged, reachable, count, view)
-  local parts = {}
-  if x then
-    parts[#parts + 1] = string.format("X %d Z %d", round(x), round(z))
-  else
-    parts[#parts + 1] = "no live fix"
-  end
-  if view and view.zoom then
-    parts[#parts + 1] = "z" .. tostring(view.zoom)
-  end
-  parts[#parts + 1] = tostring(count) .. " online"
-  if not reachable then
-    parts[#parts + 1] = "bluemap down"
-  elseif not logged then
-    parts[#parts + 1] = "not in overworld"
-  end
-  return table.concat(parts, "  ")
-end
-
 local function track(name)
   local x, y, z, yaw
   local logged = false
@@ -615,6 +580,7 @@ local function track(name)
           local drawn = fetchView(sx, sz, frameW, frameH, zoom, dir)
           if drawn then
             view = drawn
+            frameFit[zoom .. ":" .. frameW .. ":" .. frameH] = { bx = drawn.bx or zoom * 4, by = drawn.by or zoom * 3 }
             frameId = id
             frameAt = now
           end
@@ -629,14 +595,13 @@ local function track(name)
         elseif not waiting then
           waiting = true
           lastHeader = nil
-          lastFooter = nil
           mon.setBackgroundColor(colors.black)
           mon.setTextColor(colors.white)
           mon.clear()
           mon.setCursorPos(1, math.max(1, math.floor(frameHeight / 2)))
           mon.write(pad(" waiting for the map service", frameWidth))
         end
-        drawMonitorFrame(name, OVERWORLD, footerText(x, z, logged, reachable, #players, view), os.date("%H:%M"))
+        drawMonitorHeader(name)
       end)
       if not drawnOk then findMonitor() end
     end
@@ -723,7 +688,6 @@ local function main()
         pcall(function()
           local mw = mon.getSize()
           lastHeader = nil
-          lastFooter = nil
           mon.setBackgroundColor(colors.black)
           mon.clear()
           mon.setTextColor(colors.white)

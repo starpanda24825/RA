@@ -115,8 +115,9 @@ const VIEW_BAYER = [
   15, 47, 7, 39, 13, 45, 5, 37,
   63, 31, 55, 23, 61, 29, 53, 21,
 ];
-const VIEW_PIXEL_LIMIT = 128;    // per axis — monitors never get near this
-const VIEW_SAMPLE_LIMIT = 600000; // block samples per request, to bound CPU
+const VIEW_PIXEL_LIMIT = 128;      // per axis — monitors never get near this
+const VIEW_ZOOM_LIMIT = 16;        // 64 x 48 blocks per pixel at the top end
+const VIEW_SAMPLE_LIMIT = 1200000; // block samples per request, to bound CPU
 const VIEW_TILE_LIMIT = 9;        // 3x3 low-res tiles per window
 const TILE_CACHE_LIMIT = 12;
 const TILE_CACHE_TTL = 120000;
@@ -422,7 +423,7 @@ function yawDirection(yaw) {
   return [dx > 0 ? 1 : -1, dz > 0 ? 1 : -1];
 }
 
-// GET /api/mapview?map=world&x=0&z=0&w=28&h=36&zoom=2&yaw=90
+// GET /api/mapview?map=world&x=0&z=0&w=28&h=36&zoom=16&yaw=90
 // w/h are the monitor's pixel grid (one digit per pixel, two pixels per
 // character cell). Omitting them returns the palette and metadata only.
 export async function getView(request, env) {
@@ -433,26 +434,38 @@ export async function getView(request, env) {
   let h = viewClamp(Math.round(viewNumber(params.get('h'), 0)), 0, VIEW_PIXEL_LIMIT);
   h -= h % 2;
 
-  let zoom = viewClamp(Math.round(viewNumber(params.get('zoom'), 2)), 1, 8);
-  while (zoom > 1 && w * h * (zoom * 4) * (zoom * 3) > VIEW_SAMPLE_LIMIT) zoom--;
+  const x = viewNumber(params.get('x'), 0);
+  const z = viewNumber(params.get('z'), 0);
+  const yaw = viewNumber(params.get('yaw'), 0);
 
-  const bx = zoom * 4; // each cell pixel is 6x4.5 screen pixels, so the
-  const by = zoom * 3; // world window has to be sampled 4:3 to look square
+  // Walk the zoom down until the window fits both this Worker's sample
+  // budget and the 3x3-tile budget, so an oversized request loses detail
+  // instead of failing outright.
+  let zoom = viewClamp(Math.round(viewNumber(params.get('zoom'), 2)), 1, VIEW_ZOOM_LIMIT);
+  let bx = zoom * 4; // each cell pixel is 6x4.5 screen pixels, so the
+  let by = zoom * 3; // world window has to be sampled 4:3 to look square
+  let left = Math.floor(x - (w * bx) / 2);
+  let top = Math.floor(z - (h * by) / 2);
+  let tx0 = Math.floor(left / 500);
+  let tx1 = Math.floor((left + w * bx - 1) / 500);
+  let tz0 = Math.floor(top / 500);
+  let tz1 = Math.floor((top + h * by - 1) / 500);
+  while (zoom > 1 && (w * h * bx * by > VIEW_SAMPLE_LIMIT || (tx1 - tx0 + 1) * (tz1 - tz0 + 1) > VIEW_TILE_LIMIT)) {
+    zoom--;
+    bx = zoom * 4;
+    by = zoom * 3;
+    left = Math.floor(x - (w * bx) / 2);
+    top = Math.floor(z - (h * by) / 2);
+    tx0 = Math.floor(left / 500);
+    tx1 = Math.floor((left + w * bx - 1) / 500);
+    tz0 = Math.floor(top / 500);
+    tz1 = Math.floor((top + h * by - 1) / 500);
+  }
 
   if (!w || !h) {
     return viewJson(true, { map, zoom, bx, by, w: 0, h: 0, palette: VIEW_PALETTE_HEX, px: '' });
   }
 
-  const x = viewNumber(params.get('x'), 0);
-  const z = viewNumber(params.get('z'), 0);
-  const yaw = viewNumber(params.get('yaw'), 0);
-
-  const left = Math.floor(x - (w * bx) / 2);
-  const top = Math.floor(z - (h * by) / 2);
-  const tx0 = Math.floor(left / 500);
-  const tx1 = Math.floor((left + w * bx - 1) / 500);
-  const tz0 = Math.floor(top / 500);
-  const tz1 = Math.floor((top + h * by - 1) / 500);
   if ((tx1 - tx0 + 1) * (tz1 - tz0 + 1) > VIEW_TILE_LIMIT) {
     return viewJson(false, 'Requested map window is too large.', 400);
   }
