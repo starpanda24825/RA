@@ -298,12 +298,15 @@ local function drawPicker(players, selected, typed, offset, status)
 
   local room = th - 6
   if room < 1 then room = 1 end
-  if selected > offset + room then offset = selected - room end
-  if selected <= offset then offset = selected - 1 end
+  if selected > offset + room - 1 then offset = selected - room + 1 end
+  if selected < offset then offset = selected end
+  local last = #players - room + 1
+  if last < 1 then last = 1 end
+  if offset > last then offset = last end
   if offset < 1 then offset = 1 end
 
   for row = 1, room do
-    local index = offset + row
+    local index = offset + row - 1
     local player = players[index]
     term.setCursorPos(1, 3 + row)
     if player then
