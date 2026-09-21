@@ -1,0 +1,556 @@
+local BASE_URL = "https://regnumaeternum.starpanda24825.workers.dev"
+local MAPVIEW_PATH = "/api/mapview"
+local BLUEMAP_URL = "http://regnumaeternum.enderman.cloud:50500"
+local CFG_PATH = "mapview_cfg.txt"
+local BLOCK = string.char(223)
+local ZOOMS = { 1, 2, 3, 4, 6 }
+local COLOR_BIT = { 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768 }
+local HEADER_ROWS = 1
+local FOOTER_ROWS = 1
+
+local cfg = { player = "", map = "world", zoom = 2, refresh = 5 }
+
+local mon
+local monSide
+local mapsCache
+local lastPalette
+local lastPx
+local pickerIndex = 1
+
+local function pad(text, width)
+  text = tostring(text or "")
+  if width < 1 then return "" end
+  if #text >= width then return text:sub(1, width) end
+  return text .. string.rep(" ", width - #text)
+end
+
+local function twoColumn(width, left, right)
+  left = tostring(left or "")
+  right = tostring(right or "")
+  if #right > width then right = right:sub(1, width) end
+  if #left + #right + 1 > width then
+    left = left:sub(1, math.max(0, width - #right - 1))
+  end
+  local gap = width - #left - #right
+  if gap < 0 then gap = 0 end
+  return left .. string.rep(" ", gap) .. right
+end
+
+local function round(value)
+  return math.floor((tonumber(value) or 0) + 0.5)
+end
+
+local function getJSON(url)
+  local ok, res = pcall(http.get, url)
+  if not ok or not res then return nil end
+  local body = res.readAll()
+  res.close()
+  local ok2, data = pcall(textutils.unserializeJSON, body)
+  if ok2 and type(data) == "table" then return data end
+  return nil
+end
+
+local function loadConfig()
+  if not fs.exists(CFG_PATH) then return end
+  local handle = fs.open(CFG_PATH, "r")
+  if not handle then return end
+  local raw = handle.readAll()
+  handle.close()
+  local ok, data = pcall(textutils.unserializeJSON, raw)
+  if not ok or type(data) ~= "table" then return end
+  if type(data.player) == "string" then cfg.player = data.player end
+  if type(data.map) == "string" then cfg.map = data.map end
+  if tonumber(data.zoom) then cfg.zoom = math.floor(tonumber(data.zoom)) end
+  if tonumber(data.refresh) then cfg.refresh = math.max(2, math.floor(tonumber(data.refresh))) end
+end
+
+local function saveConfig()
+  local handle = fs.open(CFG_PATH, "w")
+  if not handle then return end
+  handle.write(textutils.serializeJSON({ player = cfg.player, map = cfg.map, zoom = cfg.zoom, refresh = cfg.refresh }))
+  handle.close()
+end
+
+local function findMonitor()
+  for _, side in ipairs(peripheral.getNames()) do
+    if peripheral.getType(side) == "monitor" then
+      local found = peripheral.wrap(side)
+      if found then
+        monSide = side
+        mon = found
+        pcall(mon.setTextScale, 0.5)
+        lastPalette = nil
+        lastPx = nil
+        return true
+      end
+    end
+  end
+  monSide = nil
+  mon = nil
+  return false
+end
+
+local function fetchMaps()
+  if mapsCache then return mapsCache end
+  local data = getJSON(BLUEMAP_URL .. "/settings.json")
+  if data and type(data.maps) == "table" and #data.maps > 0 then
+    mapsCache = data.maps
+  end
+  return mapsCache
+end
+
+local function fetchPlayers()
+  local players = {}
+  local maps = fetchMaps()
+  if not maps then return players end
+  for _, map in ipairs(maps) do
+    local data = getJSON(BLUEMAP_URL .. "/maps/" .. map .. "/live/players.json")
+    if data and type(data.players) == "table" then
+      for _, entry in ipairs(data.players) do
+        local position = entry.position or {}
+        local rotation = entry.rotation or {}
+        table.insert(players, {
+          name = tostring(entry.name or "unknown"),
+          map = map,
+          x = tonumber(position.x) or 0,
+          y = tonumber(position.y) or 0,
+          z = tonumber(position.z) or 0,
+          yaw = tonumber(rotation.yaw) or 0,
+        })
+      end
+    end
+  end
+  table.sort(players, function(a, b) return a.name < b.name end)
+  return players
+end
+
+local function fetchView(map, x, z, w, h, zoom, yaw)
+  local url = string.format(
+    "%s%s?map=%s&x=%.2f&z=%.2f&w=%d&h=%d&zoom=%d&yaw=%.0f",
+    BASE_URL, MAPVIEW_PATH, map, x, z, math.floor(w), math.floor(h), math.floor(zoom), yaw or 0
+  )
+  local data = getJSON(url)
+  if data and data.success and type(data.response) == "table" and type(data.response.px) == "string" then
+    return data.response
+  end
+  return nil
+end
+
+local function applyPalette(hex)
+  if not mon or type(hex) ~= "string" or #hex < 96 or hex == lastPalette then return end
+  for index = 0, 15 do
+    local rgb = tonumber(hex:sub(index * 6 + 1, index * 6 + 6), 16)
+    if rgb then pcall(mon.setPaletteColour, COLOR_BIT[index + 1], rgb) end
+  end
+  lastPalette = hex
+end
+
+local function drawMap(view)
+  if not mon then return end
+  local w = math.floor(tonumber(view.w) or 0)
+  local h = math.floor(tonumber(view.h) or 0)
+  local px = view.px
+  if w < 1 or h < 2 or type(px) ~= "string" then return end
+  if #px < w * h then px = px .. string.rep("f", w * h - #px) end
+  if px == lastPx then return end
+
+  local mw, mh = mon.getSize()
+  local rows = math.floor(h / 2)
+  local room = mh - HEADER_ROWS - FOOTER_ROWS
+  if rows > room then rows = room end
+
+  for row = 0, rows - 1 do
+    local text, fg, bg = {}, {}, {}
+    local base = row * 2 * w
+    for column = 1, mw do
+      if column <= w then
+        text[column] = BLOCK
+        local top = px:sub(base + column, base + column)
+        local bottom = px:sub(base + w + column, base + w + column)
+        fg[column] = top ~= "" and top or "f"
+        bg[column] = bottom ~= "" and bottom or "f"
+      else
+        text[column] = " "
+        fg[column] = "f"
+        bg[column] = "f"
+      end
+    end
+    mon.setCursorPos(1, HEADER_ROWS + 1 + row)
+    mon.blit(table.concat(text), table.concat(fg), table.concat(bg))
+  end
+  lastPx = px
+end
+
+local function drawMonitorFrame(headerLeft, headerRight, footerLeft, footerRight)
+  if not mon then return end
+  local mw, mh = mon.getSize()
+  if mh < 3 or mw < 4 then return end
+  mon.setBackgroundColor(colors.black)
+  mon.setTextColor(colors.white)
+  mon.setCursorPos(1, 1)
+  mon.write(twoColumn(mw, " " .. headerLeft, headerRight .. " "))
+  mon.setCursorPos(1, mh)
+  mon.write(twoColumn(mw, " " .. footerLeft, footerRight .. " "))
+end
+
+local function drawIdleMonitor(players, note)
+  if not mon then return end
+  local ok = pcall(function()
+    local mw, mh = mon.getSize()
+    mon.setBackgroundColor(colors.black)
+    mon.setTextColor(colors.white)
+    mon.clear()
+    mon.setCursorPos(1, 1)
+    mon.write(pad("LIVE MAP - Regnum Aeternum", mw))
+    mon.setCursorPos(1, 2)
+    mon.write(pad(note, mw))
+    local line = 4
+    for _, player in ipairs(players) do
+      if line > mh then break end
+      mon.setCursorPos(1, line)
+      mon.write(pad(string.format("%-14s %-12s X %5d Z %5d", player.name, player.map, round(player.x), round(player.z)), mw))
+      line = line + 1
+    end
+  end)
+  if not ok then findMonitor() end
+end
+
+local function putLine(x, y, text, colour)
+  local tw = term.getSize()
+  if y < 1 then y = 1 end
+  term.setCursorPos(x, y)
+  term.setTextColor(colour or colors.white)
+  term.write(pad(text, tw - x + 1))
+end
+
+local function drawConsole(name, map, x, y, z, logged, count, view)
+  local _, th = term.getSize()
+  term.setBackgroundColor(colors.black)
+  putLine(1, 1, "LIVE MAP TRACKER", colors.white)
+  putLine(1, 3, "Tracking: " .. name, colors.lime)
+  putLine(1, 4, "World:    " .. map, colors.lightGray)
+  if x then
+    putLine(1, 5, string.format("Position: X %d  Y %d  Z %d", round(x), round(y), round(z)), colors.lightGray)
+  else
+    putLine(1, 5, "Position: waiting for a live fix", colors.yellow)
+  end
+  putLine(1, 6, string.format("Players:  %d online", count), colors.lightGray)
+  if view then
+    putLine(1, 7, string.format("Zoom:     %d blocks/px", view.bx or 0), colors.lightGray)
+    putLine(1, 8, string.format("Frame:    %dx%d pixels", view.w or 0, view.h or 0), colors.lightGray)
+  end
+  if not logged then
+    putLine(1, 10, name .. " is offline - holding the last known position.", colors.yellow)
+  end
+  local monOk, mw, mh
+  if mon then
+    monOk, mw, mh = pcall(mon.getSize)
+  end
+  if monOk then
+    putLine(1, th - 4, string.format("Monitor: %s  %dx%d  %d blocks per pixel", monSide, mw, mh, view and view.bx or 0), colors.gray)
+  else
+    putLine(1, th - 4, "Monitor: none attached", colors.red)
+  end
+  putLine(1, th - 3, "[z] zoom   [p] player list   [touch monitor] next player", colors.gray)
+  putLine(1, th, "", colors.gray)
+  term.setBackgroundColor(colors.black)
+  term.setCursorPos(1, th)
+end
+
+local function drawPicker(players, selected, typed, offset)
+  local tw, th = term.getSize()
+  term.setBackgroundColor(colors.black)
+  term.setTextColor(colors.white)
+  term.clear()
+  term.setCursorPos(1, 1)
+  term.write("LIVE MAP TRACKER")
+  term.setTextColor(colors.gray)
+  term.setCursorPos(1, 2)
+  term.write("Live BlueMap on the monitor")
+  term.setTextColor(colors.white)
+  term.setCursorPos(1, 3)
+  term.write(string.format("%-4s%-16s%-15s%5s%6s", "#", "PLAYER", "WORLD", "X", "Z"))
+
+  local room = th - 6
+  if room < 1 then room = 1 end
+  if selected > offset + room then offset = selected - room end
+  if selected <= offset then offset = selected - 1 end
+
+  if #players == 0 then
+    term.setTextColor(colors.yellow)
+    putLine(1, 5, "No players are on the live map right now.", colors.yellow)
+    putLine(1, 6, "Waiting for one to come online...", colors.gray)
+  end
+
+  for row = 1, room do
+    local index = offset + row
+    local player = players[index]
+    term.setCursorPos(1, 3 + row)
+    if player then
+      local text = string.format("%-4d%-16s%-15s%5d%6d", index, player.name, player.map, round(player.x), round(player.z))
+      if index == selected then
+        term.setBackgroundColor(colors.gray)
+        term.setTextColor(colors.black)
+      else
+        term.setBackgroundColor(colors.black)
+        term.setTextColor(colors.white)
+      end
+      term.write(pad(text, tw))
+    else
+      term.setBackgroundColor(colors.black)
+      term.setTextColor(colors.white)
+      term.write(string.rep(" ", tw))
+    end
+  end
+
+  term.setBackgroundColor(colors.black)
+  term.setTextColor(colors.white)
+  putLine(1, th - 2, "Number or arrows + enter   r refresh   q quit", colors.lightGray)
+  putLine(1, th - 1, "> " .. typed, colors.yellow)
+  putLine(1, th, string.format("Zoom %d (%d blocks/px)   %d player(s) online", cfg.zoom, cfg.zoom * 4, #players), colors.gray)
+  return offset
+end
+
+local function pickPlayer(players)
+  local typed = ""
+  local selected = pickerIndex
+  if selected < 1 or selected > #players then selected = 1 end
+  local offset = 1
+
+  offset = drawPicker(players, selected, typed, offset)
+  pickerIndex = selected
+
+  local timer = os.startTimer(cfg.refresh)
+  while true do
+    local event, a, b = os.pullEvent()
+    if event == "timer" and a == timer then
+      return false
+    end
+    local redraw = false
+    if event == "key" then
+      if a == 28 then
+        local index = tonumber(typed) or selected
+        if players[index] then
+          pickerIndex = index
+          return players[index]
+        end
+      elseif a == 200 or a == 203 then
+        if selected > 1 then selected = selected - 1 end
+      elseif a == 208 or a == 205 then
+        if selected < #players then selected = selected + 1 end
+      elseif a == 14 then
+        typed = typed:sub(1, math.max(0, #typed - 1))
+      end
+      redraw = true
+    elseif event == "char" then
+      local key = string.lower(a)
+      if key:match("%d") then
+        if #typed < 3 then typed = typed .. key end
+      elseif key == "q" then
+        pickerIndex = selected
+        return nil
+      elseif key == "r" then
+        pickerIndex = selected
+        return false
+      end
+      redraw = true
+    elseif event == "monitor_touch" then
+      if a == monSide and #players > 0 then
+        selected = selected % #players + 1
+        redraw = true
+      end
+    end
+    if redraw then
+      if selected < 1 then selected = 1 end
+      if selected > #players then selected = #players end
+      if selected < 1 then selected = 1 end
+      pickerIndex = selected
+      offset = drawPicker(players, selected, typed, offset)
+    end
+  end
+end
+
+local function nextPlayerName(players, current)
+  if #players == 0 then return nil end
+  local index
+  for i, player in ipairs(players) do
+    if player.name == current then index = i end
+  end
+  if not index then return players[1].name end
+  return players[index % #players + 1].name
+end
+
+local function footerText(x, z, logged, count, view)
+  local parts = {}
+  if x then
+    parts[#parts + 1] = string.format("X %d Z %d", round(x), round(z))
+  else
+    parts[#parts + 1] = "no live fix"
+  end
+  if view and view.zoom then
+    parts[#parts + 1] = "z" .. tostring(view.zoom)
+  end
+  parts[#parts + 1] = tostring(count) .. " online"
+  if not logged then
+    parts[#parts + 1] = "offline"
+  end
+  return table.concat(parts, "  ")
+end
+
+local function track(startName, startMap)
+  local name = startName
+  local map = startMap
+  local x, y, z, yaw
+  local logged = false
+  local view
+  local waiting = false
+  local players = {}
+  local zoomIndex = 1
+  for i, value in ipairs(ZOOMS) do
+    if value == cfg.zoom then zoomIndex = i end
+  end
+
+  lastPx = nil
+  term.setBackgroundColor(colors.black)
+  term.clear()
+  term.setCursorPos(1, 1)
+
+  while true do
+    players = fetchPlayers()
+    local me
+    for _, player in ipairs(players) do
+      if player.name == name then me = player end
+    end
+    if me then
+      x, y, z, yaw, logged = me.x, me.y, me.z, me.yaw, true
+      if me.map ~= map then
+        map = me.map
+        view = nil
+        lastPx = nil
+      end
+    else
+      logged = false
+    end
+
+    if mon then
+      local sized, mw, mh = pcall(mon.getSize)
+      if sized and x and mw > 1 and mh > HEADER_ROWS + FOOTER_ROWS + 1 then
+        local fresh = fetchView(map, x, z, mw, 2 * (mh - HEADER_ROWS - FOOTER_ROWS), ZOOMS[zoomIndex], yaw)
+        if fresh then view = fresh end
+      end
+      local ok = pcall(function()
+        local mw, mh = mon.getSize()
+        if view then
+          applyPalette(view.palette)
+          drawMap(view)
+          waiting = false
+        elseif not waiting then
+          waiting = true
+          mon.setBackgroundColor(colors.black)
+          mon.setTextColor(colors.white)
+          mon.clear()
+          mon.setCursorPos(1, math.max(1, math.floor(mh / 2)))
+          mon.write(pad(" waiting for the map service", mw))
+        end
+        drawMonitorFrame(name, map, footerText(x, z, logged, #players, view), os.date("%H:%M"))
+      end)
+      if not ok then findMonitor() end
+    end
+
+    drawConsole(name, map, x, y, z, logged, #players, view)
+
+    local timer = os.startTimer(cfg.refresh)
+    local redraw = false
+    while not redraw do
+      local event, a = os.pullEvent()
+      if event == "timer" and a == timer then
+        redraw = true
+      elseif event == "char" then
+        local key = string.lower(a)
+        if key == "z" then
+          zoomIndex = zoomIndex % #ZOOMS + 1
+          cfg.zoom = ZOOMS[zoomIndex]
+          saveConfig()
+          lastPx = nil
+          redraw = true
+        elseif key == "p" then
+          return
+        end
+      elseif event == "monitor_touch" and a == monSide then
+        local nextName = nextPlayerName(players, name)
+        if nextName and nextName ~= name then
+          name = nextName
+          cfg.player = name
+          saveConfig()
+          x, y, z, yaw = nil, nil, nil, nil
+          view = nil
+          lastPx = nil
+          redraw = true
+        end
+      elseif event == "monitor_resize" or event == "peripheral" or event == "peripheral_detach" then
+        findMonitor()
+        redraw = true
+      end
+    end
+  end
+end
+
+local function main()
+  loadConfig()
+
+  term.setBackgroundColor(colors.black)
+  term.setTextColor(colors.white)
+  term.clear()
+  term.setCursorPos(1, 1)
+
+  if not findMonitor() then
+    print("LIVE MAP TRACKER")
+    print("")
+    print("Attach a monitor to this computer.")
+    print("Waiting for a monitor...")
+    sleep(2)
+    while not findMonitor() do
+      sleep(2)
+    end
+    print("")
+    print("Monitor found on the " .. tostring(monSide) .. " side.")
+    sleep(1)
+  end
+
+  if mon and mon.isColour and not mon.isColour() then
+    print("")
+    print("This is a basic monitor - the map will be shown in greyscale.")
+    sleep(2)
+  end
+
+  while true do
+    local players = fetchPlayers()
+    drawIdleMonitor(players, "Pick a player on the computer")
+    local choice = pickPlayer(players)
+    if choice == nil then
+      if mon then
+        pcall(function()
+          local mw = mon.getSize()
+          mon.setBackgroundColor(colors.black)
+          mon.clear()
+          mon.setTextColor(colors.white)
+          mon.setCursorPos(1, 1)
+          mon.write(pad("LIVE MAP - idle", mw))
+        end)
+      end
+      term.setBackgroundColor(colors.black)
+      term.setTextColor(colors.white)
+      term.clear()
+      term.setCursorPos(1, 1)
+      print("Stopped.")
+      return
+    elseif choice ~= false then
+      cfg.player = choice.name
+      cfg.map = choice.map
+      saveConfig()
+      track(choice.name, choice.map)
+    end
+  end
+end
+
+main()

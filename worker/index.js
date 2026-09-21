@@ -412,6 +412,7 @@ export default {
         // ---- Ballistic Calculator / Land Registry: BlueMap proxy ----
         if (pathname === '/api/bluemap-config' && method === 'GET') return await bluemap.getConfig(request, env);
         if (pathname === '/api/maptile' && method === 'GET') return await bluemap.getTile(request, env);
+        if (pathname === '/api/mapview' && method === 'GET') return await bluemap.getView(request, env);
 
         return json({ error: 'Not found.' }, { status: 404 });
       } catch (err) {
