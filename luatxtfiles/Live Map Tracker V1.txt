@@ -4,7 +4,9 @@ local BLUEMAP_URL = "http://regnumaeternum.enderman.cloud:50500"
 local OVERWORLD = "world"
 local CFG_PATH = "mapview_cfg.txt"
 local BLOCK = string.char(223)
-local ZOOMS = { 1, 2, 3, 4, 6 }
+local ZOOMS = { 1, 2, 3, 4, 6, 8 }
+local CFG_VERSION = 2
+local DEFAULT_ZOOM = 3
 local COLOR_BIT = { 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768 }
 local HEADER_ROWS = 1
 local FOOTER_ROWS = 1
@@ -22,7 +24,7 @@ local DIGIT_CODES = {
   [79] = "1", [80] = "2", [81] = "3", [75] = "4", [76] = "5", [77] = "6", [71] = "7", [72] = "8", [73] = "9", [82] = "0",
 }
 
-local cfg = { player = "", zoom = 2, refresh = 5 }
+local cfg = { player = "", zoom = DEFAULT_ZOOM, refresh = 5, v = CFG_VERSION }
 
 local mon
 local monSide
@@ -83,14 +85,20 @@ local function loadConfig()
   local ok, data = pcall(textutils.unserializeJSON, raw)
   if not ok or type(data) ~= "table" then return end
   if type(data.player) == "string" then cfg.player = data.player end
-  if tonumber(data.zoom) then cfg.zoom = math.floor(tonumber(data.zoom)) end
+  local stored = tonumber(data.zoom)
+  if stored and math.floor(stored) ~= stored then stored = nil end
+  local ladder = false
+  for _, value in ipairs(ZOOMS) do
+    if value == stored then ladder = true end
+  end
+  if stored and ladder and tonumber(data.v) == CFG_VERSION then cfg.zoom = stored end
   if tonumber(data.refresh) then cfg.refresh = math.max(2, math.floor(tonumber(data.refresh))) end
 end
 
 local function saveConfig()
   local handle = fs.open(CFG_PATH, "w")
   if not handle then return end
-  handle.write(textutils.serializeJSON({ player = cfg.player, zoom = cfg.zoom, refresh = cfg.refresh }))
+  handle.write(textutils.serializeJSON({ player = cfg.player, zoom = cfg.zoom, refresh = cfg.refresh, v = CFG_VERSION }))
   handle.close()
 end
 
