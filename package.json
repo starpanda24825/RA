@@ -1,5 +1,6 @@
 {
   "devDependencies": {
+    "fengari": "^0.1.5",
     "wrangler": "^4.103.0"
   }
 }
