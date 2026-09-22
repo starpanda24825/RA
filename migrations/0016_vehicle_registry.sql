@@ -1,9 +1,9 @@
 -- Regnum Aeternum — D1 schema addition: Sublevel Vehicle Registry
 -- Migration 0016 — Ballistics: vehicles + cannon-to-vehicle assignment
 --
--- Apply with:
---   wrangler d1 execute regnum-aeternum-db --local  --file=./migrations/0016_vehicle_registry.sql
---   wrangler d1 execute regnum-aeternum-db --remote --file=./migrations/0016_vehicle_registry.sql
+-- Apply with (already-applied files are skipped):
+--   wrangler d1 migrations apply regnum-aeternum-db --local
+--   wrangler d1 migrations apply regnum-aeternum-db --remote
 --
 -- A sublevel (mobile) ship can carry several cannons, each with its own
 -- Sublevel Cannon Computer. Those computers are coordinated by ONE

@@ -1,7 +1,7 @@
 -- Regnum Aeternum — D1 schema fixup: remove Land Registry example data
--- Apply with:
---   wrangler d1 execute regnum-aeternum-db --local  --file=./migrations/0005_remove_land_registry_seed_data.sql
---   wrangler d1 execute regnum-aeternum-db --remote --file=./migrations/0005_remove_land_registry_seed_data.sql
+-- Apply with (already-applied files are skipped):
+--   wrangler d1 migrations apply regnum-aeternum-db --local
+--   wrangler d1 migrations apply regnum-aeternum-db --remote
 --
 -- migrations/0004_land_registry.sql used to seed 6 worked examples.
 -- That seeding was removed from 0004 itself, but if you already ran

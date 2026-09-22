@@ -1,7 +1,7 @@
 -- Regnum Aeternum — D1 schema addition: Land Registry System
--- Apply with:
---   wrangler d1 execute regnum-aeternum-db --local  --file=./migrations/0004_land_registry.sql
---   wrangler d1 execute regnum-aeternum-db --remote --file=./migrations/0004_land_registry.sql
+-- Apply with (already-applied files are skipped):
+--   wrangler d1 migrations apply regnum-aeternum-db --local
+--   wrangler d1 migrations apply regnum-aeternum-db --remote
 --
 -- Storage shape mirrors legal_acts (0002_legal.sql): flat, filterable
 -- columns (register_number, division_code, world, owner, resident,

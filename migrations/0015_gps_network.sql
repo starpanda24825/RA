@@ -1,9 +1,9 @@
 -- Regnum Aeternum — D1 schema addition: GPS tower network
 -- Migration 0015 — Ballistics: GPS tower registry + per-cannon network health
 --
--- Apply with:
---   wrangler d1 execute regnum-aeternum-db --local  --file=./migrations/0015_gps_network.sql
---   wrangler d1 execute regnum-aeternum-db --remote --file=./migrations/0015_gps_network.sql
+-- Apply with (already-applied files are skipped):
+--   wrangler d1 migrations apply regnum-aeternum-db --local
+--   wrangler d1 migrations apply regnum-aeternum-db --remote
 --
 -- The GPS network is solved ENTIRELY on the computers (see
 -- luatxtfiles/Cannon Programs/GPS Network V1.txt). Nothing about a fix is

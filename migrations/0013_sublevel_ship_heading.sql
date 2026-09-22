@@ -1,9 +1,9 @@
 -- Regnum Aeternum — D1 schema addition: Sublevel ship heading
 -- Migration 0013 — Ballistics: ship orientation for mobile cannons
 --
--- Apply with:
---   wrangler d1 execute regnum-aeternum-db --local  --file=./migrations/0013_sublevel_ship_heading.sql
---   wrangler d1 execute regnum-aeternum-db --remote --file=./migrations/0013_sublevel_ship_heading.sql
+-- Apply with (already-applied files are skipped):
+--   wrangler d1 migrations apply regnum-aeternum-db --local
+--   wrangler d1 migrations apply regnum-aeternum-db --remote
 --
 -- A sublevel (mobile) cannon sits on a ship that can rotate. Two dedicated
 -- computers run the "Sublevel Ship GPS" program (one FRONT/bow, one BACK/

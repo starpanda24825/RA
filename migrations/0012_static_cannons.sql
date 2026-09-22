@@ -1,9 +1,9 @@
 -- Regnum Aeternum — D1 schema addition: Static Cannon Control
 -- Migration 0012 — Ballistics: ComputerCraft static cannon registry
 --
--- Apply with:
---   wrangler d1 execute regnum-aeternum-db --local  --file=./migrations/0012_static_cannons.sql
---   wrangler d1 execute regnum-aeternum-db --remote --file=./migrations/0012_static_cannons.sql
+-- Apply with (already-applied files are skipped):
+--   wrangler d1 migrations apply regnum-aeternum-db --local
+--   wrangler d1 migrations apply regnum-aeternum-db --remote
 --
 -- A static cannon is a cannon built on a fixed (non-sublevel) mount whose
 -- aim is driven by an in-game ComputerCraft computer running the Cannon

@@ -1,7 +1,7 @@
 -- Regnum Aeternum — D1 data cleanup: purge orphaned exchange companies
--- Apply with:
---   wrangler d1 execute regnum-aeternum-db --local  --file=./migrations/0011_purge_orphaned_companies.sql
---   wrangler d1 execute regnum-aeternum-db --remote --file=./migrations/0011_purge_orphaned_companies.sql
+-- Apply with (already-applied files are skipped):
+--   wrangler d1 migrations apply regnum-aeternum-db --local
+--   wrangler d1 migrations apply regnum-aeternum-db --remote
 --
 -- Before the delete flow was fixed, deleting a company banking account left
 -- its fdx_companies row (and dependent exchange rows) behind. The listing

@@ -1,9 +1,9 @@
 -- Regnum Aeternum — D1 schema addition: Fiducia Banking System
 -- Migration 0006 — Banking System (Phase 1: Schema)
 --
--- Apply with:
---   wrangler d1 execute regnum-aeternum-db --local  --file=./migrations/0006_banking.sql
---   wrangler d1 execute regnum-aeternum-db --remote --file=./migrations/0006_banking.sql
+-- Apply with (already-applied files are skipped):
+--   wrangler d1 migrations apply regnum-aeternum-db --local
+--   wrangler d1 migrations apply regnum-aeternum-db --remote
 --
 -- This migration creates the complete schema for the Fiducia Banking System
 -- web integration. All account data, transactions, cards, shareholders,

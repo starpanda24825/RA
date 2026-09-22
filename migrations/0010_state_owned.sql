@@ -1,7 +1,7 @@
 -- Regnum Aeternum — D1 schema addition: State-owned company flag
--- Apply with:
---   wrangler d1 execute regnum-aeternum-db --local  --file=./migrations/0010_state_owned.sql
---   wrangler d1 execute regnum-aeternum-db --remote --file=./migrations/0010_state_owned.sql
+-- Apply with (already-applied files are skipped):
+--   wrangler d1 migrations apply regnum-aeternum-db --local
+--   wrangler d1 migrations apply regnum-aeternum-db --remote
 --
 -- Company accounts can be flagged as state-owned. This is offered at
 -- creation time for public listings and can be toggled later via the

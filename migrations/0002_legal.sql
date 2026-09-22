@@ -1,7 +1,7 @@
 -- Regnum Aeternum — D1 schema addition: Legal Information System
--- Apply with:
---   wrangler d1 execute regnum-aeternum-db --local  --file=./migrations/0002_legal.sql
---   wrangler d1 execute regnum-aeternum-db --remote --file=./migrations/0002_legal.sql
+-- Apply with (already-applied files are skipped):
+--   wrangler d1 migrations apply regnum-aeternum-db --local
+--   wrangler d1 migrations apply regnum-aeternum-db --remote
 --
 -- Storage shape: each Act/Case is one row. Flat, queryable/listable
 -- columns (slug, title, category/status or ref_number) live as real

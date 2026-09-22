@@ -1,7 +1,7 @@
 -- Regnum Aeternum — D1 schema addition: Legal drafts (Adapter workflow)
--- Apply with:
---   wrangler d1 execute regnum-aeternum-db --local  --file=./migrations/0009_legal_drafts.sql
---   wrangler d1 execute regnum-aeternum-db --remote --file=./migrations/0009_legal_drafts.sql
+-- Apply with (already-applied files are skipped):
+--   wrangler d1 migrations apply regnum-aeternum-db --local
+--   wrangler d1 migrations apply regnum-aeternum-db --remote
 --
 -- Users with the "adapter" role can open the Legal Information System
 -- editor but may only *suggest drafts* — nothing they write is published.

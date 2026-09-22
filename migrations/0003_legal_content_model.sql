@@ -1,8 +1,8 @@
 -- Regnum Aeternum — D1 schema addition: structured legal content
 -- (preamble, paragraphs, point lists, sub-headings)
--- Apply with:
---   wrangler d1 execute regnum-aeternum-db --local  --file=./migrations/0003_legal_content_model.sql
---   wrangler d1 execute regnum-aeternum-db --remote --file=./migrations/0003_legal_content_model.sql
+-- Apply with (already-applied files are skipped):
+--   wrangler d1 migrations apply regnum-aeternum-db --local
+--   wrangler d1 migrations apply regnum-aeternum-db --remote
 --
 -- No new columns or tables: legal_acts.data is already a free-form JSON
 -- blob (see 0002_legal.sql), so the richer content model slots into the

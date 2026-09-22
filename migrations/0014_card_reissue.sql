@@ -1,9 +1,9 @@
 -- Regnum Aeternum — D1 schema addition: Card reissue requests
 -- Migration 0014 — Banking System: citizen card lost/reissue self-service
 --
--- Apply with:
---   wrangler d1 execute regnum-aeternum-db --local  --file=./migrations/0014_card_reissue.sql
---   wrangler d1 execute regnum-aeternum-db --remote --file=./migrations/0014_card_reissue.sql
+-- Apply with (already-applied files are skipped):
+--   wrangler d1 migrations apply regnum-aeternum-db --local
+--   wrangler d1 migrations apply regnum-aeternum-db --remote
 --
 -- Lets citizens report a card lost from the banking website. Reporting a card
 -- lost cancels it and flags a reissue request that a banker can see and fulfil

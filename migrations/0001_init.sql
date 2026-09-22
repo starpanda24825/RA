@@ -1,7 +1,7 @@
 -- Regnum Aeternum — D1 schema (initial migration)
--- Apply with:
---   wrangler d1 execute regnum-aeternum-db --local  --file=./migrations/0001_init.sql
---   wrangler d1 execute regnum-aeternum-db --remote --file=./migrations/0001_init.sql
+-- Apply with (already-applied files are skipped):
+--   wrangler d1 migrations apply regnum-aeternum-db --local
+--   wrangler d1 migrations apply regnum-aeternum-db --remote
 
 CREATE TABLE IF NOT EXISTS users (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
