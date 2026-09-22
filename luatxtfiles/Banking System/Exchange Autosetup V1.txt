@@ -5,7 +5,7 @@
 -- config (worker domain, token, monitor side), and saves it.
 -- ============================================================
 
-local RAW_BASE = "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/"
+local RAW_BASE = "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Banking%20System/"
 
 print("=== Fiducia Exchange — Autosetup ===")
 print("")

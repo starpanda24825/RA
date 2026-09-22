@@ -1,7 +1,7 @@
 -- Fiducia Installer Disk Writer
 -- Creates a Fiducia Installer Disk from a blank floppy disk.
 -- Run this program once on a computer with a disk drive:
---    wget run https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Installer%20Disk%20Writer.txt
+--    wget run https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Banking%20System/Installer%20Disk%20Writer.txt
 -- It writes the Fiducia installer (as disk/startup.lua) plus every program
 -- file onto the disk. Insert the finished disk into any computer's disk drive
 -- (with shell.allow_disk_startup enabled) and the installer boots so the user
@@ -9,7 +9,7 @@
 
 os.pullEvent = os.pullEventRaw
 
-local BASE = "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/"
+local BASE = "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Banking%20System/"
 
 local FILES = {
     { url = "Installer%20Disk.txt",           name = "startup.lua" },

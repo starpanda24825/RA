@@ -1,11 +1,11 @@
--- ATM Autosetup (hc8vX3j6)
+-- Clerk Autosetup
+-- Simplified version of ATM Autosetup for the Store Clerk system.
+os.pullEvent = os.pullEventRaw -- Lock the shell
 
-local chests = 0
 local barrels = 0
 local modems = 0
 local computers = 0
 local enderModems = 0
-local craftingTables = 0
 
 function checklistItem(text, currentAmount, amountNeeded)
     local check = "[ ] "
@@ -15,8 +15,6 @@ function checklistItem(text, currentAmount, amountNeeded)
     print(check..text..": "..currentAmount.."/"..amountNeeded)
     return currentAmount >= amountNeeded
 end
-
-os.pullEvent = os.pullEventRaw -- Lock the shell
 
 function selectItem(itemName)
     while (true) do
@@ -29,73 +27,30 @@ function selectItem(itemName)
                 end
             end
         end
-        print("Missing item... please insert a '"..itemName.."' in my inventory to continue.")
+        print("Missing item: "..itemName)
         os.pullEvent("turtle_inventory")
     end
 end
 
-function place()
-    while (not turtle.place()) do
-        print("Something is blocking the way in front of me")
-        sleep(1)
-    end
-end
-
-function placeUp()
-    while (not turtle.placeUp()) do
-        print("Something is blocking the way above me")
-        sleep(1)
-    end
-end
-
-function placeDown()
-    while (not turtle.placeDown()) do
-        print("Something is blocking the way below me")
-        sleep(1)
-    end
-end
-
-function forward()
-    while (not turtle.forward()) do
-        print("Something is blocking the way in front of me")
-        sleep(1)
-    end
-end
-
-function up()
-    while (not turtle.up()) do
-        print("Something is blocking the way above me")
-        sleep(1)
-    end
-end
-
-function down()
-    while (not turtle.down()) do
-        print("Something is blocking the way below me")
-        sleep(1)
-    end
-end
-
-function back()
-    while (not turtle.back()) do
-        print("Something is blocking the way behind me")
-        sleep(1)
-    end
-end
+function place() while (not turtle.place()) do sleep(1) end end
+function back() while (not turtle.back()) do sleep(1) end end
+function forward() while (not turtle.forward()) do sleep(1) end end
+function up() while (not turtle.up()) do sleep(1) end end
+function down() while (not turtle.down()) do sleep(1) end end
 
 local function main()
 term.clear()
 term.setCursorPos(1,1)
-print("=== Auto setup ===")
+print("=== Clerk Auto setup ===")
 print("")
-print("Hello! I am an ATM Assistant. I'm not the one that does customer service, but I help move and manage the stored money in an ATM. I can be a normal turtle, no need for an Advanced one.")
+print("Hello! I am a Clerk Turtle. I handle item movement for the store. I'm compatible with Create 6 systems.")
 print("")
-print("The ATM contraption itself requires a specific setup which I can build for you. I just need some items in my inventory.")
+print("I will build the clerk terminal for you. I need a barrel in front. Rejected items will be dropped to my right.")
 print("")
 print("Press any key to continue...")
 os.pullEvent("key")
 
-local requiredFuel = 8
+local requiredFuel = 15
 while (turtle.getFuelLevel() < requiredFuel) do
     term.clear()
     term.setCursorPos(1,1)
@@ -129,30 +84,23 @@ while (turtle.getFuelLevel() < requiredFuel) do
 end
 
 while (true) do
-    chests = 0
     barrels = 0
     modems = 0
     computers = 0
     enderModems = 0
-    craftingTables = 0
     for i=1, 16 do
         local item = turtle.getItemDetail(i)
         if (item ~= nil) then
-            if (item.name == "minecraft:chest") then chests = chests + item.count
-            elseif (item.name == "minecraft:barrel") then barrels = barrels + item.count
+            if (item.name == "minecraft:barrel") then barrels = barrels + item.count
             elseif (item.name == "computercraft:wireless_modem_normal") then modems = modems + item.count
             elseif (item.name == "computercraft:wireless_modem_advanced") then enderModems = enderModems + item.count
             elseif (item.name == "computercraft:computer_advanced") then computers = computers + item.count
-            elseif (item.name == "minecraft:crafting_table") then craftingTables = craftingTables + item.count
             end
         end
     end
 
     local leftEquipment = peripheral.getType("left")
     local rightEquipment = peripheral.getType("right")
-    if (leftEquipment == "workbench" or rightEquipment == "workbench") then
-        craftingTables = craftingTables + 1
-    end
     if (leftEquipment == "modem" or rightEquipment == "modem") then
         modems = modems + 1
     end
@@ -163,12 +111,10 @@ while (true) do
     print("What I need:")
     print("")
     local ready = true
-    if (not checklistItem("4 chests", chests, 4)) then ready = false end
     if (not checklistItem("A barrel", barrels, 1)) then ready = false end
     if (not checklistItem("A regular modem", modems, 1)) then ready = false end
     if (not checklistItem("An ender modem", enderModems, 1)) then ready = false end
     if (not checklistItem("An advanced computer", computers, 1)) then ready = false end
-    if (not checklistItem("A crafting table", craftingTables, 1)) then ready = false end
 
     if (ready) then
         print("")
@@ -188,7 +134,7 @@ end
 while (not fs.exists("disk")) do
     term.clear()
     term.setCursorPos(1,1)
-    print("Please insert the installer disk into the disk drive. I need it to install a program into the computer I'm about to place.")
+    print("Please insert the installer disk into the disk drive. I need it to install the Clerk Computer program.")
     print("Insert installer disk to continue...")
     os.pullEvent("disk")
 end
@@ -196,28 +142,11 @@ end
 -- Building sequence
 term.clear()
 term.setCursorPos(1,1)
-print("Lets begin!")
+print("Building Clerk Terminal...")
 
--- Equip upgrades
----- Equip modem
-local leftEquipment = peripheral.getType("left")
-local rightEquipment = peripheral.getType("right")
-local hasModem = leftEquipment == "modem" or rightEquipment == "modem"
-if (not hasModem) then
-    selectItem("computercraft:wireless_modem_normal")
-    turtle.equipLeft()
-end
----- Equip workbench
-leftEquipment = peripheral.getType("left")
-rightEquipment = peripheral.getType("right")
-local hasWorkbench = leftEquipment == "workbench" or rightEquipment == "workbench"
-if (not hasWorkbench) then
-    selectItem("minecraft:crafting_table")
-    turtle.equipRight()
-end
-
-local f = fs.open("disk/installATMPlease.txt", "w")
-f.writeLine("What are you looking at?")
+-- Create install flag for disk
+local f = fs.open("disk/installClerkPlease.txt", "w")
+f.writeLine("Clerk Setup")
 f.close()
 
 back()
@@ -227,53 +156,45 @@ sleep(1)
 peripheral.call("front", "turnOn")
 sleep(1)
 up()
+up()
 forward()
+selectItem("computercraft:wireless_modem_advanced")
+turtle.placeDown()
+sleep(0.5)
+forward()
+turtle.turnRight()
 forward()
 down()
+down()
 turtle.turnRight()
-turtle.turnRight()
-
-selectItem("minecraft:chest")
-placeDown()
-selectItem("minecraft:chest")
-placeUp()
-
-back()
-selectItem("computercraft:wireless_modem_advanced")
-place()
-turtle.turnLeft()
-forward()
-turtle.turnRight()
-forward()
-
-selectItem("minecraft:chest")
-placeDown()
-selectItem("minecraft:chest")
-placeUp()
 selectItem("minecraft:barrel")
 place()
 
-print("Installing Fiducia ATM Assistant ...")
+-- 8. Equip normal modem
+local leftEquipment = peripheral.getType("left")
+local rightEquipment = peripheral.getType("right")
+local hasModem = leftEquipment == "modem" or rightEquipment == "modem"
+if (not hasModem) then
+    selectItem("computercraft:wireless_modem_normal")
+    turtle.equipLeft()
+end
+
+-- Turtle is now behind the barrel
+
+-- Installation
 settings.set("shell.allow_disk_startup", false)
 settings.save()
+print("Installing Clerk Turtle software...")
 fs.delete("bankapi.lua")
 if fs.exists("disk/Bank API V2.txt") then
     fs.copy("disk/Bank API V2.txt", "bankapi.lua")
 else
-    shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Bank%20API%20V2.txt", "bankapi.lua") -- Bank API
+    shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Banking%20System/Bank%20API%20V2.txt", "bankapi.lua")
 end
 fs.delete("startup.lua")
-shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/ATM%20Assistant%20V2.txt", "startup.lua") -- ATM Assistant
-if fs.exists("disk/ATM Assistant V2.txt") then
-    fs.copy("disk/ATM Assistant V2.txt", "startup.lua")
-end
-
-print("Dropping leftover items...")
-for i=1, 16 do
-    if (turtle.getItemCount(i) > 0) then
-        turtle.select(i)
-        turtle.drop()
-    end
+shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Banking%20System/Clerk%20Turtle%20V2.txt", "startup.lua")
+if fs.exists("disk/Clerk Turtle V2.txt") then
+    fs.copy("disk/Clerk Turtle V2.txt", "startup.lua")
 end
 
 print("All done!")

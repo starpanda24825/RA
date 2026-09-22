@@ -27,7 +27,7 @@ function installBankApi()
     if fs.exists("disk/Bank API V2.txt") then
         fs.copy("disk/Bank API V2.txt", "bankapi.lua")
     else
-        shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Bank%20API%20V2.txt", "bankapi.lua")
+        shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Banking%20System/Bank%20API%20V2.txt", "bankapi.lua")
     end
 end
 
@@ -79,7 +79,7 @@ function installClerkTurtle()
     settings.save()
     installBankApi() -- Bank API
     fs.delete("startup.lua")
-    shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Clerk%20Turtle%20V2.txt", "startup.lua") 
+    shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Banking%20System/Clerk%20Turtle%20V2.txt", "startup.lua") 
     -- For now, copy from disk if available
     if fs.exists("disk/Clerk Turtle V2.txt") then
         fs.copy("disk/Clerk Turtle V2.txt", "startup.lua")
@@ -94,7 +94,7 @@ function installClerkTurtleWithAutoSetup()
     settings.set("shell.allow_disk_startup", false)
     settings.save()
     fs.delete("autosetup.lua")
-    shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Clerk%20Autosetup%20V2.txt", "autosetup.lua")
+    shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Banking%20System/Clerk%20Autosetup%20V2.txt", "autosetup.lua")
     if fs.exists("disk/Clerk Autosetup V2.txt") then
         fs.copy("disk/Clerk Autosetup V2.txt", "autosetup.lua")
     end
@@ -109,7 +109,7 @@ function installClerkInterface()
     settings.save()
     installBankApi() -- Bank API
     fs.delete("startup.lua")
-    shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Clerk%20Computer%20V2.txt", "startup.lua") -- Clerk Computer
+    shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Banking%20System/Clerk%20Computer%20V2.txt", "startup.lua") -- Clerk Computer
     if fs.exists("disk/Clerk Computer V2.txt") then
         fs.copy("disk/Clerk Computer V2.txt", "startup.lua")
     end
@@ -122,7 +122,7 @@ function installATMTurtle()
     settings.save()
     installBankApi() -- Bank API
     fs.delete("startup.lua")
-    shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/ATM%20Assistant%20V2.txt", "startup.lua") -- ATM Assistant
+    shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Banking%20System/ATM%20Assistant%20V2.txt", "startup.lua") -- ATM Assistant
     if fs.exists("disk/ATM Assistant V2.txt") then
         fs.copy("disk/ATM Assistant V2.txt", "startup.lua")
     end
@@ -134,7 +134,7 @@ function installATMTurtleWithAutoSetup()
     settings.set("shell.allow_disk_startup", false)
     settings.save()
     fs.delete("autosetup.lua")
-    shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/ATM%20Autosetup%20V2.txt", "autosetup.lua") -- ATM Assistant autosetup
+    shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Banking%20System/ATM%20Autosetup%20V2.txt", "autosetup.lua") -- ATM Assistant autosetup
     if fs.exists("disk/ATM Autosetup V2.txt") then
         fs.copy("disk/ATM Autosetup V2.txt", "autosetup.lua")
     end
@@ -150,7 +150,7 @@ function installBankServer()
     settings.save()
     installBankApi() -- Bank API
     fs.delete("startup.lua")
-    shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Bank%20Server%20V2.txt", "startup.lua") -- Bank Server
+    shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Banking%20System/Bank%20Server%20V2.txt", "startup.lua") -- Bank Server
     if fs.exists("disk/Bank Server V2.txt") then
         fs.copy("disk/Bank Server V2.txt", "startup.lua")
     end
@@ -163,7 +163,7 @@ function installAdminTerminal()
     settings.save()
     installBankApi() -- Bank API
     fs.delete("startup.lua")
-    shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Admin%20Terminal%20V2.txt", "startup.lua") -- Admin Terminal
+    shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Banking%20System/Admin%20Terminal%20V2.txt", "startup.lua") -- Admin Terminal
     if fs.exists("disk/Admin Terminal V2.txt") then
         fs.copy("disk/Admin Terminal V2.txt", "startup.lua")
     end
@@ -176,7 +176,7 @@ function installATMInterface()
     settings.save()
     installBankApi() -- Bank API
     fs.delete("startup.lua")
-    shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/ATM%20Terminal%20V2.txt", "startup.lua") -- ATM Terminal
+    shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Banking%20System/ATM%20Terminal%20V2.txt", "startup.lua") -- ATM Terminal
     if fs.exists("disk/ATM Terminal V2.txt") then
         fs.copy("disk/ATM Terminal V2.txt", "startup.lua")
     end
@@ -188,7 +188,7 @@ function installExchangeTerminal()
     settings.set("shell.allow_disk_startup", false)
     settings.save()
     fs.delete("startup.lua")
-    shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Exchange%20Terminal%20V1.txt", "startup.lua") -- Exchange Terminal
+    shell.run("wget", "https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Banking%20System/Exchange%20Terminal%20V1.txt", "startup.lua") -- Exchange Terminal
     if fs.exists("disk/Exchange Terminal V1.txt") then
         fs.copy("disk/Exchange Terminal V1.txt", "startup.lua")
     end
