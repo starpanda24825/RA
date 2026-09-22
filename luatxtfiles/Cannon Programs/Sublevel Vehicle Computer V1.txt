@@ -1,0 +1,687 @@
+-- ============================================================
+-- Sublevel Vehicle Computer — Regnum Aeternum
+-- ComputerCraft coordinator for the cannons on a MOBILE / SUBLEVEL ship.
+-- ============================================================
+--
+-- WHAT THIS IS
+--   A sublevel ship can carry several cannons, each with its own Sublevel
+--   Cannon Computer. Left alone, every one of those computers would work out
+--   the ship's heading for itself, from the same pair of GPS beacons, and
+--   every one of them would poll the website for its own commands.
+--
+--   This program takes both of those jobs over. It is the single brain of the
+--   vehicle:
+--
+--     * ONE AUTHORITATIVE HEADING. It listens to the two "Sublevel Ship GPS"
+--       beacons, derives the ship's heading once, and keeps it synchronised —
+--       it is the computer that broadcasts the SYNC tick, so both beacons
+--       sample at the same instant.
+--     * ONE COMMAND PATH. It collects the fire commands queued for every
+--       cannon assigned to it, converts each into the final mount aim, and
+--       hands it to that cannon. The cannon computers do no aiming maths of
+--       their own; they apply the values they are given and nothing else.
+--     * ONE REGISTRATION. The cannons stop reporting their own position for
+--       commands; this computer reports each of their positions and aim states
+--       to the website on their behalf, and acks their commands.
+--
+--   The upshot: every gun on the ship is aimed from its OWN position with the
+--   SAME heading, which is exactly what makes a broadside fire together.
+--
+-- ────────────────────────────────────────────────────────────
+-- IN-GAME SETUP (read this first)
+-- ────────────────────────────────────────────────────────────
+-- REQUIRED EXTRAS
+--   - A wireless modem on this computer.
+--   - TWO computers running "Sublevel Ship GPS" (one at the bow, one at the
+--     stern) — the same pair the cannons used to use.
+--   - ONE Sublevel Cannon Computer per cannon on the ship.
+--
+-- BUILD
+--   1. Place this computer anywhere on the ship. It does not need to touch a
+--      cannon mount — it drives the guns over the wireless modem.
+--   2. Put a wireless (or ender) modem on it and give it a wireless network
+--      connection (http must work).
+--
+-- RUN
+--   1. Put this program on the computer as "startup" (it is a daemon). It
+--      needs no first-boot questions — everything it needs is discovered.
+--   2. It registers itself with the website as a VEHICLE. It shows "AWAITING
+--      APPROVAL" until an officer accepts it in the Ballistic Calculator →
+--      Vehicle Registry tab.
+--   3. On the website, assign that ship's sublevel cannons to the vehicle.
+--      From that moment those cannons stop running their own command loop and
+--      are driven entirely from here.
+--   4. The ship's two GPS beacons are still assigned to a cannon (that is how
+--      they identify which ship they belong to) — assign them to ANY cannon on
+--      this vehicle. Beacons addressed to any of this vehicle's cannons are
+--      accepted; anything else on the channel is ignored, so two ships in
+--      wireless range can never mix up each other's headings.
+--
+-- SAFETY
+--   A vehicle will not fire a ship-relative shot it cannot aim. If the heading
+--   is unknown — the beacons are off, out of range, or have just been
+--   re-assigned — the queued command is HELD, not converted, and it is
+--   assigned automatically the moment the heading comes back. Set
+--   blockFireWithoutHeading=false in subvehicle_cfg.txt to fire anyway.
+--
+--   Commands are at-most-once: a sequence is assigned to a cannon once and
+--   acked once, so a slow or rebooting computer can never fire the same
+--   command twice.
+--
+-- CALIBRATION
+--   A cannon's own yawOffset / pitchScale stay where they belong — in that
+--   cannon's subcannon_cfg.txt. This computer only does the ship-relative
+--   correction (one shared heading for the whole ship), so calibrate mounts
+--   exactly as before.
+-- ============================================================
+
+-- ------------------------------------------------------------
+-- Configuration
+-- ------------------------------------------------------------
+local BASE_URL = "https://regnumaeternum.starpanda24825.workers.dev"
+local VEHICLE_POLL_PATH = "/api/ballistics/cc/vehicle/poll"
+
+-- Channel the vehicle talks to its cannons on. MUST match VEHICLE_CHANNEL in
+-- the Sublevel Cannon Computer program.
+local VEHICLE_CHANNEL = 4121
+
+-- Channel the ship's two GPS beacons broadcast on. MUST match the Sublevel
+-- Ship GPS program (and the cannon computer, for standalone cannons).
+local SHIP_GPS_CHANNEL = 4120
+
+local CFG_PATH = "subvehicle_cfg.txt"
+local ID_PATH  = "subvehicle_id.txt"
+
+-- How often (seconds) this computer tells the ship's two GPS beacons to take
+-- a reading at the same instant. The heading is only exact if both points
+-- describe the same moment: a ship turning at 10°/s with fixes a second apart
+-- is about 5° out, which matters a great deal at long range.
+local SHIP_SYNC_INTERVAL = 1.5
+
+-- How long a beacon's fix (or a cannon's report) stays usable. A managed
+-- cannon reports on a slower cadence than it used to poll, so this is
+-- generous enough that a healthy cannon never looks silent.
+local BEACON_MAX_AGE = 8
+local CANNON_MAX_AGE = 12
+
+-- ------------------------------------------------------------
+-- Config defaults
+-- ------------------------------------------------------------
+local cfg = {
+  message = "",
+  pollInterval = 1,          -- seconds between polls
+  shipRelativeYaw = true,    -- mount yaw is measured in the ship's rotating
+                             -- frame (normal for Create contraptions)
+  blockFireWithoutHeading = true,
+}
+
+local function trim(s)
+  s = tostring(s or "")
+  s = s:gsub("^%s+", "")
+  s = s:gsub("%s+$", "")
+  return s
+end
+
+local function randomHex(len)
+  local chars = "0123456789abcdef"
+  local s = ""
+  for i = 1, len do
+    local r = math.random(1, #chars)
+    s = s .. chars:sub(r, r)
+  end
+  return s
+end
+
+local function loadConfig()
+  if not fs.exists(CFG_PATH) then return end
+  local f = fs.open(CFG_PATH, "r")
+  if not f then return end
+  while true do
+    local line = f.readLine()
+    if line == nil then break end
+    local k, v = line:match("^([%w_]+)%s*=%s*(.-)%s*$")
+    if k == "message" then
+      cfg.message = v
+    elseif k == "pollInterval" then
+      cfg.pollInterval = tonumber(v) or cfg.pollInterval
+    elseif k == "shipRelativeYaw" then
+      cfg.shipRelativeYaw = (v ~= "false")
+    elseif k == "blockFireWithoutHeading" then
+      cfg.blockFireWithoutHeading = (v ~= "false")
+    end
+  end
+  f.close()
+end
+
+local function writeConfig()
+  local f = fs.open(CFG_PATH, "w")
+  if not f then return end
+  f.writeLine("message=" .. tostring(cfg.message))
+  f.writeLine("pollInterval=" .. tostring(cfg.pollInterval))
+  f.writeLine("shipRelativeYaw=" .. tostring(cfg.shipRelativeYaw))
+  f.writeLine("blockFireWithoutHeading=" .. tostring(cfg.blockFireWithoutHeading))
+  f.close()
+end
+
+-- Stable identity, exactly as the cannon computer does it: the CC computer id
+-- when there is one, otherwise a persisted random id.
+local function resolveComputerId()
+  local id = nil
+  if os.getComputerID then
+    local cid = os.getComputerID()
+    if cid and cid ~= 0 then id = tostring(cid) end
+  end
+  if not id and fs.exists(ID_PATH) then
+    local f = fs.open(ID_PATH, "r")
+    if f then
+      id = trim(f.readAll())
+      f.close()
+    end
+  end
+  if not id or id == "" then
+    id = randomHex(16)
+    local f = fs.open(ID_PATH, "w")
+    f.write(id)
+    f.close()
+  end
+  return id
+end
+
+local computerId = resolveComputerId()
+
+-- ------------------------------------------------------------
+-- Modem
+-- ------------------------------------------------------------
+local function findWirelessModem()
+  local names = peripheral.getNames()
+  for i = 1, #names do
+    local side = names[i]
+    if peripheral.getType(side) == "modem" then
+      local ok, m = pcall(peripheral.wrap, side)
+      if ok and m then
+        local okw, wireless = pcall(m.isWireless)
+        if okw and wireless then return m, side end
+      end
+    end
+  end
+  return nil, nil
+end
+
+local modem, modemSide = nil, nil
+
+-- Called at boot, on peripheral changes, and on every status tick, so a
+-- swapped modem needs no reboot.
+local function attachModem()
+  local found, side = findWirelessModem()
+  if not found then
+    if modem then
+      pcall(function() modem.close(VEHICLE_CHANNEL) end)
+      pcall(function() modem.close(SHIP_GPS_CHANNEL) end)
+    end
+    modem, modemSide = nil, nil
+    return false
+  end
+  if modemSide ~= side then
+    if modem then
+      pcall(function() modem.close(VEHICLE_CHANNEL) end)
+      pcall(function() modem.close(SHIP_GPS_CHANNEL) end)
+    end
+    modem, modemSide = found, side
+    local ok = pcall(function()
+      modem.open(VEHICLE_CHANNEL)
+      modem.open(SHIP_GPS_CHANNEL)
+    end)
+    if not ok then
+      modem, modemSide = nil, nil
+      return false
+    end
+  end
+  return true
+end
+
+-- ------------------------------------------------------------
+-- State
+-- ------------------------------------------------------------
+local myVehicleId    = nil    -- registry id, learned from the poll response
+local vehicleStatus  = nil    -- "pending" | "active"
+local vehicleName    = nil
+local assignedIds    = {}     -- array of cannon registry ids owned by us
+local assignedSet    = {}     -- [cannonId] = true, for fast filtering
+local assigned       = {}     -- [cannonId] = last sequence assigned (for the ack)
+local cannonNames    = {}     -- [cannonId] = display name
+
+-- Latest report from each of our cannon computers:
+--   [cannonId] = { x, y, z, gpsOk, yaw, pitch, sequence, mount, at }
+local reports = {}
+
+-- What we have already forwarded to the website for each cannon, so a cannon
+-- is only reported when something about it has actually changed rather than
+-- every second. The website is not a place to spend bandwidth for nothing.
+--   [cannonId] = { at = <report clock>, ack = <sequence acked> }
+local forwarded = {}
+
+-- The two beacons' most recent accepted fixes (only accepted when addressed
+-- to one of our cannons — that is how a ship identifies itself).
+local front, back = nil, nil
+
+local netError = nil
+local lastPollAt = nil
+local stats = { polls = 0, assigned = 0, held = 0, noHeading = 0 }
+
+-- math.atan2 exists in CC:Tweaked, but fall back to the two-argument math.atan
+-- so heading maths cannot silently break on an upgrade.
+local atan2 = math.atan2
+if not atan2 and math.atan then
+  atan2 = function(y, x) return math.atan(y, x) end
+end
+
+-- ------------------------------------------------------------
+-- Ship heading
+-- ------------------------------------------------------------
+-- The direction from the stern fix to the bow fix, in the website's
+-- convention (0 = south, 90 = west, 180 = north, 270 = east), plus how far
+-- apart in time the two fixes were taken.
+local function computeShipYaw()
+  if not front or not back or not atan2 then return nil, nil end
+  local dx = front.x - back.x
+  local dz = front.z - back.z
+  if math.abs(dx) < 0.001 and math.abs(dz) < 0.001 then return nil, nil end
+
+  local now = os.clock()
+  if (now - front.at) > BEACON_MAX_AGE or (now - back.at) > BEACON_MAX_AGE then
+    return nil, nil
+  end
+
+  local deg = math.deg(atan2(-dx, dz))
+  local yaw = ((deg % 360) + 360) % 360
+
+  local skew
+  if front.seq and back.seq and front.seq == back.seq then
+    skew = math.abs((front.age or 0) - (back.age or 0))
+  else
+    skew = math.abs(front.at - back.at)
+  end
+  return yaw, skew
+end
+
+-- ------------------------------------------------------------
+-- Modem pump
+-- ------------------------------------------------------------
+-- One coroutine owns the modem. It deals with two kinds of traffic:
+--
+--   * beacons on the ship channel, accepted only when they name one of THIS
+--     vehicle's cannons (so a second ship nearby cannot hijack our heading);
+--   * cannon reports on the vehicle channel, accepted only when they come from
+--     one of our cannons (so we can never aim another vehicle's guns).
+--
+-- pcall'd so a detached modem restarts the pump instead of taking the whole
+-- daemon down with it.
+local function networkPump()
+  while true do
+    local ok, err = pcall(function()
+      attachModem()
+      while true do
+        local _, side, channel, replyChannel, message, distance = os.pullEvent("modem_message")
+        if channel == SHIP_GPS_CHANNEL and type(message) == "string" then
+          local parsed, data = pcall(textutils.unserializeJSON, message)
+          if parsed and type(data) == "table" and data.type == "ship_gps"
+             and data.x and data.z then
+            local cid = tonumber(data.cannonId)
+            -- Only beacons addressed to a cannon we own identify our ship.
+            if cid and assignedSet[cid] then
+              local fix = {
+                x = tonumber(data.x), y = tonumber(data.y), z = tonumber(data.z),
+                age = tonumber(data.age), seq = tonumber(data.seq),
+                at = os.clock(),
+              }
+              if data.role == "back" then back = fix else front = fix end
+            end
+          end
+        elseif channel == VEHICLE_CHANNEL and type(message) == "string" then
+          local parsed, data = pcall(textutils.unserializeJSON, message)
+          if parsed and type(data) == "table" and data.type == "cannon_report" then
+            local cid = tonumber(data.cannonId)
+            if cid and assignedSet[cid] then
+              reports[cid] = {
+                x = tonumber(data.x), y = tonumber(data.y), z = tonumber(data.z),
+                gpsOk = data.gpsOk == true,
+                yaw = tonumber(data.yaw) or 0,
+                pitch = tonumber(data.pitch) or 0,
+                sequence = tonumber(data.sequence) or 0,
+                mount = data.mount == true,
+                at = os.clock(),
+              }
+            end
+          end
+        end
+      end
+    end)
+    netError = ok and nil or tostring(err)
+    sleep(1)
+  end
+end
+
+-- Tell both beacons to take a reading at the same instant. This is the job the
+-- cannon computers used to do one ship-wide SYNC per cannon; doing it once,
+-- here, is what keeps every gun's heading identical.
+local syncSeq = 0
+local function shipSyncBroadcaster()
+  while true do
+    if modem then
+      syncSeq = syncSeq + 1
+      local payload = textutils.serializeJSON({ type = "ship_sync", seq = syncSeq })
+      pcall(function()
+        modem.transmit(SHIP_GPS_CHANNEL, SHIP_GPS_CHANNEL, payload)
+      end)
+    end
+    sleep(SHIP_SYNC_INTERVAL)
+  end
+end
+
+-- ------------------------------------------------------------
+-- HTTP bridge
+-- ------------------------------------------------------------
+local function httpPost(path, body)
+  local url = BASE_URL .. path
+  local headers = { ["Content-Type"] = "application/json" }
+  local bodyStr = textutils.serializeJSON(body)
+  local ok, result = pcall(function()
+    local req = http.post(url, bodyStr, headers)
+    if req then
+      local raw = req.readAll()
+      req.close()
+      return raw
+    end
+    return nil
+  end)
+  if not ok or result == nil then return nil end
+  local ok2, decoded = pcall(textutils.unserializeJSON, result)
+  if ok2 and decoded then return decoded end
+  return nil
+end
+
+-- ------------------------------------------------------------
+-- Assigning an aim
+-- ------------------------------------------------------------
+-- The website sends an ABSOLUTE world heading. A mount's yaw on a sublevel ship
+-- is measured in the ship's rotating frame, so the barrel's world heading is
+-- (shipYaw + mountYaw): to hit an absolute heading the ship's heading must be
+-- SUBTRACTED. Doing it here, once, against one shared heading, is the whole
+-- point of this computer.
+local function assignAim(cannonId, cmd, shipYaw)
+  if not modem then return false end
+  local mountYaw = (cmd.yaw or 0)
+  local relative = false
+  if cfg.shipRelativeYaw and shipYaw ~= nil then
+    mountYaw = mountYaw - shipYaw
+    relative = true
+  end
+  mountYaw = ((mountYaw % 360) + 360) % 360
+
+  local payload = textutils.serializeJSON({
+    type = "vehicle_aim",
+    cannonId = cannonId,
+    sequence = cmd.sequence,
+    yaw = mountYaw,
+    pitch = cmd.pitch or 0,
+    fire = cmd.fire ~= false,
+    shipRelative = relative,
+    shipYaw = shipYaw,
+  })
+  local ok = pcall(function() modem.transmit(VEHICLE_CHANNEL, VEHICLE_CHANNEL, payload) end)
+  if ok then
+    assigned[cannonId] = cmd.sequence
+    stats.assigned = stats.assigned + 1
+  end
+  return ok
+end
+
+-- ------------------------------------------------------------
+-- Status screen
+-- ------------------------------------------------------------
+local function ageText(seconds)
+  if not seconds then return "—" end
+  if seconds < 1 then return string.format("%.0fms", seconds * 1000) end
+  return string.format("%.1fs", seconds)
+end
+
+local function drawStatus(lines)
+  term.setBackgroundColor(colors.black)
+  term.clear()
+  term.setCursorPos(1, 1)
+  term.setTextColor(colors.white)
+  local width = term.getSize()
+  for _, line in ipairs(lines) do
+    local text, colour = line, colors.white
+    if type(line) == "table" then
+      text, colour = line[1] or "", line[2] or colors.white
+    end
+    if #text > width then text = text:sub(1, width) end
+    term.setTextColor(colour)
+    print(text)
+  end
+end
+
+-- ------------------------------------------------------------
+-- Main loop
+-- ------------------------------------------------------------
+local function mainLoop()
+  while true do
+    attachModem()
+
+    local shipYaw, shipSkew = computeShipYaw()
+
+    -- Report + ack for the cannons we own, but only those with something new:
+    -- a fresh report to pass on, or a command sequence still to be acked. A
+    -- cannon that has gone quiet is left alone rather than re-sent every
+    -- second, and an ack is never lost just because a report went missing.
+    local cannonReports = {}
+    for _, cid in ipairs(assignedIds) do
+      local r = reports[cid]
+      local fresh = r ~= nil and (os.clock() - r.at) <= CANNON_MAX_AGE
+      local ackSeq = assigned[cid] or 0
+      local seen = forwarded[cid]
+      local needAck = ackSeq > (seen and seen.ack or 0)
+      local needReport = fresh and r.at > (seen and seen.at or 0)
+
+      if needAck or needReport then
+        local entry = { id = cid, sequence = ackSeq }
+        if fresh then
+          if r.gpsOk then
+            entry.x, entry.y, entry.z, entry.gpsOk = r.x, r.y, r.z, true
+          end
+          entry.yaw, entry.pitch = r.yaw, r.pitch
+        end
+        cannonReports[#cannonReports + 1] = entry
+        forwarded[cid] = { at = fresh and r.at or (seen and seen.at or 0), ack = ackSeq }
+      end
+    end
+
+    local body = {
+      computerId = computerId,
+      shipYaw = shipYaw,
+      message = cfg.message,
+      cannons = cannonReports,
+    }
+
+    local resp = httpPost(VEHICLE_POLL_PATH, body)
+    stats.polls = stats.polls + 1
+    lastPollAt = os.clock()
+
+    local lines = {}
+    lines[#lines + 1] = { "=== Sublevel Vehicle Computer ===", colors.yellow }
+    lines[#lines + 1] = "Computer ID: " .. computerId
+    if modemSide then
+      lines[#lines + 1] = "Modem: " .. modemSide .. "  (cannons " .. VEHICLE_CHANNEL ..
+        ", beacons " .. SHIP_GPS_CHANNEL .. ")"
+    else
+      lines[#lines + 1] = { "Modem: none attached", colors.red }
+    end
+    lines[#lines + 1] = ""
+
+    if resp and resp.success and resp.response then
+      local r = resp.response
+      myVehicleId   = tonumber(r.id) or myVehicleId
+      vehicleStatus = r.status
+      vehicleName   = r.name
+    end
+
+    -- Rebuild the owned-cannon sets from the server's assignment — but only
+    -- when the server actually answered. A website blip must not throw away the
+    -- ship's cannon list, because that list is what decides which beacons we
+    -- are allowed to listen to for the heading.
+    local list = nil
+    if resp and resp.success and resp.response then
+      list = resp.response.cannons or {}
+    end
+    if list then
+      assignedIds, assignedSet = {}, {}
+      for _, c in ipairs(list) do
+        local cid = tonumber(c.id)
+        if cid then
+          assignedIds[#assignedIds + 1] = cid
+          assignedSet[cid] = true
+          cannonNames[cid] = c.name or ("Cannon " .. tostring(cid))
+        end
+      end
+    else
+      list = {}
+    end
+
+    -- Assign queued commands.
+    local heldForHeading, assignedNow = 0, 0
+    if vehicleStatus == "active" then
+      for _, c in ipairs(list) do
+        local cid = tonumber(c.id)
+        local cmd = c.command
+        if cid and cmd and tonumber(cmd.sequence) then
+          local seq = tonumber(cmd.sequence)
+          if seq > (assigned[cid] or 0) then
+            local canAim = (shipYaw ~= nil) or not cfg.shipRelativeYaw or not cfg.blockFireWithoutHeading
+            if canAim then
+              if assignAim(cid, { sequence = seq, yaw = tonumber(cmd.yaw) or 0,
+                                  pitch = tonumber(cmd.pitch) or 0, fire = cmd.fire ~= false }, shipYaw) then
+                assignedNow = assignedNow + 1
+              end
+            else
+              -- Held on purpose: a sublevel shot without a heading is not an
+              -- aim, it is a guess. It is assigned the moment the heading is
+              -- known again (the command stays unacked until then).
+              heldForHeading = heldForHeading + 1
+            end
+          end
+        end
+      end
+    end
+    stats.held = stats.held + heldForHeading
+    if heldForHeading > 0 then stats.noHeading = stats.noHeading + heldForHeading end
+
+    -- Heading block
+    local headingText = "— (no front/back GPS yet)"
+    if shipYaw then
+      local note = ""
+      if shipSkew then
+        note = (shipSkew <= 0.75)
+          and string.format(" (beacons synced %.2fs)", shipSkew)
+          or string.format(" (WARNING: beacons %.2fs apart)", shipSkew)
+      end
+      headingText = string.format("%.1f°%s", shipYaw, note)
+    end
+    lines[#lines + 1] = "Ship heading: " .. headingText
+
+    -- Status
+    if resp == nil then
+      lines[#lines + 1] = { "Status: cannot reach website", colors.red }
+      lines[#lines + 1] = { netError or "check your wireless network connection", colors.red }
+    elseif not resp.success then
+      lines[#lines + 1] = { "Status: " .. tostring(resp.response), colors.red }
+      lines[#lines + 1] = { "If this mentions migration 0016, the registry has not been created yet.", colors.red }
+    elseif vehicleStatus == "pending" then
+      lines[#lines + 1] = { "Status: AWAITING APPROVAL", colors.orange }
+      lines[#lines + 1] = "An officer must accept this vehicle from the"
+      lines[#lines + 1] = "website's Vehicle Registry tab, then assign"
+      lines[#lines + 1] = "this ship's cannons to it."
+    elseif vehicleStatus == "active" then
+      lines[#lines + 1] = { "Status: ACTIVE — " .. tostring(vehicleName), colors.lime }
+      if heldForHeading > 0 then
+        lines[#lines + 1] = { ("Holding %d command(s): ship heading unknown, "):format(heldForHeading) ..
+          "so they cannot be aimed yet.", colors.orange }
+      elseif assignedNow > 0 then
+        lines[#lines + 1] = { ("Assigned %d command(s) to cannons."):format(assignedNow), colors.lime }
+      end
+    else
+      lines[#lines + 1] = "Status: " .. tostring(vehicleStatus or "connecting…")
+    end
+
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = ("Cannons assigned: %d    (assigned %d command(s))"):format(#assignedIds, stats.assigned)
+
+    for _, cid in ipairs(assignedIds) do
+      local r = reports[cid]
+      local name = cannonNames[cid] or ("Cannon " .. tostring(cid))
+      if not r then
+        lines[#lines + 1] = { ("  %-16s  no report yet"):format(name:sub(1, 16)), colors.gray }
+      elseif (os.clock() - r.at) > CANNON_MAX_AGE then
+        lines[#lines + 1] = { ("  %-16s  silent %s"):format(name:sub(1, 16), ageText(os.clock() - r.at)), colors.orange }
+      else
+        local pos = r.gpsOk
+          and ("%d,%d,%d"):format(math.floor(r.x + 0.5), math.floor(r.y + 0.5), math.floor(r.z + 0.5))
+          or "no GPS fix"
+        lines[#lines + 1] = ("  %-16s  %s  yaw %.0f  pitch %.0f"):format(
+          name:sub(1, 16), pos, r.yaw or 0, r.pitch or 0)
+      end
+    end
+
+    lines[#lines + 1] = ""
+    if netError then
+      lines[#lines + 1] = { "Modem: " .. netError, colors.red }
+    end
+    lines[#lines + 1] = { "Poll: " .. ageText(lastPollAt and (os.clock() - lastPollAt) or nil) .. " ago", colors.gray }
+
+    drawStatus(lines)
+
+    -- A peripheral event means the modem may have changed; otherwise just wait.
+    local timer = os.startTimer(cfg.pollInterval)
+    local waiting = true
+    while waiting do
+      local event, a = os.pullEvent()
+      if event == "timer" and a == timer then
+        waiting = false
+      elseif event == "peripheral" or event == "peripheral_detach" then
+        attachModem()
+        waiting = false
+      end
+    end
+  end
+end
+
+-- ------------------------------------------------------------
+-- Main
+-- ------------------------------------------------------------
+term.setBackgroundColor(colors.black)
+term.clear()
+term.setCursorPos(1, 1)
+
+loadConfig()
+writeConfig()
+
+term.setTextColor(colors.yellow)
+print("=== Sublevel Vehicle Computer ===")
+term.setTextColor(colors.white)
+print("")
+if not attachModem() then
+  term.setTextColor(colors.orange)
+  print("No wireless modem attached yet.")
+  print("Attach one and it will be picked up automatically.")
+  term.setTextColor(colors.white)
+  print("")
+end
+print("Registering with the website as a vehicle…")
+print("Once an officer accepts it in the Vehicle Registry")
+print("tab, assign this ship's cannons to it there.")
+sleep(2)
+
+-- Three coroutines: one owns the modem, one keeps the two GPS beacons sampling
+-- together, and one polls the website and assigns aims. Nothing blocks on a
+-- fix, so a slow tower or a slow website can never stall the guns.
+parallel.waitForAll(networkPump, shipSyncBroadcaster, mainLoop)

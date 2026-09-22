@@ -1340,3 +1340,125 @@ export async function listGpsTowers(env) {
   return results;
 }
 
+// ---------- ballistics: sublevel vehicles ----------
+
+// A vehicle computer coordinates every Sublevel Cannon Computer on one ship.
+// It self-registers exactly like a cannon does: first poll creates a 'pending'
+// row, and an officer accepts it from the Vehicle Registry tab.
+
+export async function findVehicleById(env, id) {
+  return env.DB.prepare('SELECT * FROM ballistics_vehicles WHERE id = ?').bind(Number(id)).first();
+}
+
+export async function findVehicleByComputerId(env, computerId) {
+  return env.DB.prepare('SELECT * FROM ballistics_vehicles WHERE computer_id = ?').bind(String(computerId)).first();
+}
+
+// First ping from an unknown vehicle computer → a 'pending' registration.
+export async function insertVehicle(env, { computerId, message, shipYaw }) {
+  const now = nowIso();
+  const result = await env.DB.prepare(
+    `INSERT INTO ballistics_vehicles
+       (computer_id, name, message, status, ship_yaw, last_seen_at, created_at, updated_at)
+     VALUES (?, '', ?, 'pending', ?, ?, ?, ?)`
+  ).bind(computerId, message, shipYaw == null ? null : Number(shipYaw), now, now, now).run();
+  return findVehicleById(env, result.meta.last_row_id);
+}
+
+// Every ping refreshes the vehicle's heartbeat, its notes and the ship heading
+// it has derived, whatever its status (so a pending vehicle still looks alive).
+export async function refreshVehicleFromComputer(env, id, { message, shipYaw }) {
+  await env.DB.prepare(
+    `UPDATE ballistics_vehicles
+        SET message = ?, ship_yaw = ?, last_seen_at = ?, updated_at = ?
+      WHERE id = ?`
+  ).bind(message, shipYaw == null ? null : Number(shipYaw), nowIso(), nowIso(), Number(id)).run();
+  return findVehicleById(env, id);
+}
+
+export async function listVehicles(env) {
+  const { results } = await env.DB.prepare('SELECT * FROM ballistics_vehicles ORDER BY id ASC').all();
+  return results;
+}
+
+export async function listCannonsByVehicle(env, vehicleId) {
+  const { results } = await env.DB.prepare(
+    'SELECT * FROM ballistics_cannons WHERE vehicle_id = ? ORDER BY id ASC'
+  ).bind(Number(vehicleId)).all();
+  return results;
+}
+
+// Default names are "Vehicle 1", "Vehicle 2", … — same scheme as cannons.
+export async function nextVehicleName(env) {
+  const { results } = await env.DB.prepare('SELECT name FROM ballistics_vehicles').all();
+  let max = 0;
+  for (const row of results || []) {
+    const m = String(row.name || '').match(/^Vehicle\s+(\d+)$/i);
+    if (m) max = Math.max(max, parseInt(m[1], 10));
+  }
+  return 'Vehicle ' + (max + 1);
+}
+
+export async function acceptVehicle(env, id) {
+  const vehicle = await findVehicleById(env, id);
+  if (!vehicle || vehicle.status !== 'pending') return null;
+  const name = await nextVehicleName(env);
+  await env.DB.prepare(
+    `UPDATE ballistics_vehicles SET status = 'active', name = ?, updated_at = ? WHERE id = ?`
+  ).bind(name, nowIso(), Number(id)).run();
+  return findVehicleById(env, id);
+}
+
+export async function updateVehicle(env, id, fields) {
+  const sets = [];
+  const binds = [];
+  if (fields.name !== undefined)    { sets.push('name = ?');    binds.push(String(fields.name).slice(0, 80)); }
+  if (fields.message !== undefined) { sets.push('message = ?'); binds.push(String(fields.message).slice(0, 200)); }
+  if (!sets.length) return findVehicleById(env, id);
+  sets.push('updated_at = ?');
+  binds.push(nowIso(), Number(id));
+  await env.DB.prepare(`UPDATE ballistics_vehicles SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
+  return findVehicleById(env, id);
+}
+
+// Deleting a vehicle releases its cannons rather than removing them: the
+// cannons are real hardware and go back to running standalone, with their own
+// heading and their own command loop.
+export async function deleteVehicle(env, id) {
+  await env.DB.batch([
+    env.DB.prepare('UPDATE ballistics_cannons SET vehicle_id = NULL, updated_at = ? WHERE vehicle_id = ?')
+      .bind(nowIso(), Number(id)),
+    env.DB.prepare('DELETE FROM ballistics_vehicles WHERE id = ?').bind(Number(id)),
+  ]);
+}
+
+// Assign a cannon to a vehicle, or pass null to release it back to standalone.
+export async function assignCannonToVehicle(env, cannonId, vehicleId) {
+  await env.DB.prepare(
+    'UPDATE ballistics_cannons SET vehicle_id = ?, updated_at = ? WHERE id = ?'
+  ).bind(vehicleId == null ? null : Number(vehicleId), nowIso(), Number(cannonId)).run();
+  return findCannonById(env, cannonId);
+}
+
+// Position + aim report for a cannon whose vehicle computer is reporting on its
+// behalf. A sublevel cannon that has no GPS fix yet reports the 0 fallback, so
+// gpsOk gates the coordinates exactly as it does on the cannon's own poll.
+export async function updateCannonTelemetry(env, id, { x, y, z, gpsOk, yaw, pitch }) {
+  const now = nowIso();
+  if (gpsOk) {
+    await env.DB.prepare(
+      `UPDATE ballistics_cannons
+          SET x = ?, y = ?, z = ?, last_yaw = ?, last_pitch = ?, last_seen_at = ?, updated_at = ?
+        WHERE id = ?`
+    ).bind(Number(x) || 0, Number(y) || 0, Number(z) || 0,
+           Number(yaw) || 0, Number(pitch) || 0, now, now, Number(id)).run();
+  } else {
+    await env.DB.prepare(
+      `UPDATE ballistics_cannons
+          SET last_yaw = ?, last_pitch = ?, last_seen_at = ?, updated_at = ?
+        WHERE id = ?`
+    ).bind(Number(yaw) || 0, Number(pitch) || 0, now, now, Number(id)).run();
+  }
+  return findCannonById(env, id);
+}
+

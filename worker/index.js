@@ -398,8 +398,10 @@ export default {
         // ---- Ballistic Calculator: static cannon registry + CC bridge ----
         if (pathname === '/api/ballistics/cannons' && method === 'GET') return await ballistics.listCannons(request, env);
         if (pathname === '/api/ballistics/towers' && method === 'GET') return await ballistics.listTowers(request, env);
+        if (pathname === '/api/ballistics/vehicles' && method === 'GET') return await ballistics.listVehicles(request, env);
         if (pathname === '/api/ballistics/cc/cannons' && method === 'GET') return await ballisticsCC.ccCannons(request, env);
         if (pathname === '/api/ballistics/cc/poll' && method === 'POST') return await ballisticsCC.ccPoll(request, env);
+        if (pathname === '/api/ballistics/cc/vehicle/poll' && method === 'POST') return await ballisticsCC.ccVehiclePoll(request, env);
 
         m = pathname.match(/^\/api\/ballistics\/cannons\/(\d+)\/accept$/);
         if (m && method === 'POST') return await ballistics.acceptCannon(request, env, m[1]);
@@ -410,6 +412,16 @@ export default {
         m = pathname.match(/^\/api\/ballistics\/cannons\/(\d+)$/);
         if (m && method === 'PUT') return await ballistics.updateCannon(request, env, m[1]);
         if (m && method === 'DELETE') return await ballistics.deleteCannon(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/ballistics\/vehicles\/(\d+)\/accept$/);
+        if (m && method === 'POST') return await ballistics.acceptVehicle(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/ballistics\/vehicles\/(\d+)\/cannons$/);
+        if (m && method === 'POST') return await ballistics.assignVehicleCannon(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/ballistics\/vehicles\/(\d+)$/);
+        if (m && method === 'PUT') return await ballistics.updateVehicle(request, env, m[1]);
+        if (m && method === 'DELETE') return await ballistics.deleteVehicle(request, env, m[1]);
 
         // ---- Ballistic Calculator / Land Registry: BlueMap proxy ----
         if (pathname === '/api/bluemap-config' && method === 'GET') return await bluemap.getConfig(request, env);

@@ -615,6 +615,7 @@
     <div class="bc-tabs">
       <button class="bc-tab active" id="tab-calc" type="button">Calculator</button>
       <button class="bc-tab" id="tab-cannons" type="button">Cannon Registry</button>
+      <button class="bc-tab" id="tab-vehicles" type="button">Vehicle Registry</button>
       <button class="bc-tab" id="tab-gps" type="button">GPS Network</button>
     </div>
 
@@ -688,6 +689,30 @@
         <label>Pending Requests</label>
         <p class="field-hint">Computers that have pinged in but are not yet accepted. Accept to register, or decline to remove.</p>
         <div class="registry-list" id="cannon-pending-list"></div>
+      </div>
+
+    </div>
+
+    <div class="panel-inner" id="vehicles-panel" style="display:none;">
+
+      <div class="field-group" style="grid-column:1/-1;">
+        <label>Registered Vehicles</label>
+        <p class="field-hint">
+          A sublevel ship's Sublevel Vehicle Computer, which coordinates every sublevel cannon on that ship.
+          It holds the ship's heading from the front/back GPS beacons and hands each cannon its final aim, so
+          the cannon computers only apply the values they are given.
+          <br/><br/>
+          Assign the sublevel cannons that belong to the ship below. An assigned cannon stops running its own
+          command loop and is driven entirely by the vehicle; release it to hand control back. Deleting a
+          vehicle releases its cannons rather than removing them.
+        </p>
+        <div class="registry-list" id="vehicle-active-list"></div>
+      </div>
+
+      <div class="field-group" style="grid-column:1/-1;">
+        <label>Pending Vehicle Requests</label>
+        <p class="field-hint">Vehicle computers that have pinged in but are not yet accepted. Accept to register, or decline to remove.</p>
+        <div class="registry-list" id="vehicle-pending-list"></div>
       </div>
 
     </div>
@@ -1075,9 +1100,40 @@
   //   /maps/{mapId}/tiles/{lod}/x{tileX}/z{tileZ}.png
   // Each coordinate is split digit-by-digit into a subpath (so tile
   // x=12 lives at "x1/2"), and negative coordinates get a "-" prefix.
-  // We pin the most detailed low-res level (lod 1, 1 block = 1 pixel,
-  // 500×500px tiles) to Leaflet zoom 0 via maxNativeZoom/minNativeZoom,
-  // and let Leaflet scale those tiles for every other zoom level.
+  //
+  // BlueMap publishes the low-res tiles as a pyramid, and which level we
+  // ask for matters a great deal: lod 1 is 1 block per pixel (500 blocks
+  // across a tile) and every further level coarsens by lodFactor (5), so
+  // lod 2 is 2 500 blocks a tile and lod 3 is 12 500.
+  //
+  // Pinning EVERY zoom to lod 1 — as this used to — means a zoomed-out view
+  // asks for hundreds of ~150 KB PNGs at once. That is why zooming out made
+  // the map look like it had stopped loading, and why panning then filled it
+  // in: a pan requests far fewer new tiles than a change of zoom does.
+  // Asking each zoom level for the lod that keeps a tile a sensible size on
+  // screen bounds the number of tiles at every zoom instead.
+  //
+  // Leaflet derives the tile grid from the layer's "native zoom" (the zoom
+  // at which one tile is exactly tileSize pixels), so switching level of
+  // detail is only a matter of giving the layer the right native zoom.
+  const LOWRES_FACTOR = 5;                 // the map's lodFactor
+
+  function lodBlocksPerTile(lod) {
+    // lod 1 is one block per pixel, so its tile spans exactly tileSize blocks.
+    return (MAPINFO.tileSize || 500) * Math.pow(LOWRES_FACTOR, lod - 1);
+  }
+
+  function lodNativeZoom(lod) {
+    return Math.log2((MAPINFO.tileSize || 500) / lodBlocksPerTile(lod));
+  }
+
+  // Set so a tile stays roughly 200-800 screen pixels wide at every zoom,
+  // which keeps the request count small even when the whole world is in view.
+  function lodForZoom(zoom) {
+    if (zoom <= -4) return 3;
+    if (zoom <= -2) return 2;
+    return 1;
+  }
   function blueMapPathFromCoords(x, z) {
     function split(n) {
       let s = '';
@@ -1091,7 +1147,7 @@
   }
 
   const BlueMapLayer = L.GridLayer.extend({
-    options: { tileSize: 500, updateWhenIdle: true, keepBuffer: 1, attribution: 'Map data: BlueMap' },
+    options: { tileSize: 500, updateWhenIdle: false, keepBuffer: 2, attribution: 'Map data: BlueMap' },
     createTile(coords, done) {
       const size = this.getTileSize().x;
       const canvas = document.createElement('canvas');
@@ -1114,7 +1170,8 @@
       return canvas;
     },
     _tileUrl(coords) {
-      const tilePath = `/maps/${encodeURIComponent(MAPINFO.mapId)}/tiles/1/${blueMapPathFromCoords(coords.x, coords.y)}.png`;
+      const lod = this.options.lod || 1;
+      const tilePath = `/maps/${encodeURIComponent(MAPINFO.mapId)}/tiles/${lod}/${blueMapPathFromCoords(coords.x, coords.y)}.png`;
       if (CFG.useProxy) return `/api/maptile?path=${encodeURIComponent(tilePath)}`;
       return CFG.bluemapBaseUrl.replace(/\/$/, '') + tilePath;
     }
@@ -1127,13 +1184,69 @@
     crs: L.CRS.Simple,
     center: mcToLL(initialX, initialZ),
     zoom: CFG.defaultZoom,
-    minZoom: -3,
+    minZoom: -6,
     maxZoom: 2,
     zoomSnap: 0.5,
     zoomDelta: 0.5
   });
-  const bluemapLayer = new BlueMapLayer({ maxNativeZoom: 0, minNativeZoom: 0, tileSize: MAPINFO.tileSize });
-  bluemapLayer.addTo(map);
+
+  // One layer per level of detail, built on demand and swapped in as the zoom
+  // crosses a threshold. `bluemapLayer` is whichever one is currently shown.
+  const lodLayers = {};
+  let activeLod = null;
+  let bluemapLayer = null;
+
+  function lodLayer(lod) {
+    if (!lodLayers[lod]) {
+      const native = lodNativeZoom(lod);
+      lodLayers[lod] = new BlueMapLayer({
+        lod,
+        tileSize: MAPINFO.tileSize,
+        minNativeZoom: native,
+        maxNativeZoom: native
+      });
+    }
+    return lodLayers[lod];
+  }
+
+  function applyLod() {
+    const want = lodForZoom(map.getZoom());
+    if (want === activeLod) return;
+
+    const next = lodLayer(want);
+    const previous = activeLod === null ? null : lodLayers[activeLod];
+
+    // Bring the new level in first and retire the old one after it has drawn:
+    // removing first would blink an empty map on every threshold crossing.
+    let dropped = false;
+    const drop = () => {
+      if (dropped) return;
+      dropped = true;
+      if (previous && map.hasLayer(previous)) map.removeLayer(previous);
+    };
+    next.once('load', drop);
+    next.addTo(map);
+    bluemapLayer = next;
+    activeLod = want;
+    if (previous) setTimeout(drop, 2500);
+  }
+
+  // Called when the BlueMap source or map ID changes. Tile URLs embed the map
+  // ID, so any level of detail other than the one on screen is now stale and
+  // has to be thrown away rather than left to be swapped in later.
+  function reloadMapSource() {
+    Object.keys(lodLayers).forEach((lod) => {
+      const layer = lodLayers[lod];
+      if (layer !== bluemapLayer) {
+        if (map.hasLayer(layer)) map.removeLayer(layer);
+        delete lodLayers[lod];
+      }
+    });
+    if (bluemapLayer) bluemapLayer.redraw();
+  }
+
+  applyLod();
+  map.on('zoomend', applyLod);
 
   const cursorEl = document.getElementById('cursor-coords');
   map.on('mousemove', (e) => {
@@ -1260,7 +1373,7 @@
       localStorage.setItem(MS_OVERRIDE_KEY, JSON.stringify({ baseUrl: CFG.bluemapBaseUrl, mapId: MAPINFO.mapId }));
     } catch (e) {}
 
-    bluemapLayer.redraw();
+    reloadMapSource();
     if (MAPINFO.startPos) map.setView(mcToLL(MAPINFO.startPos.x, MAPINFO.startPos.z), CFG.defaultZoom);
     updateSourcePill();
   });
@@ -1614,6 +1727,8 @@
   // 8b. STATIC CANNON CONTROL
   let cannonsActive    = [];
   let cannonsPending   = [];
+  let vehiclesActive   = [];
+  let vehiclesPending  = [];
   let gpsTowers        = [];
   let selectedCannonId = null;        // '' = manual entry
 
@@ -1818,10 +1933,12 @@
     const online = cannonOnline(c);
     const sub    = c.sublevel ? '<span class="cannon-badge sublevel">Sublevel</span>' : '';
     const status = online ? '<span class="cannon-badge online">Online</span>' : '<span class="cannon-badge offline">Offline</span>';
+    const vehName = vehicleNameFor(c);
+    const veh     = vehName ? '<span class="cannon-badge">' + escHtml(vehName) + '</span>' : '';
     return '<div class="cannon-card" data-cannon-id="' + c.id + '">' +
       '<div class="cannon-card__head">' +
         '<input class="cannon-card__name" data-cannon-name="' + c.id + '" value="' + escHtml(c.name) + '"/>' +
-        status + sub +
+        status + sub + veh +
       '</div>' +
       '<div class="cannon-card__meta">' +
         'Mount: X ' + c.x + ' · Y ' + c.y + ' · Z ' + c.z + '<br/>' +
@@ -1916,6 +2033,184 @@
     const data = await r.json();
     if (!r.ok) { alert(data.error || 'Could not save cannon.'); return; }
     await loadCannons();
+  }
+
+  // ════════════════════════════════════════════
+  // 8b-bis. VEHICLE REGISTRY
+  //    A sublevel ship's Sublevel Vehicle Computer coordinates every
+  //    sublevel cannon on that ship. It registers itself exactly like a
+  //    cannon; the officer accepts it here and then assigns the ship's
+  //    cannons to it. Assigning a cannon moves its heading and its command
+  //    delivery onto the vehicle, so the cannon computer only applies the
+  //    values it is given.
+  // ════════════════════════════════════════════
+  // `light` refreshes the data without redrawing, so the background poll can't
+  // wipe a name being typed into a card (same trick as the cannon registry).
+  async function loadVehicles(opts) {
+    const light = !!(opts && opts.light);
+    try {
+      const r = await fetch('/api/ballistics/vehicles');
+      if (!r.ok) return;
+      const data = await r.json();
+      vehiclesActive  = data.active  || [];
+      vehiclesPending = data.pending || [];
+      if (!light) { renderVehicles(); renderRegistry(); }
+    } catch (e) { console.warn('Could not load vehicle registry.', e); }
+  }
+
+  function renderVehicles() {
+    const activeEl  = document.getElementById('vehicle-active-list');
+    const pendingEl = document.getElementById('vehicle-pending-list');
+    activeEl.innerHTML = vehiclesActive.length
+      ? vehiclesActive.map(vehicleCard).join('')
+      : '<div class="registry-empty">No registered vehicles yet. Accept a pending request below, or run the Sublevel Vehicle Computer program on an in-game computer.</div>';
+    pendingEl.innerHTML = vehiclesPending.length
+      ? vehiclesPending.map(vehiclePendingCard).join('')
+      : '<div class="registry-empty">No pending vehicle requests. In-game vehicle computers that ping the website appear here.</div>';
+    wireVehicleButtons();
+  }
+
+  // Sublevel cannons that could be assigned: accepted, mobile, and either
+  // unassigned or already on this vehicle (so a mistake is easy to undo).
+  function assignableCannons(vehicleId) {
+    return cannonsActive.filter(c =>
+      Number(c.sublevel) === 1 &&
+      (c.vehicle_id == null || Number(c.vehicle_id) === Number(vehicleId)));
+  }
+
+  function vehicleCard(v) {
+    const online = cannonOnline(v);
+    const status = online ? '<span class="cannon-badge online">Online</span>' : '<span class="cannon-badge offline">Offline</span>';
+    const guns  = v.cannons || [];
+    const heading = (v.ship_yaw != null)
+      ? Number(v.ship_yaw).toFixed(1) + '° (' + yawCardinal(v.ship_yaw) + ')'
+      : '— (no front/back GPS yet)';
+
+    const gunList = guns.length
+      ? guns.map(c =>
+          '<div class="cannon-card__meta" style="display:flex;justify-content:space-between;align-items:center;gap:10px;">' +
+            '<span>' + escHtml(c.name) + ' <span style="opacity:.6;">(PC ' + escHtml(c.computerId) + ')</span></span>' +
+            '<button class="map-btn danger" data-vehicle-unassign="' + v.id + '" data-vehicle-cannon="' + c.id + '">Release</button>' +
+          '</div>')
+        .join('')
+      : '<div class="cannon-card__meta">No cannons assigned yet.</div>';
+
+    const options = assignableCannons(v.id)
+      .map(c => '<option value="' + c.id + '">' + escHtml(c.name) + ' (PC ' + escHtml(c.computer_id) + ')</option>')
+      .join('');
+
+    return '<div class="cannon-card" data-vehicle-id="' + v.id + '">' +
+      '<div class="cannon-card__head">' +
+        '<input class="cannon-card__name" data-vehicle-name="' + v.id + '" value="' + escHtml(v.name) + '"/>' +
+        status +
+      '</div>' +
+      '<div class="cannon-card__meta">' +
+        'Computer ' + escHtml(v.computer_id) + '<br/>' +
+        'Ship heading ' + heading + '<br/>' +
+        guns.length + ' cannon' + (guns.length === 1 ? '' : 's') + ' assigned · Last seen ' +
+        (v.last_seen_at ? new Date(v.last_seen_at).toLocaleString() : 'never') +
+      '</div>' +
+      '<div class="registry-actions">' +
+        '<button class="map-btn" data-vehicle-save="' + v.id + '">Save name</button>' +
+        '<button class="map-btn danger" data-vehicle-delete="' + v.id + '">Delete vehicle</button>' +
+      '</div>' +
+      '<div style="margin-top:12px;"><label style="font-family:var(--font-mono);font-size:11px;color:var(--parchment-dim);">Assigned cannons</label></div>' +
+      gunList +
+      (options
+        ? '<div class="cannon-card__row" style="margin-top:10px;">' +
+            '<select class="bc-select" data-vehicle-pick="' + v.id + '">' + options + '</select>' +
+            '<button class="calc-btn" data-vehicle-assign="' + v.id + '">Assign</button>' +
+          '</div>'
+        : '') +
+    '</div>';
+  }
+
+  function vehiclePendingCard(v) {
+    const msg = v.message ? '<div class="cannon-card__msg">' + escHtml(v.message) + '</div>' : '';
+    return '<div class="cannon-card" data-vehicle-id="' + v.id + '">' +
+      '<div class="cannon-card__head">' +
+        '<span class="cannon-card__name" style="cursor:default;">' + escHtml('Computer ' + v.computer_id) + '</span>' +
+      '</div>' +
+      '<div class="cannon-card__meta">' +
+        'Last seen ' + (v.last_seen_at ? new Date(v.last_seen_at).toLocaleString() : 'never') +
+      '</div>' +
+      msg +
+      '<div class="registry-actions">' +
+        '<button class="calc-btn" data-vehicle-accept="' + v.id + '">Accept</button>' +
+        '<button class="map-btn danger" data-vehicle-decline="' + v.id + '">Decline</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function wireVehicleButtons() {
+    document.querySelectorAll('[data-vehicle-accept]').forEach(b => b.addEventListener('click', () => acceptVehicle(b.dataset.vehicleAccept)));
+    document.querySelectorAll('[data-vehicle-decline]').forEach(b => b.addEventListener('click', () => declineVehicle(b.dataset.vehicleDecline)));
+    document.querySelectorAll('[data-vehicle-save]').forEach(b => b.addEventListener('click', () => saveVehicle(b.dataset.vehicleSave)));
+    document.querySelectorAll('[data-vehicle-delete]').forEach(b => b.addEventListener('click', () => removeVehicle(b.dataset.vehicleDelete)));
+    document.querySelectorAll('[data-vehicle-assign]').forEach(b => b.addEventListener('click', () => assignVehicleCannon(b.dataset.vehicleAssign)));
+    document.querySelectorAll('[data-vehicle-unassign]').forEach(b => b.addEventListener('click', () => releaseVehicleCannon(b.dataset.vehicleUnassign, b.dataset.vehicleCannon)));
+  }
+
+  async function acceptVehicle(id) {
+    const r = await fetch('/api/ballistics/vehicles/' + id + '/accept', { method: 'POST' });
+    const data = await r.json();
+    if (!r.ok) { alert(data.error || 'Could not accept request.'); return; }
+    await loadVehicles();
+  }
+
+  async function declineVehicle(id) {
+    if (!confirm('Decline and remove this vehicle request?')) return;
+    await fetch('/api/ballistics/vehicles/' + id, { method: 'DELETE' });
+    await loadVehicles();
+  }
+
+  async function removeVehicle(id) {
+    if (!confirm('Delete this vehicle? Its cannons are released back to running standalone.')) return;
+    await fetch('/api/ballistics/vehicles/' + id, { method: 'DELETE' });
+    await loadVehicles();
+  }
+
+  async function saveVehicle(id) {
+    const name = document.querySelector('[data-vehicle-name="' + id + '"]').value.trim();
+    const r = await fetch('/api/ballistics/vehicles/' + id, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name })
+    });
+    const data = await r.json();
+    if (!r.ok) { alert(data.error || 'Could not save vehicle.'); return; }
+    await loadVehicles();
+  }
+
+  async function assignVehicleCannon(id) {
+    const sel = document.querySelector('[data-vehicle-pick="' + id + '"]');
+    if (!sel || !sel.value) { alert('Select a cannon first.'); return; }
+    const r = await fetch('/api/ballistics/vehicles/' + id + '/cannons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cannonId: Number(sel.value), assign: true })
+    });
+    const data = await r.json();
+    if (!r.ok) { alert(data.error || 'Could not assign cannon.'); return; }
+    await loadCannons();
+    await loadVehicles();
+  }
+
+  async function releaseVehicleCannon(vehicleId, cannonId) {
+    const r = await fetch('/api/ballistics/vehicles/' + vehicleId + '/cannons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cannonId: Number(cannonId), assign: false })
+    });
+    if (!r.ok) { const d = await r.json(); alert(d.error || 'Could not release cannon.'); return; }
+    await loadCannons();
+    await loadVehicles();
+  }
+
+  function vehicleNameFor(c) {
+    if (c.vehicle_id == null) return null;
+    const v = vehiclesActive.concat(vehiclesPending).find(x => Number(x.id) === Number(c.vehicle_id));
+    return v ? (v.name || ('Vehicle ' + v.id)) : ('Vehicle ' + c.vehicle_id);
   }
 
   // ════════════════════════════════════════════
@@ -2019,8 +2314,8 @@
   }
 
   function setTab(which) {
-    const tabs   = { calc: 'tab-calc',   cannons: 'tab-cannons',   gps: 'tab-gps' };
-    const panels = { calc: 'calc-panel', cannons: 'registry-panel', gps: 'gps-panel' };
+    const tabs   = { calc: 'tab-calc', cannons: 'tab-cannons', vehicles: 'tab-vehicles', gps: 'tab-gps' };
+    const panels = { calc: 'calc-panel', cannons: 'registry-panel', vehicles: 'vehicles-panel', gps: 'gps-panel' };
     Object.keys(panels).forEach(k => {
       document.getElementById(tabs[k]).classList.toggle('active', k === which);
       document.getElementById(panels[k]).style.display = (k === which) ? '' : 'none';
@@ -2029,6 +2324,7 @@
 
   document.getElementById('tab-calc').addEventListener('click', () => setTab('calc'));
   document.getElementById('tab-cannons').addEventListener('click', () => { setTab('cannons'); loadCannons(); renderGps(); });
+  document.getElementById('tab-vehicles').addEventListener('click', () => { setTab('vehicles'); loadCannons().then(loadVehicles); });
   document.getElementById('tab-gps').addEventListener('click', () => { setTab('gps'); loadCannons().then(() => { renderGps(); }); loadTowers(); });
 
   // Keep the map dots fresh: sublevel cannons push new GPS coordinates every
@@ -2041,13 +2337,17 @@
   function gpsTabOpen() {
     return document.getElementById('gps-panel').style.display !== 'none';
   }
+  function vehiclesTabOpen() {
+    return document.getElementById('vehicles-panel').style.display !== 'none';
+  }
   let cannonsPollBusy = false;
   setInterval(async () => {
     if (cannonsPollBusy) return;
     cannonsPollBusy = true;
     try {
-      await loadCannons({ light: registryTabOpen() || gpsTabOpen() });
+      await loadCannons({ light: registryTabOpen() || gpsTabOpen() || vehiclesTabOpen() });
       if (gpsTabOpen()) renderGps();
+      if (vehiclesTabOpen()) await loadVehicles({ light: true });
     } finally { cannonsPollBusy = false; }
   }, 3000);
 
@@ -2071,6 +2371,7 @@
     app.style.display  = 'flex';
     userBadge.textContent = user.username + ' · ' + user.role;
     loadCannons();
+    loadVehicles();
     setTimeout(() => map.invalidateSize(), 50);
   }
 

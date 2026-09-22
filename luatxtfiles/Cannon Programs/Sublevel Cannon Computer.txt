@@ -24,6 +24,12 @@
 --     fore-aft centerline. This cannon computer listens to both and
 --     derives the ship's orientation. Their separation is the single
 --     biggest factor in how accurate that heading is.
+--   - OPTIONAL, for a ship with more than one cannon: a "Sublevel Vehicle
+--     Computer" (its own program, one per ship). Assign this cannon to that
+--     vehicle on the website and it takes over the ship's heading and the
+--     command loop for every gun on the ship; this computer then only applies
+--     the values the vehicle gives it. Run standalone — the default — nothing
+--     below changes.
 --
 -- BUILD
 --   1. Build your cannon on the ship's cannon mount (NOT the fixed
@@ -59,6 +65,12 @@
 --           quality and fix age, so the GPS page can show how healthy the
 --           tower network is. Until the first real fix is found it never
 --           reports a position, so the dot never snaps to 0,0,0.
+--   5. If an officer assigns this cannon to a Sublevel Vehicle Computer on
+--      the website, this program notices on its next poll and switches to
+--      managed mode: it reports its position and aim state to the vehicle, and
+--      applies the aim the vehicle hands back instead of computing one. The
+--      status screen says which vehicle is in charge. Release the cannon on
+--      the website and it goes straight back to running its own loop.
 --
 -- DIRECTION FACED WHEN ASSEMBLED ("facing")
 --   Same convention as the static Cannon Computer:
@@ -97,6 +109,13 @@ local GPS_WINDOW   = 0.6   -- seconds to wait for tower replies before giving up
 -- a reading at the same instant. See the ship-heading section for why that
 -- matters more than raw GPS precision.
 local SHIP_SYNC_INTERVAL = 1.5
+
+-- How often (seconds) this computer polls the website while a Sublevel Vehicle
+-- Computer is managing it. The vehicle reports this cannon's position and aim
+-- state to the website on our behalf, so the poll only has to check whether we
+-- are still assigned to it — which is why a managed ship costs the server less
+-- than the same cannons running standalone.
+local MANAGED_POLL_INTERVAL = 3
 
 -- Sequence timing (seconds). reloadTime is user-configurable and set during
 -- first-boot setup; its placement depends on reloadType (auto-loader reloads
@@ -404,6 +423,22 @@ end
 -- convention as the website (0 = south, 90 = west, 180 = north, 270 = east).
 local SHIP_GPS_CHANNEL = 4120   -- must match the Ship GPS program
 
+-- Channel this cannon's Sublevel Vehicle Computer talks to it on, once the
+-- website has assigned this cannon to a vehicle. MUST match VEHICLE_CHANNEL in
+-- the Sublevel Vehicle Computer program.
+local VEHICLE_CHANNEL = 4121
+
+-- MANAGED MODE
+--   When the website reports that a Sublevel Vehicle Computer owns this cannon,
+--   this computer stops doing aiming maths. The vehicle holds the ship's
+--   heading — ONE value shared by every gun on the ship, rather than each
+--   computer deriving its own — and it hands this cannon its final mount aim.
+--   All this computer does then is apply the values it is given.
+local managedVehicle = nil    -- { id, name, computerId }, from the poll response
+local pendingAim     = nil    -- the next aim the vehicle has assigned
+local vehicleShipYaw = nil    -- the heading the vehicle is using
+local lastVehicleAt  = nil    -- when the vehicle last spoke to us
+
 -- The registry id of THIS cannon on the website, learned from the poll
 -- response (see mainLoop). Every Ship GPS beacon names the cannon it is
 -- assigned to, and we only accept beacons that name us. Without this, two
@@ -484,6 +519,7 @@ local function networkPump()
     local ok, err = pcall(function()
       engine:attach()
       engine:openChannel(SHIP_GPS_CHANNEL)
+      engine:openChannel(VEHICLE_CHANNEL)
       while true do
         local _, side, channel, replyChannel, message, distance = os.pullEvent("modem_message")
         -- Argument order is (side, channel, message, distance). replyChannel
@@ -503,6 +539,22 @@ local function networkPump()
             }
             if data.role == "back" then back = fix else front = fix end
           end
+        elseif channel == VEHICLE_CHANNEL and type(message) == "string" then
+          -- An aim assigned by our vehicle. Addressing is by registry id, so a
+          -- second vehicle in wireless range can never aim this cannon.
+          local parsed, data = pcall(textutils.unserializeJSON, message)
+          if parsed and type(data) == "table" and data.type == "vehicle_aim"
+             and myCannonId ~= nil and tonumber(data.cannonId) == tonumber(myCannonId) then
+            pendingAim = {
+              sequence = tonumber(data.sequence) or 0,
+              yaw = tonumber(data.yaw) or 0,
+              pitch = tonumber(data.pitch) or 0,
+              fire = data.fire ~= false,
+              fromVehicle = true,     -- already ship-relative: do NOT correct again
+            }
+            vehicleShipYaw = tonumber(data.shipYaw)
+            lastVehicleAt = os.clock()
+          end
         end
       end
     end)
@@ -518,7 +570,10 @@ end
 local syncSeq = 0
 local function shipSyncBroadcaster()
   while true do
-    if engine:openChannel(SHIP_GPS_CHANNEL) and engine.modem then
+    -- A managed cannon has handed this job to its vehicle: the vehicle sends
+    -- the one SYNC tick that keeps the whole ship's beacons sampling together,
+    -- and two tickers on the same channel would just be noise.
+    if managedVehicle == nil and engine:openChannel(SHIP_GPS_CHANNEL) and engine.modem then
       syncSeq = syncSeq + 1
       local payload = textutils.serializeJSON({ type = "ship_sync", seq = syncSeq })
       pcall(function()
@@ -527,6 +582,28 @@ local function shipSyncBroadcaster()
     end
     sleep(SHIP_SYNC_INTERVAL)
   end
+end
+
+-- Report this cannon's live position and aim state to our vehicle. The vehicle
+-- forwards all of it to the website on our behalf and aims us from this
+-- cannon's own position, so while it is in charge this computer neither polls
+-- for commands nor works out an aim of its own.
+local function vehicleReport(hasMount, x, y, z, gpsOk, yaw, pitch, sequence)
+  if not engine:openChannel(VEHICLE_CHANNEL) or not engine.modem then return false end
+  if myCannonId == nil then return false end
+  local payload = textutils.serializeJSON({
+    type = "cannon_report",
+    cannonId = myCannonId,
+    computerId = computerId,
+    -- A cannon with no fix yet reports no position at all, so the registry
+    -- keeps its last known coordinates instead of jumping to 0,0,0.
+    x = gpsOk and x or nil, y = gpsOk and y or nil, z = gpsOk and z or nil,
+    gpsOk = gpsOk == true,
+    yaw = yaw, pitch = pitch,
+    sequence = sequence,
+    mount = hasMount == true,
+  })
+  return pcall(function() engine.modem.transmit(VEHICLE_CHANNEL, VEHICLE_CHANNEL, payload) end)
 end
 
 -- A compact health summary of the GPS network, piggy-backed on the poll we
@@ -672,13 +749,18 @@ local function runCommand(mount, cmd)
   -- Recompute the heading here, at aim time, rather than reusing the value
   -- sampled before the poll: disassemble/assemble/reload can take ~10s and the
   -- ship may have turned since.
-  local shipYaw = computeShipYaw()
-  if cfg.shipRelativeYaw and shipYaw == nil then
-    print("Warning: ship heading unknown — aiming in world space.")
-  end
+  -- A command assigned by a vehicle already has the ship's heading taken out
+  -- of it (the vehicle owns the heading, and it is the same heading for every
+  -- gun on the ship), so correcting it again here would double the error.
   local aimYaw = (cmd.yaw or 0) + cfg.yawOffset
-  if cfg.shipRelativeYaw and shipYaw then
-    aimYaw = aimYaw - shipYaw
+  if not cmd.fromVehicle then
+    local shipYaw = computeShipYaw()
+    if cfg.shipRelativeYaw and shipYaw == nil then
+      print("Warning: ship heading unknown — aiming in world space.")
+    end
+    if cfg.shipRelativeYaw and shipYaw then
+      aimYaw = aimYaw - shipYaw
+    end
   end
   aimYaw = ((aimYaw % 360) + 360) % 360
   local aimPitch = (cmd.pitch or 0) * cfg.pitchScale
@@ -713,9 +795,19 @@ local function drawStatus(lines)
   term.clear()
   term.setCursorPos(1, 1)
   term.setTextColor(colors.white)
+  local width = term.getSize()
   for _, line in ipairs(lines) do
-    print(line)
+    -- A line may be a plain string, or { text, colour } when it is worth
+    -- drawing attention to.
+    local text, colour = line, colors.white
+    if type(line) == "table" then
+      text, colour = line[1] or "", line[2] or colors.white
+    end
+    if #text > width then text = text:sub(1, width) end
+    term.setTextColor(colour)
+    print(text)
   end
+  term.setTextColor(colors.white)
 end
 
 -- ------------------------------------------------------------
@@ -745,7 +837,24 @@ local function mainLoop()
     -- of snapping the cannon's dot to 0,0,0.
     local gpsX, gpsY, gpsZ, gpsMeta = engine:get()
     local gpsOk = gpsX ~= nil
-    local shipYaw, shipSkew = computeShipYaw()
+
+    -- Managed by a vehicle? Then the heading is the VEHICLE's, not one derived
+    -- here: one ship, one heading, every gun. If the vehicle has gone quiet we
+    -- show no heading rather than silently falling back to our own, because a
+    -- different heading per cannon is exactly what the vehicle exists to stop.
+    local managed = managedVehicle ~= nil
+    local shipYaw, shipSkew = nil, nil
+    if managed then
+      if vehicleShipYaw and lastVehicleAt and (os.clock() - lastVehicleAt) <= BEACON_MAX_AGE then
+        shipYaw = vehicleShipYaw
+      end
+    else
+      shipYaw, shipSkew = computeShipYaw()
+    end
+
+    if managed then
+      vehicleReport(mount ~= nil, gpsX, gpsY, gpsZ, gpsOk, curYaw, curPitch, lastSequence)
+    end
 
     local body = {
       computerId = computerId,
@@ -768,6 +877,13 @@ local function mainLoop()
     -- GPS listener knows which beacons to trust.
     if resp and resp.success and resp.response and resp.response.id then
       myCannonId = tonumber(resp.response.id) or myCannonId
+    end
+
+    -- Does a vehicle own this cannon? Only an ACCEPTED vehicle is ever reported
+    -- here (the server withholds a pending one), and a cannon that is released
+    -- goes straight back to running its own command loop.
+    if resp and resp.success and resp.response then
+      managedVehicle = resp.response.vehicle or nil
     end
 
     table.insert(lines, "Sublevel Cannon Computer")
@@ -796,10 +912,17 @@ local function mainLoop()
         end
       end
       table.insert(lines, "Ship heading: " .. string.format("%.1f", shipYaw) .. "°" .. skewNote)
+    elseif managed then
+      table.insert(lines, "Ship heading: waiting for the vehicle's heading")
     elseif myCannonId == nil then
       table.insert(lines, "Ship heading: waiting for registry id…")
     else
       table.insert(lines, "Ship heading: waiting for assigned front/back GPS…")
+    end
+
+    if managedVehicle then
+      table.insert(lines, { "Vehicle: " .. tostring(managedVehicle.name or ("Vehicle " .. tostring(managedVehicle.id)))
+        .. " — heading and commands routed through it", colors.lime })
     end
 
     if not mount then
@@ -818,10 +941,19 @@ local function mainLoop()
       table.insert(lines, "An officer must accept this cannon")
       table.insert(lines, "from the website's Cannon Registry tab.")
     elseif resp.response.status == "active" then
-      local cmd = resp.response.command
+      -- A managed cannon is given its aim by the vehicle, never by the server:
+      -- the vehicle is the one place the ship-relative correction can be made
+      -- with a single shared heading, and it acks the command itself. The
+      -- server withholds the command from a managed cannon as well, so the two
+      -- together leave exactly one route to firing. Deliberately NOT falling
+      -- back to resp.response.command here: an uncorrected world yaw fired as
+      -- if it were a mount yaw is precisely the "aimed the opposite way" bug.
+      local cmd = pendingAim
+      if not managed then cmd = resp.response.command end
       if cmd and cmd.sequence ~= lastSequence then
         if mount then
           lastSequence = cmd.sequence   -- ack intent immediately (at-most-once fire)
+          if managed then pendingAim = nil end
           local ok, err = pcall(runCommand, mount, cmd)
           if not ok then
             print("Command #" .. tostring(cmd.sequence) .. " failed: " .. tostring(err))
@@ -839,7 +971,12 @@ local function mainLoop()
     end
 
     drawStatus(lines)
-    sleep(cfg.pollInterval)
+
+    -- While a vehicle is in charge it reports our position to the website on
+    -- our behalf, so this poll is only a status check and does not need to run
+    -- every second. Slowing it down while managed means the whole ship costs
+    -- the server LESS than the same cannons running standalone would.
+    sleep(managed and MANAGED_POLL_INTERVAL or cfg.pollInterval)
   end
 end
 

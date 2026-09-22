@@ -158,9 +158,26 @@ export async function ccPoll(request, env) {
   const ack = Math.round(num(body.sequence, 0));
   if (ack > 0) await store.ackCannonCommand(env, cannon.id, ack);
 
-  // Deliver a queued command, if any.
+  // Does a Sublevel Vehicle Computer own this cannon? Only an ACCEPTED vehicle
+  // may take a cannon over: a pending one leaves its cannons running
+  // standalone, so a registration request can never disarm a working cannon.
+  //
+  // `vehicle_id` is undefined until migration 0016 is applied, which simply
+  // reads as "no vehicle" — the cannon bridge keeps working without it.
+  let vehicle = null;
+  if (cannon.vehicle_id != null) {
+    const v = await store.findVehicleById(env, cannon.vehicle_id);
+    if (v && v.status === 'active') {
+      vehicle = { id: v.id, name: v.name || ('Vehicle ' + v.id), computerId: v.computer_id };
+    }
+  }
+
+  // Deliver a queued command, if any. A cannon owned by a vehicle is NOT given
+  // the command: its vehicle assigns the final aim itself (see ccVehiclePoll),
+  // and withholding it here means a managed cannon has exactly one possible
+  // path to firing.
   let command = null;
-  if (cannon.status === 'active' &&
+  if (!vehicle && cannon.status === 'active' &&
       Number(cannon.command_sequence) > 0 &&
       Number(cannon.acked_sequence) < Number(cannon.command_sequence)) {
     command = {
@@ -176,6 +193,110 @@ export async function ccPoll(request, env) {
     id:     cannon.id,
     name:   cannon.name,
     command,
+    vehicle,
+  });
+}
+
+// POST /api/ballistics/cc/vehicle/poll
+// Body: {
+//   computerId, shipYaw, message,
+//   cannons: [ { id, sequence, x, y, z, gpsOk, yaw, pitch } ]
+// }
+//
+// The Sublevel Vehicle Computer is the single brain of a sublevel ship. It
+// holds the ship's heading derived from the two GPS beacons, and it is the only
+// thing that hands a cannon an aim. In one request it:
+//
+//   * registers itself (pending until an officer accepts it),
+//   * reports the heading it is holding, and each cannons' live position and
+//     aim state, on the cannons' behalf (so a managed cannon needs no poll of
+//     its own to keep the map and the registry fresh),
+//   * acks the commands it has already assigned to its cannons, and
+//   * collects each assigned cannon's queued command to assign next.
+//
+// A cannon is only ever trusted from a vehicle it is actually assigned to, so
+// one vehicle can never aim another's guns.
+export async function ccVehiclePoll(request, env) {
+  let body;
+  try { body = await request.json(); }
+  catch { return ccJson(false, 'Invalid body.'); }
+
+  const computerId = String(body.computerId || '').trim().slice(0, 64);
+  if (!computerId) return ccJson(false, 'computerId required.');
+
+  const shipYaw = body.shipYaw == null ? null : num(body.shipYaw, null);
+  const message = String(body.message || '').slice(0, 200);
+
+  let vehicle;
+  try {
+    vehicle = await store.findVehicleByComputerId(env, computerId);
+    if (!vehicle) {
+      vehicle = await store.insertVehicle(env, { computerId, message, shipYaw });
+    } else {
+      vehicle = await store.refreshVehicleFromComputer(env, vehicle.id, { message, shipYaw });
+    }
+  } catch (err) {
+    console.warn('CC vehicle poll: registry unavailable (run migration 0016?)', err);
+    return ccJson(false, 'Vehicle registry unavailable — apply migration 0016.');
+  }
+
+  const cannons = await store.listCannonsByVehicle(env, vehicle.id);
+  const byId = new Map((cannons || []).map((c) => [Number(c.id), c]));
+
+  // Reports + acks for this vehicle's own cannons only.
+  if (Array.isArray(body.cannons)) {
+    for (const report of body.cannons.slice(0, 32)) {
+      const id = Math.round(num(report && report.id, 0));
+      const cannon = byId.get(id);
+      if (!cannon) continue;
+      try {
+        await store.updateCannonTelemetry(env, id, {
+          x: num(report.x, cannon.x),
+          y: num(report.y, cannon.y),
+          z: num(report.z, cannon.z),
+          gpsOk: report.gpsOk === true,
+          yaw: num(report.yaw, 0),
+          pitch: num(report.pitch, 0),
+        });
+        const ack = Math.round(num(report.sequence, 0));
+        if (ack > 0) await store.ackCannonCommand(env, id, ack);
+      } catch (err) {
+        console.warn('CC vehicle poll: cannon report failed for', id, err);
+      }
+    }
+  }
+
+  // A pending vehicle gets nothing to aim: it is only told its own status.
+  const payload = (cannons || []).map((c) => {
+    const entry = {
+      id:         Number(c.id),
+      name:       c.name || ('Cannon ' + c.id),
+      computerId: c.computer_id,
+      x:          Number(c.x),
+      y:          Number(c.y),
+      z:          Number(c.z),
+      length:     Number(c.length),
+      facing:     Number(c.facing),
+      command:    null,
+    };
+    if (vehicle.status === 'active' && c.status === 'active' &&
+        Number(c.command_sequence) > 0 &&
+        Number(c.acked_sequence) < Number(c.command_sequence)) {
+      entry.command = {
+        sequence: Number(c.command_sequence),
+        yaw:      Number(c.command_yaw),
+        pitch:    Number(c.command_pitch),
+        fire:     !!c.command_fire,
+      };
+    }
+    return entry;
+  });
+
+  return ccJson(true, {
+    status: vehicle.status,
+    id:     vehicle.id,
+    name:   vehicle.name,
+    cannons: vehicle.status === 'active' ? payload : [],
   });
 }
 
