@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS ballistics_gps_towers (
 CREATE INDEX IF NOT EXISTS idx_bgt_last_seen ON ballistics_gps_towers(last_seen_at);
 
 -- Latest GPS health report from each cannon, as a JSON blob:
---   { ok, quality, geometry, residual, towers, seen, age, stale,
+--   { ok, quality, dop, residual, towers, seen, age, stale,
 --     shipSkew, excluded[], reason }
 -- Kept as a blob rather than a column per field because it is a status
 -- snapshot for display, not something we ever query or aggregate on.

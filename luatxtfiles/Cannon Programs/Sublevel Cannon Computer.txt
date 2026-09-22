@@ -61,7 +61,7 @@
 --              disassemble → assemble → aim → fire → disassemble
 --        b) A concurrent GPS engine keeps a validated fix flowing, and the
 --           main loop pushes the freshest coordinates to the website
---           roughly every second — along with the tower count, layout
+--           roughly every second — along with the tower count, DOP
 --           quality and fix age, so the GPS page can show how healthy the
 --           tower network is. Until the first real fix is found it never
 --           reports a position, so the dot never snaps to 0,0,0.
@@ -618,7 +618,10 @@ local function gpsReport(meta, skew)
   if meta then
     report.ok       = not meta.stale
     report.quality  = meta.quality
-    report.geometry = meta.geometry
+    -- Infinite only for a layout the solver refuses outright, so in practice
+    -- this is always a number; guarded anyway, since a JSON blob is a poor
+    -- place to discover an infinity.
+    if meta.dop and meta.dop < 1e9 then report.dop = meta.dop end
     report.residual = meta.rms
     report.towers   = meta.towers
     report.seen     = meta.seen
@@ -889,9 +892,9 @@ local function mainLoop()
     table.insert(lines, "Sublevel Cannon Computer")
     table.insert(lines, "Computer ID: " .. computerId)
     if gpsX ~= nil then
-      table.insert(lines, ("GPS: X %d  Y %d  Z %d  (%d towers, %s, layout %d%%, %.1fs old)"):format(
+      table.insert(lines, ("GPS: X %d  Y %d  Z %d  (%d towers, %s, DOP %.0f, %.1fs old)"):format(
         math.floor(gpsX + 0.5), math.floor(gpsY + 0.5), math.floor(gpsZ + 0.5),
-        gpsMeta.towers, gpsMeta.quality, math.floor((gpsMeta.geometry or 0) * 100), gpsMeta.age))
+        gpsMeta.towers, gpsMeta.quality, gpsMeta.dop or 0, gpsMeta.age))
     else
       table.insert(lines, "GPS: no fix yet")
       table.insert(lines, "GPS issue: " .. tostring(engine.reason or "locating…"))

@@ -46,7 +46,7 @@ function sanitiseGpsReport(g) {
   if (g.quality != null) report.quality = String(g.quality).slice(0, 24);
   if (g.reason != null) report.reason = String(g.reason).slice(0, 160);
   if (g.stale != null) report.stale = g.stale === true;
-  for (const k of ['geometry', 'residual', 'age']) {
+  for (const k of ['dop', 'residual', 'age']) {
     const n = Number(g[k]);
     if (Number.isFinite(n)) report[k] = Math.round(n * 1000) / 1000;
   }

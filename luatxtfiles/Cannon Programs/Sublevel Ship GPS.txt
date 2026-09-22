@@ -682,8 +682,15 @@ local function mainLoop()
     if x then
       lines[#lines + 1] = { ("Position:  %d, %d, %d"):format(
         math.floor(x + 0.5), math.floor(y + 0.5), math.floor(z + 0.5)), colors.white }
-      lines[#lines + 1] = ("Fix:       %d tower(s), %s, layout %d%%, %s old"):format(
-        meta.towers, meta.quality, math.floor((meta.geometry or 0) * 100), ageText(meta.age))
+      lines[#lines + 1] = ("Fix:       %d tower(s), %s, DOP %.0f, %s old"):format(
+        meta.towers, meta.quality, meta.dop or 0, ageText(meta.age))
+      -- A lopsided tower set still solves exactly, but it leans on every tower
+      -- being where it says it is. Say so on the screen, so it can be hardened
+      -- before a tower is moved or a chunk stops loading.
+      if meta.dop and meta.dop > 10 then
+        lines[#lines + 1] = { "Layout:    " .. gpsnet.layoutNote(meta.dop),
+                              meta.dop > 50 and colors.orange or colors.gray }
+      end
       if meta.excluded and #meta.excluded > 0 then
         lines[#lines + 1] = { "Ignored:   tower at " .. table.concat(meta.excluded, ", ") ..
           " does not fit the others", colors.orange }

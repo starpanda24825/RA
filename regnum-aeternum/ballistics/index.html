@@ -739,10 +739,11 @@
         <label>Receiver Health</label>
         <p class="field-hint">
           What each cannon's GPS engine is managing right now. <b>Towers used</b> is how many went into the
-          fix; <b>layout</b> is how well those towers span space, so 0% means a flat or collinear set that
-          cannot fix a position; <b>residual</b> is how well the measurements agree, in blocks, and is the
-          number that catches a tower that has been moved or mis-keyed. A tower listed as ignored has been
-          left out on purpose — check it against the map.
+          fix; <b>DOP</b> is how many blocks of error each block of distance error becomes, so 1 is an ideal
+          spread, under 10 is good, and it climbs as the towers flatten towards one plane — a flat set reads
+          <i>fragile</i>, and one exactly in a plane is refused outright. <b>Residual</b> is how well the
+          measurements agree, in blocks, and is the number that catches a tower that has been moved or
+          mis-keyed. A tower listed as ignored has been left out on purpose — check it against the map.
         </p>
         <div class="registry-list" id="gps-receiver-list"></div>
       </div>
@@ -2225,6 +2226,18 @@
     } catch { return null; }
   }
 
+  // DOP reads as a bare number to nobody, so label it. It is the figure of
+  // merit for the tower layout: how many blocks of position error each block of
+  // distance error turns into. 1 is an ideal orthogonal spread; it climbs
+  // without bound as the towers flatten towards one plane, and a set exactly in
+  // one plane has no unique answer at all (the computers refuse it).
+  function dopText(dop) {
+    const n = Number(dop);
+    if (!Number.isFinite(n)) return '';
+    const label = n <= 3 ? 'excellent' : n <= 10 ? 'good' : n <= 50 ? 'workable' : 'fragile';
+    return 'DOP ' + n.toFixed(1) + ' (' + label + ')';
+  }
+
   // One compact line for a cannon card in the registry.
   function gpsSummaryLine(c) {
     const g = gpsInfo(c);
@@ -2232,7 +2245,7 @@
     if (!g.ok) return '<br/>GPS: no usable fix' + (g.reason ? ' — ' + escHtml(g.reason) : '');
     const bits = [];
     if (g.towers != null) bits.push(g.towers + ' towers');
-    if (g.geometry != null) bits.push('layout ' + Math.round(g.geometry * 100) + '%');
+    if (g.dop != null) { const d = dopText(g.dop); if (d) bits.push(d); }
     if (g.residual != null) bits.push('residual ' + Number(g.residual).toFixed(2) + ' blocks');
     if (g.age != null) bits.push(Number(g.age).toFixed(1) + 's old');
     return '<br/>GPS: ' + bits.join(' · ');
@@ -2294,7 +2307,7 @@
     const bits = [];
     if (g.towers != null) bits.push(g.towers + ' tower' + (g.towers === 1 ? '' : 's') + ' used');
     if (g.seen != null && g.seen !== g.towers) bits.push(g.seen + ' heard');
-    if (g.geometry != null) bits.push('layout ' + Math.round(g.geometry * 100) + '%');
+    if (g.dop != null) { const d = dopText(g.dop); if (d) bits.push(d); }
     if (g.residual != null) bits.push('residual ' + Number(g.residual).toFixed(2) + ' blocks');
     if (g.age != null) bits.push(Number(g.age).toFixed(1) + 's old');
     if (g.shipSkew != null) bits.push('beacon skew ' + Number(g.shipSkew).toFixed(2) + 's');

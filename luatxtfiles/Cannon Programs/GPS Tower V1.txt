@@ -54,10 +54,20 @@
 --     towers all at one height cannot determine height at all (your mirror
 --     image fits the measurements just as well), and every client will say so
 --     rather than guess.
---   * Spread them far apart; clustered towers cost accuracy.
+--   * Spread them far apart, and in height. CC's distances are exact, so even
+--     a lopsided network solves exactly — but the flatter it is, the more it
+--     leans on every tower's coordinates being right, and the more one moved
+--     or mis-keyed tower costs you. Clients report this as a DOP.
 --   * Above y=96 the wireless range climbs from 64 blocks to 384, so a raised
 --     tower covers far more ground.
---   * Keep the chunk loaded. An unloaded tower silently stops answering.
+--   * KEEP THE CHUNK LOADED. A ComputerCraft computer only runs while the
+--     chunk it sits in is loaded: unload that chunk and the tower is shut
+--     down (so it does not answer at all), and load it again and the computer
+--     powers back on and re-runs startup from the beginning. That restart is
+--     what resets the counters on this screen, which is why "Served" shows a
+--     running total kept on disk as well as this boot's share. Force-load the
+--     chunk (or keep the tower inside a permanently loaded area) if the
+--     network has to work when nobody is standing next to it.
 -- ============================================================
 
 local VERSION = "1.0"
@@ -136,6 +146,37 @@ local modem, modemSide = nil, nil
 local served = 0
 local started = os.clock()
 
+-- Counters survive a restart. A tower that gets its chunk unloaded is powered
+-- off and boots again when the chunk comes back, so anything held only in
+-- memory restarts from zero — which looks exactly like "the tower is doing
+-- nothing" on this screen. The running total and the boot count live on disk
+-- so a restart is visible for what it is.
+local STATE_PATH = "gpstower_state.txt"
+local state = { total = 0, boots = 0 }
+
+local function readState()
+  if not fs.exists(STATE_PATH) then return end
+  local f = fs.open(STATE_PATH, "r")
+  if not f then return end
+  local raw = f.readAll()
+  f.close()
+  local ok, data = pcall(textutils.unserialize, raw)
+  if ok and type(data) == "table" then
+    state.total = tonumber(data.total) or 0
+    state.boots = tonumber(data.boots) or 0
+  end
+end
+
+-- Written on every status tick (a handful of bytes every STATUS_INTERVAL
+-- seconds), so at most one tick of counting is ever lost to a shutdown.
+local function writeState()
+  pcall(function()
+    local f = fs.open(STATE_PATH, "w")
+    f.write(textutils.serialize({ total = state.total + served, boots = state.boots }))
+    f.close()
+  end)
+end
+
 local function attach()
   local found, side = findWirelessModem()
   if not found then
@@ -165,8 +206,8 @@ local function drawStatus()
   else
     print("Modem:     none attached")
   end
-  print("Served:    " .. served .. " request(s)")
-  print("Uptime:    " .. formatUptime(os.clock() - started))
+  print("Served:    " .. served .. " this boot  (" .. (state.total + served) .. " total)")
+  print("Uptime:    " .. formatUptime(os.clock() - started) .. "  ·  boot #" .. state.boots)
   print("")
   if modemSide then
     print("Answering pings. This screen refreshes every " .. STATUS_INTERVAL .. "s; it")
@@ -181,6 +222,10 @@ end
 -- ------------------------------------------------------------
 -- Serve
 -- ------------------------------------------------------------
+
+readState()
+state.boots = state.boots + 1
+writeState()
 
 attach()
 drawStatus()
@@ -204,6 +249,7 @@ while true do
 
   elseif event == "timer" and p1 == statusTimer then
     attach()
+    writeState()
     drawStatus()
     statusTimer = os.startTimer(STATUS_INTERVAL)
 
