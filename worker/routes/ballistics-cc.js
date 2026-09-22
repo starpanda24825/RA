@@ -314,6 +314,35 @@ export async function ccCannons(request, env) {
     sublevel:   Number(c.sublevel) === 1,
     status:     c.status,
     shipYaw:    c.ship_yaw == null ? null : Number(c.ship_yaw),
+    // Which vehicle owns it, so the Ship GPS screen can say so — a cannon on a
+    // vehicle is normally reached by assigning the beacons to the vehicle.
+    // Undefined until migration 0016 is applied, which reads as "no vehicle".
+    vehicleId:  c.vehicle_id == null ? null : Number(c.vehicle_id),
   }));
   return ccJson(true, { cannons });
+}
+
+// GET /api/ballistics/cc/vehicles
+// Public vehicle list for the in-game Sublevel Ship GPS program, so a ship's
+// front/back beacons can be assigned to the vehicle that coordinates its
+// cannons rather than to one arbitrary cannon standing in for the ship.
+// Same open model as ccCannons.
+export async function ccVehicles(request, env) {
+  // A sublevel ship whose vehicle registry has not been created yet (0016 not
+  // applied) simply reports no vehicles, so the Ship GPS screen falls back to
+  // listing cannons alone rather than failing.
+  let rows = [];
+  try {
+    rows = await store.listVehicles(env);
+  } catch (err) {
+    console.warn('CC vehicles: registry unavailable (run migration 0016?)', err);
+  }
+  const vehicles = (rows || []).map((v) => ({
+    id:         v.id,
+    computerId: v.computer_id,
+    name:       v.name || ('Vehicle ' + v.id),
+    status:     v.status,
+    shipYaw:    v.ship_yaw == null ? null : Number(v.ship_yaw),
+  }));
+  return ccJson(true, { vehicles });
 }

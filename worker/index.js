@@ -400,6 +400,7 @@ export default {
         if (pathname === '/api/ballistics/towers' && method === 'GET') return await ballistics.listTowers(request, env);
         if (pathname === '/api/ballistics/vehicles' && method === 'GET') return await ballistics.listVehicles(request, env);
         if (pathname === '/api/ballistics/cc/cannons' && method === 'GET') return await ballisticsCC.ccCannons(request, env);
+        if (pathname === '/api/ballistics/cc/vehicles' && method === 'GET') return await ballisticsCC.ccVehicles(request, env);
         if (pathname === '/api/ballistics/cc/poll' && method === 'POST') return await ballisticsCC.ccPoll(request, env);
         if (pathname === '/api/ballistics/cc/vehicle/poll' && method === 'POST') return await ballisticsCC.ccVehiclePoll(request, env);
 

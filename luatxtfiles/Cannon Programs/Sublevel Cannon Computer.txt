@@ -917,7 +917,9 @@ local function mainLoop()
     elseif myCannonId == nil then
       table.insert(lines, "Ship heading: waiting for registry id…")
     else
-      table.insert(lines, "Ship heading: waiting for assigned front/back GPS…")
+      table.insert(lines, "Ship heading: waiting for a front/back GPS pair")
+      table.insert(lines, "assigned to this cannon — or assign this cannon to a")
+      table.insert(lines, "vehicle, which owns the heading for all its guns")
     end
 
     if managedVehicle then

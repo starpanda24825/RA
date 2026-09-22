@@ -8,8 +8,10 @@
 --   This program runs on TWO separate computers on the ship: one at the FRONT
 --   (bow) and one at the BACK (stern), placed as far apart as possible along
 --   the fore-aft centerline. Each broadcasts its position over the wireless
---   modem. The Sublevel Cannon Computer (a third computer, connected to the
---   cannon) listens to both and derives the ship's heading.
+--   modem. A third computer listens to both and derives the ship's heading:
+--   either each Sublevel Cannon Computer (for guns running standalone) or, on
+--   a ship with a Sublevel Vehicle Computer, that vehicle — which then aims
+--   every cannon from one shared heading.
 --
 -- WHAT CHANGED FROM THE OLD VERSION
 --   It now uses the gpsnet engine (GPS Network) instead of gps.locate().
@@ -54,19 +56,33 @@
 --   4. On first boot each asks whether it is the FRONT or BACK computer and
 --      saves that role. Answer FRONT for the bow computer and BACK for the
 --      stern one.
---   5. It then shows the live cannon registry pulled from the website. Use
---      the UP / DOWN arrow keys to highlight the cannon this ship's GPS pair
---      reports to and press ENTER. Both computers (front and back) must pick
---      the SAME cannon. The list re-fetches itself every 10 seconds.
+--   5. It then shows the live registry pulled from the website and asks
+--      which ship this beacon pair belongs to. Use the UP / DOWN arrow keys
+--      to highlight and ENTER to confirm. Both computers (front and back)
+--      must pick the SAME entry. The list re-fetches itself every 10 seconds.
 --
--- ASSIGNMENT — WHY IT MATTERS
---   Every broadcast is tagged with the chosen cannon's registry id, and the
---   cannon computer only accepts beacons addressed to itself. Two ships
---   parked near each other therefore can no longer swap front/back fixes, so
---   a shipYaw can never be applied to the wrong vehicle.
+-- ASSIGNMENT — WHY IT MATTERS, AND WHICH KIND TO PICK
+--   Every broadcast is tagged with the chosen entry's registry id, and only
+--   that entry's computers accept it. Two ships parked near each other
+--   therefore cannot swap front/back fixes, so a shipYaw can never be applied
+--   to the wrong vehicle.
 --
---   Press C at any time on the status screen to re-open the cannon list and
---   change the assignment.
+--   The list offers both kinds of entry, because which is correct depends on
+--   how the ship is actually set up on the website:
+--
+--     * VEHICLE — pick this when the ship's cannons are assigned to a
+--       Sublevel Vehicle Computer. The beacons then name the SHIP itself,
+--       which is the honest description of what a bow/stern pair measures, and
+--       the vehicle accepts them for every gun it controls.
+--     * CANNON — pick this for a cannon that has NOT been assigned to a
+--       vehicle. A standalone cannon computer derives the heading for itself,
+--       so it needs beacons addressed to it by name.
+--
+--   In doubt: if the cannon you would otherwise have picked is shown as
+--   "[on Vehicle N]", assign the beacons to that vehicle instead.
+--
+--   Press C at any time on the status screen to re-open the list and change
+--   the assignment.
 --
 -- HOW FAR APART SHOULD THE TWO BEACONS BE?
 --   As far as the ship allows — it is the single biggest factor in aiming
@@ -79,8 +95,9 @@
 -- ------------------------------------------------------------
 -- Configuration
 -- ------------------------------------------------------------
-local BASE_URL     = "https://regnumaeternum.starpanda24825.workers.dev"
-local CANNONS_PATH = "/api/ballistics/cc/cannons"
+local BASE_URL      = "https://regnumaeternum.starpanda24825.workers.dev"
+local CANNONS_PATH  = "/api/ballistics/cc/cannons"
+local VEHICLES_PATH = "/api/ballistics/cc/vehicles"
 
 -- Channel the positions are broadcast on, and the channel the cannon
 -- computer sends its SYNC ticks on. MUST match SHIP_GPS_CHANNEL in the
@@ -160,9 +177,14 @@ end
 -- Config  (role + assigned cannon)
 -- ------------------------------------------------------------
 local cfg = {
-  role       = nil,   -- "front" | "back"
-  cannonId   = nil,   -- registry id on the website
-  cannonName = nil,   -- display name, cached for the status screen
+  role        = nil,   -- "front" | "back"
+  -- Exactly ONE of the two pairs below is set: the registry entry this beacon
+  -- pair reports for. A vehicle is normally right on a ship whose cannons
+  -- belong to a Sublevel Vehicle Computer; a cannon is for a standalone gun.
+  vehicleId   = nil,   -- vehicle registry id on the website
+  vehicleName = nil,   -- display name, cached for the status screen
+  cannonId    = nil,   -- cannon registry id on the website
+  cannonName  = nil,
 }
 
 local function readConfig()
@@ -187,6 +209,10 @@ local function readConfig()
       cfg.cannonId = tonumber(v)
     elseif k == "cannonName" then
       cfg.cannonName = v
+    elseif k == "vehicleId" then
+      cfg.vehicleId = tonumber(v)
+    elseif k == "vehicleName" then
+      cfg.vehicleName = v
     end
   end
 end
@@ -194,9 +220,37 @@ end
 local function writeConfig()
   local f = fs.open(CFG_PATH, "w")
   f.writeLine("role=" .. tostring(cfg.role or ""))
+  f.writeLine("vehicleId=" .. tostring(cfg.vehicleId or ""))
+  f.writeLine("vehicleName=" .. tostring(cfg.vehicleName or ""))
   f.writeLine("cannonId=" .. tostring(cfg.cannonId or ""))
   f.writeLine("cannonName=" .. tostring(cfg.cannonName or ""))
   f.close()
+end
+
+-- What this beacon pair is assigned to. Exactly one kind is ever set, so these
+-- read as a single choice rather than a set of registrations.
+local function assignmentName()
+  if cfg.vehicleId then return cfg.vehicleName or ("Vehicle " .. tostring(cfg.vehicleId)) end
+  if cfg.cannonId then return cfg.cannonName or ("Cannon " .. tostring(cfg.cannonId)) end
+  return nil
+end
+
+local function assignmentKind()
+  if cfg.vehicleId then return "vehicle" end
+  if cfg.cannonId then return "cannon" end
+  return nil
+end
+
+local function assignmentId()
+  if cfg.vehicleId then return cfg.vehicleId end
+  return cfg.cannonId
+end
+
+-- "Vehicle 1 (vehicle id 3)", for the confirmation screen.
+local function assignmentLabel()
+  local name = assignmentName()
+  if not name then return "nothing" end
+  return name .. " (" .. tostring(assignmentKind()) .. " id " .. tostring(assignmentId()) .. ")"
 end
 
 -- ------------------------------------------------------------
@@ -222,8 +276,35 @@ local function setupRole()
 end
 
 -- ------------------------------------------------------------
--- Cannon registry selection
+-- Registry selection (vehicles and cannons)
 -- ------------------------------------------------------------
+-- A beacon pair identifies the ship it sits on, and a ship can be owned by
+-- either kind of registry entry:
+--
+--   * VEHICLE — a Sublevel Vehicle Computer coordinating every cannon on the
+--     ship. This is the right choice whenever the ship's cannons are assigned
+--     to one, and it is listed first for that reason: the beacons then name
+--     the SHIP rather than one arbitrary gun standing in for it.
+--   * CANNON — for a gun that has NOT been assigned to a vehicle. Those run
+--     standalone and need beacons addressed to themselves.
+--
+-- A cannon that belongs to a vehicle is still listed, tagged with that
+-- vehicle, so the questionable choice is obvious on the screen.
+local function fetchVehicles()
+  local data = httpGetJSON(VEHICLES_PATH)
+  if data and data.success and data.response and type(data.response.vehicles) == "table" then
+    local list = {}
+    for _, v in ipairs(data.response.vehicles) do
+      if type(v) == "table" and tonumber(v.id) then
+        table.insert(list, v)
+      end
+    end
+    table.sort(list, function(a, b) return tonumber(a.id) < tonumber(b.id) end)
+    return list
+  end
+  return nil
+end
+
 local function fetchCannons()
   local data = httpGetJSON(CANNONS_PATH)
   if data and data.success and data.response and type(data.response.cannons) == "table" then
@@ -239,13 +320,57 @@ local function fetchCannons()
   return nil
 end
 
-local function cannonLabel(c)
-  local name = c.name
-  if not name or name == "" then name = "Cannon " .. tostring(c.id) end
-  local tag = ""
-  if c.sublevel then tag = tag .. " [sublevel]" end
-  if c.status and c.status ~= "active" then tag = tag .. " [" .. tostring(c.status) .. "]" end
-  if c.computerId then tag = tag .. " · PC " .. tostring(c.computerId) end
+-- One list: vehicles first, then cannons. Returns nil only when NEITHER
+-- registry could be read, so an operator is never offered a half-read list to
+-- assign against.
+local function fetchRegistry()
+  local out = {}
+  local vehicles = fetchVehicles()
+  local vehicleNames = {}
+
+  if vehicles then
+    for _, v in ipairs(vehicles) do
+      local id = tonumber(v.id)
+      local name = v.name
+      if not name or name == "" then name = "Vehicle " .. tostring(id) end
+      vehicleNames[id] = name
+      out[#out + 1] = {
+        kind = "vehicle", id = id, name = name,
+        computerId = v.computerId, status = v.status,
+      }
+    end
+  end
+
+  local cannons = fetchCannons()
+  if cannons then
+    for _, c in ipairs(cannons) do
+      local vid = tonumber(c.vehicleId)
+      out[#out + 1] = {
+        kind = "cannon", id = tonumber(c.id), name = c.name,
+        computerId = c.computerId, status = c.status, sublevel = c.sublevel,
+        vehicleId = vid, vehicleName = vid and vehicleNames[vid] or nil,
+      }
+    end
+  end
+
+  if not vehicles and not cannons then return nil end
+  return out
+end
+
+local function entryLabel(e)
+  local name = e.name
+  if not name or name == "" then
+    name = (e.kind == "vehicle" and "Vehicle " or "Cannon ") .. tostring(e.id)
+  end
+  local tag = " [" .. e.kind .. "]"
+  if e.kind == "cannon" then
+    if e.sublevel then tag = tag .. " [sublevel]" end
+    if e.vehicleId then
+      tag = tag .. " [on " .. tostring(e.vehicleName or ("Vehicle " .. tostring(e.vehicleId))) .. "]"
+    end
+  end
+  if e.status and e.status ~= "active" then tag = tag .. " [" .. tostring(e.status) .. "]" end
+  if e.computerId then tag = tag .. " · PC " .. tostring(e.computerId) end
   return name .. tag
 end
 
@@ -253,20 +378,20 @@ local function drawSelect(list, sel, status)
   resetScreen()
   term.setCursorPos(1, 1)
   term.setTextColor(colors.yellow)
-  print("=== Assign this GPS (" .. tostring(cfg.role) .. ") to a cannon ===")
+  print("=== Assign this GPS (" .. tostring(cfg.role) .. ") ===")
   term.setTextColor(colors.white)
   print("UP / DOWN to highlight, ENTER to confirm.")
   print("")
 
   if #list == 0 then
     term.setTextColor(colors.red)
-    print("No cannons in the registry yet.")
+    print("Nothing in the registry yet.")
     term.setTextColor(colors.white)
-    print("Accept a cannon request on the website first.")
+    print("Accept a cannon or vehicle request on the website.")
   else
     local width = term.getSize()
-    for i, c in ipairs(list) do
-      local line = "  " .. cannonLabel(c)
+    for i, e in ipairs(list) do
+      local line = "  " .. entryLabel(e)
       line = line:sub(1, width)
       line = line .. string.rep(" ", math.max(0, width - #line))
       if i == sel then
@@ -284,19 +409,24 @@ local function drawSelect(list, sel, status)
   term.setTextColor(colors.gray)
   print("")
   print(status or "")
+  print("vehicle = a Sublevel Vehicle Computer (the whole ship)")
+  print("cannon  = one gun running on its own")
   print("auto-refresh every " .. REFRESH_SECONDS .. "s · ESC to cancel")
 end
 
 -- Live list (refreshes every REFRESH_SECONDS while the screen is open).
--- Returns the chosen cannon table, or nil if the user cancelled.
-local function selectCannon()
-  local fetched = fetchCannons()
+-- Returns the chosen entry, or nil if the user cancelled.
+local function selectAssignment()
+  local fetched = fetchRegistry()
   local list = fetched or {}
   local status = fetched and "Loaded from the website." or "Could not reach the website."
 
   local sel = 1
-  for i, c in ipairs(list) do
-    if cfg.cannonId ~= nil and tonumber(c.id) == tonumber(cfg.cannonId) then sel = i end
+  for i, e in ipairs(list) do
+    if assignmentKind() ~= nil and e.kind == assignmentKind()
+       and tonumber(e.id) == tonumber(assignmentId()) then
+      sel = i
+    end
   end
 
   local timer = os.startTimer(REFRESH_SECONDS)
@@ -305,7 +435,7 @@ local function selectCannon()
   while true do
     local event, a = os.pullEvent()
     if event == "timer" and a == timer then
-      local fresh = fetchCannons()
+      local fresh = fetchRegistry()
       if fresh then
         list = fresh
         status = "Registry refreshed."
@@ -334,19 +464,34 @@ local function selectCannon()
 end
 
 -- Opens the list and stores the choice. Returns true when assigned.
-local function assignCannon()
-  local chosen = selectCannon()
+local function assignTarget()
+  local chosen = selectAssignment()
   if not chosen then return false end
-  cfg.cannonId   = tonumber(chosen.id)
-  cfg.cannonName = chosen.name
-  if not cfg.cannonName or cfg.cannonName == "" then
-    cfg.cannonName = "Cannon " .. tostring(cfg.cannonId)
+
+  -- One choice, not a set: assigning to a vehicle clears any cannon
+  -- assignment and vice versa, so a beacon can never report for two things.
+  cfg.vehicleId, cfg.vehicleName = nil, nil
+  cfg.cannonId, cfg.cannonName = nil, nil
+
+  if chosen.kind == "vehicle" then
+    cfg.vehicleId   = tonumber(chosen.id)
+    cfg.vehicleName = chosen.name
+    if not cfg.vehicleName or cfg.vehicleName == "" then
+      cfg.vehicleName = "Vehicle " .. tostring(cfg.vehicleId)
+    end
+  else
+    cfg.cannonId   = tonumber(chosen.id)
+    cfg.cannonName = chosen.name
+    if not cfg.cannonName or cfg.cannonName == "" then
+      cfg.cannonName = "Cannon " .. tostring(cfg.cannonId)
+    end
   end
+
   writeConfig()
   resetScreen()
   term.setCursorPos(1, 1)
   term.setTextColor(colors.lime)
-  print("Assigned to " .. cfg.cannonName .. " (id " .. tostring(cfg.cannonId) .. ").")
+  print("Assigned to " .. assignmentLabel() .. ".")
   term.setTextColor(colors.white)
   sleep(1.5)
   resetScreen()
@@ -461,14 +606,17 @@ end
 local function broadcast(x, y, z, meta, seq)
   if not engine.modem then return false end
   local payload = textutils.serializeJSON({
-    type     = "ship_gps",
-    role     = cfg.role,
-    cannonId = cfg.cannonId,
-    x        = x,
-    y        = y,
-    z        = z,
-    age      = meta and meta.age or nil,   -- staleness when sent
-    seq      = seq,                        -- which SYNC tick this answers
+    type      = "ship_gps",
+    role      = cfg.role,
+    -- Only one of these is ever set. A vehicle names the ship itself; a cannon
+    -- names a gun that runs standalone. Receivers accept either.
+    vehicleId = cfg.vehicleId,
+    cannonId  = cfg.cannonId,
+    x         = x,
+    y         = y,
+    z         = z,
+    age       = meta and meta.age or nil,   -- staleness when sent
+    seq       = seq,                        -- which SYNC tick this answers
   })
   local ok = pcall(function() engine.modem.transmit(CHANNEL, CHANNEL, payload) end)
   if ok then
@@ -523,7 +671,12 @@ local function mainLoop()
     local x, y, z, meta = engine:get()
     local lines = {}
     lines[#lines + 1] = { "=== Sublevel Ship GPS — " .. tostring(cfg.role) .. " ===", colors.yellow }
-    lines[#lines + 1] = "Assigned to: " .. (cfg.cannonName or ("Cannon " .. tostring(cfg.cannonId)))
+    if assignmentName() then
+      lines[#lines + 1] = "Assigned to: " .. assignmentName()
+        .. " (" .. tostring(assignmentKind()) .. ")"
+    else
+      lines[#lines + 1] = { "Assigned to: — none — press C to choose", colors.red }
+    end
     lines[#lines + 1] = ""
 
     if x then
@@ -543,13 +696,13 @@ local function mainLoop()
     lines[#lines + 1] = ""
     local since = lastSyncAt and (os.clock() - lastSyncAt) or nil
     if since and since < 15 then
-      lines[#lines + 1] = { "Cannon computer: in contact (" .. ageText(since) .. " ago) — fixes are "
+      lines[#lines + 1] = { "Ship controller: in contact (" .. ageText(since) .. " ago) — fixes are "
         .. "sampled together.", colors.lime }
     elseif stats.sent > 0 then
-      lines[#lines + 1] = { "Cannon computer: not heard from — free-running every "
+      lines[#lines + 1] = { "Ship controller: not heard from — free-running every "
         .. REPORT_INTERVAL .. "s.", colors.gray }
     else
-      lines[#lines + 1] = { "Waiting for the cannon computer's SYNC…", colors.gray }
+      lines[#lines + 1] = { "Waiting for a SYNC tick from the ship…", colors.gray }
     end
 
     lines[#lines + 1] = ("Broadcast: %d sent%s"):format(stats.sent,
@@ -562,7 +715,7 @@ local function mainLoop()
     end
 
     lines[#lines + 1] = ""
-    lines[#lines + 1] = { "Channel " .. CHANNEL .. " · press C to change the assigned cannon.", colors.gray }
+    lines[#lines + 1] = { "Channel " .. CHANNEL .. " · press C to change the assignment.", colors.gray }
 
     drawScreen(lines)
 
@@ -574,7 +727,7 @@ local function mainLoop()
       if event == "timer" and a == timer then
         handled = true
       elseif event == "key" and a == keys.c then
-        assignCannon()
+        assignTarget()
         handled = true
       end
     end
@@ -592,17 +745,18 @@ if not cfg.role then
 end
 
 -- Require an assignment before the beacon starts reporting.
-while not cfg.cannonId do
+while not cfg.cannonId and not cfg.vehicleId do
   resetScreen()
   term.setCursorPos(1, 1)
-  print("=== Sublevel Ship GPS — cannon assignment ===")
+  print("=== Sublevel Ship GPS — assignment ===")
   print("")
   print("This beacon (" .. tostring(cfg.role) .. ") must be assigned to the")
-  print("registered cannon it reports the ship heading for.")
+  print("ship it reports the heading for: that ship's Sublevel Vehicle")
+  print("Computer, or a cannon that runs standalone.")
   print("")
-  print("Press any key to open the cannon list…")
+  print("Press any key to open the registry list…")
   os.pullEvent("key")
-  assignCannon()
+  assignTarget()
 end
 
 -- First-boot GPS self-check, so a tower problem is obvious immediately rather

@@ -51,11 +51,14 @@
 --   3. On the website, assign that ship's sublevel cannons to the vehicle.
 --      From that moment those cannons stop running their own command loop and
 --      are driven entirely from here.
---   4. The ship's two GPS beacons are still assigned to a cannon (that is how
---      they identify which ship they belong to) — assign them to ANY cannon on
---      this vehicle. Beacons addressed to any of this vehicle's cannons are
---      accepted; anything else on the channel is ignored, so two ships in
---      wireless range can never mix up each other's headings.
+--   4. Assign the ship's two GPS beacons to THIS VEHICLE on those two
+--      computers — the Ship GPS list now offers vehicles as well as cannons,
+--      and naming the ship itself is the honest description of what a
+--      bow/stern pair measures. Beacons addressed to any of this vehicle's
+--      CANNONS are also accepted, so a pair assigned to a cannon before this
+--      vehicle existed keeps working. Anything else on the channel is
+--      ignored, so two ships in wireless range can never mix up each other's
+--      headings.
 --
 -- SAFETY
 --   A vehicle will not fire a ship-relative shot it cannot aim. If the heading
@@ -264,6 +267,10 @@ local forwarded = {}
 -- to one of our cannons — that is how a ship identifies itself).
 local front, back = nil, nil
 
+-- What the two beacons are addressed to ("vehicle" or "cannon"), so the status
+-- screen can say which, instead of leaving a silent heading unexplained.
+local beaconAddressedTo = nil
+
 local netError = nil
 local lastPollAt = nil
 local stats = { polls = 0, assigned = 0, held = 0, noHeading = 0 }
@@ -326,9 +333,17 @@ local function networkPump()
           local parsed, data = pcall(textutils.unserializeJSON, message)
           if parsed and type(data) == "table" and data.type == "ship_gps"
              and data.x and data.z then
+            -- A beacon pair may name this VEHICLE (the usual choice, since the
+            -- pair measures the ship itself) or one of our CANNONS (how they
+            -- were assigned before vehicles could be selected — kept working so
+            -- an unchanged beacon pair does not have to be re-assigned).
+            -- Anything else on this channel belongs to another ship.
+            local vid = tonumber(data.vehicleId)
             local cid = tonumber(data.cannonId)
-            -- Only beacons addressed to a cannon we own identify our ship.
-            if cid and assignedSet[cid] then
+            local isVehicle = vid ~= nil and myVehicleId ~= nil and vid == tonumber(myVehicleId)
+            local isCannon  = cid ~= nil and assignedSet[cid]
+            if isVehicle or isCannon then
+              beaconAddressedTo = isVehicle and "vehicle" or "cannon"
               local fix = {
                 x = tonumber(data.x), y = tonumber(data.y), z = tonumber(data.z),
                 age = tonumber(data.age), seq = tonumber(data.seq),
@@ -588,6 +603,10 @@ local function mainLoop()
       headingText = string.format("%.1f°%s", shipYaw, note)
     end
     lines[#lines + 1] = "Ship heading: " .. headingText
+    if beaconAddressedTo then
+      lines[#lines + 1] = "Beacons: assigned to "
+        .. (beaconAddressedTo == "vehicle" and "this vehicle" or "one of our cannons")
+    end
 
     -- Status
     if resp == nil then
