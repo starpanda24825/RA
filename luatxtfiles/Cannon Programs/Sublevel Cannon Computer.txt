@@ -411,39 +411,60 @@ end
 -- convention as the website (0 = south, 90 = west, 180 = north, 270 = east).
 local SHIP_GPS_CHANNEL = 4120   -- must match the Ship GPS program
 
+-- The registry id of THIS cannon on the website, learned from the poll
+-- response (see mainLoop). Every Ship GPS beacon names the cannon it is
+-- assigned to, and we only accept beacons that name us. Without this, two
+-- ships in wireless range would overwrite each other's front/back fixes and
+-- the heading (and therefore the aim) would belong to the wrong vehicle.
+local myCannonId = nil
+
 local frontX, frontY, frontZ = nil, nil, nil
 local backX,  backY,  backZ  = nil, nil, nil
 
+-- math.atan2 exists in CC:Tweaked (Lua 5.1 semantics), but fall back to the
+-- two-argument math.atan so heading math can't silently break on an upgrade.
+local atan2 = math.atan2
+if not atan2 and math.atan then
+  atan2 = function(y, x) return math.atan(y, x) end
+end
+
 local function computeShipYaw()
-  if frontX == nil or backX == nil then return nil end
+  if frontX == nil or backX == nil or not atan2 then return nil end
   local dx = frontX - backX
   local dz = frontZ - backZ
   if math.abs(dx) < 0.001 and math.abs(dz) < 0.001 then return nil end
-  local deg = math.deg(math.atan2(-dx, dz))
+  local deg = math.deg(atan2(-dx, dz))
   return ((deg % 360) + 360) % 360
 end
 
--- Concurrent listener for the front/back GPS computers' broadcasts.
+-- Concurrent listener for the front/back GPS computers' broadcasts. Only
+-- beacons addressed to this cannon (data.cannonId == myCannonId) are accepted.
+-- The body is pcall'd so a detached/replaced modem restarts the listener
+-- instead of taking the whole daemon down (parallel.waitForAll rethrows).
 local function shipGpsListener()
   while true do
-    local modem = findWirelessModem()
-    if modem then
-      modem.open(SHIP_GPS_CHANNEL)
-      while true do
-        local e, side, chan, replyChan, msg = os.pullEvent("modem_message")
-        if e == "modem_message" and chan == SHIP_GPS_CHANNEL then
-          local ok, data = pcall(textutils.unserializeJSON, msg)
-          if ok and type(data) == "table" and data.type == "ship_gps" and data.x and data.z then
-            if data.role == "back" then
-              backX, backY, backZ = data.x, data.y, data.z
-            else
-              frontX, frontY, frontZ = data.x, data.y, data.z
+    local ok = pcall(function()
+      local modem = findWirelessModem()
+      if modem then
+        modem.open(SHIP_GPS_CHANNEL)
+        while true do
+          local e, side, chan, replyChan, msg = os.pullEvent("modem_message")
+          if e == "modem_message" and chan == SHIP_GPS_CHANNEL then
+            local parsed, data = pcall(textutils.unserializeJSON, msg)
+            if parsed and type(data) == "table" and data.type == "ship_gps"
+               and data.x and data.z and myCannonId ~= nil
+               and tonumber(data.cannonId) == tonumber(myCannonId) then
+              if data.role == "back" then
+                backX, backY, backZ = data.x, data.y, data.z
+              else
+                frontX, frontY, frontZ = data.x, data.y, data.z
+              end
             end
           end
         end
       end
-    end
-    sleep(5)
+    end)
+    sleep(ok and 5 or 1)
   end
 end
 
@@ -515,7 +536,7 @@ local function triggerReload()
   end
 end
 
-local function runCommand(mount, cmd, shipYaw)
+local function runCommand(mount, cmd)
   print("Command #" .. tostring(cmd.sequence) .. ": aiming…")
 
   -- 1. Disassemble. An auto-loader reloads here, between disassemble and
@@ -539,12 +560,25 @@ local function runCommand(mount, cmd, shipYaw)
   -- 3. Delay before aiming
   sleep(SEQ_BEFORE_AIM)
 
-  -- 4. Aim. The website sends an absolute world yaw; the mount's yaw is
-  -- measured relative to the ship, so add the ship's heading first.
-  local aimYaw   = (cmd.yaw or 0) + cfg.yawOffset
-  if cfg.shipRelativeYaw and shipYaw then
-    aimYaw = aimYaw + shipYaw
+  -- 4. Aim. The website sends an absolute world yaw. On a sublevel ship the
+  -- mount's yaw is measured in the ship's rotating frame, so the barrel's
+  -- world heading is (shipYaw + mountYaw). To hit an absolute world heading we
+  -- must therefore SUBTRACT the ship's heading. (Adding it mirrored the shot
+  -- by 2 x shipYaw — an almost 180° error whenever the ship faced E or W,
+  -- which is exactly the "aimed the opposite way" symptom.)
+  --
+  -- Recompute the heading here, at aim time, rather than reusing the value
+  -- sampled before the poll: disassemble/assemble/reload can take ~10s and the
+  -- ship may have turned since.
+  local shipYaw = computeShipYaw()
+  if cfg.shipRelativeYaw and shipYaw == nil then
+    print("Warning: ship heading unknown — aiming in world space.")
   end
+  local aimYaw = (cmd.yaw or 0) + cfg.yawOffset
+  if cfg.shipRelativeYaw and shipYaw then
+    aimYaw = aimYaw - shipYaw
+  end
+  aimYaw = ((aimYaw % 360) + 360) % 360
   local aimPitch = (cmd.pitch or 0) * cfg.pitchScale
   pcall(function() mount.setYaw(aimYaw) end)
   pcall(function() mount.setPitch(aimPitch) end)
@@ -630,6 +664,12 @@ local function mainLoop()
 
     local resp = httpPost(POLL_PATH, body)
 
+    -- Learn (or refresh) this cannon's registry id from the server so the ship
+    -- GPS listener knows which beacons to trust.
+    if resp and resp.success and resp.response and resp.response.id then
+      myCannonId = tonumber(resp.response.id) or myCannonId
+    end
+
     table.insert(lines, "Sublevel Cannon Computer")
     table.insert(lines, "Computer ID: " .. computerId)
     if gpsState.x ~= nil then
@@ -643,8 +683,10 @@ local function mainLoop()
     end
     if shipYaw then
       table.insert(lines, "Ship heading: " .. string.format("%.1f", shipYaw) .. "°")
-    elseif frontX == nil or backX == nil then
-      table.insert(lines, "Ship heading: waiting for front/back GPS…")
+    elseif myCannonId == nil then
+      table.insert(lines, "Ship heading: waiting for registry id…")
+    else
+      table.insert(lines, "Ship heading: waiting for assigned front/back GPS…")
     end
 
     if not mount then
@@ -667,7 +709,7 @@ local function mainLoop()
       if cmd and cmd.sequence ~= lastSequence then
         if mount then
           lastSequence = cmd.sequence   -- ack intent immediately (at-most-once fire)
-          local ok, err = pcall(runCommand, mount, cmd, shipYaw)
+          local ok, err = pcall(runCommand, mount, cmd)
           if not ok then
             print("Command #" .. tostring(cmd.sequence) .. " failed: " .. tostring(err))
           end

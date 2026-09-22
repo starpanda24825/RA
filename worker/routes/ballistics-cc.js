@@ -109,7 +109,26 @@ export async function ccPoll(request, env) {
 
   return ccJson(true, {
     status: cannon.status,
+    id:     cannon.id,
     name:   cannon.name,
     command,
   });
+}
+
+// GET /api/ballistics/cc/cannons
+// Public registry list for the in-game Sublevel Ship GPS program, which uses
+// it to let the operator assign a front/back beacon to a specific cannon.
+// Same open model as ccPoll — no auth (the CC bridge has no token), so only
+// non-sensitive registry fields are returned.
+export async function ccCannons(request, env) {
+  const rows = await store.listCannons(env);
+  const cannons = (rows || []).map((c) => ({
+    id:         c.id,
+    computerId: c.computer_id,
+    name:       c.name || ('Cannon ' + c.id),
+    sublevel:   Number(c.sublevel) === 1,
+    status:     c.status,
+    shipYaw:    c.ship_yaw == null ? null : Number(c.ship_yaw),
+  }));
+  return ccJson(true, { cannons });
 }

@@ -397,6 +397,7 @@ export default {
 
         // ---- Ballistic Calculator: static cannon registry + CC bridge ----
         if (pathname === '/api/ballistics/cannons' && method === 'GET') return await ballistics.listCannons(request, env);
+        if (pathname === '/api/ballistics/cc/cannons' && method === 'GET') return await ballisticsCC.ccCannons(request, env);
         if (pathname === '/api/ballistics/cc/poll' && method === 'POST') return await ballisticsCC.ccPoll(request, env);
 
         m = pathname.match(/^\/api\/ballistics\/cannons\/(\d+)\/accept$/);

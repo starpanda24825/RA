@@ -19,22 +19,42 @@
 -- ────────────────────────────────────────────────────────────
 --   1. Place a Computer at the bow and another at the stern, on
 --      the centerline, as far apart as the ship allows.
---   2. Put a wireless (or ender) modem on each.
+--   2. Put a wireless (or ender) modem on each, and give the
+--      computer a wireless network connection (http must work).
 --   3. Put this program on each as "startup" (it is a daemon).
 --   4. On first boot each asks whether it is the FRONT or BACK
 --      computer and saves that role. Answer FRONT for the bow
 --      computer and BACK for the stern one.
+--   5. It then shows the live cannon registry pulled from the
+--      website. Use the UP / DOWN arrow keys to highlight the
+--      cannon this ship's GPS pair reports to and press ENTER.
+--      Both computers (front and back) must pick the SAME cannon.
+--      The list re-fetches itself every 10 seconds.
 --
--- The cannon computer listens on the shared channel, pairs the two
--- positions, and derives the ship's heading (shipYaw).
+-- ASSIGNMENT — WHY IT MATTERS
+--   Every broadcast is tagged with the chosen cannon's registry
+--   id, and the cannon computer only accepts beacons addressed to
+--   itself. Two ships parked near each other therefore can no
+--   longer swap front/back fixes, so a shipYaw can never be
+--   applied to the wrong vehicle.
+--
+--   Press C at any time on the status screen to re-open the
+--   cannon list and change the assignment.
 -- ============================================================
+
+-- ------------------------------------------------------------
+-- Configuration
+-- ------------------------------------------------------------
+local BASE_URL     = "https://regnumaeternum.starpanda24825.workers.dev"
+local CANNONS_PATH = "/api/ballistics/cc/cannons"
 
 -- Channel the positions are broadcast on. MUST match the
 -- SHIP_GPS_CHANNEL constant in the Sublevel Cannon Computer program.
 local CHANNEL = 4120
 
-local GPS_TIMEOUT     = 2   -- seconds per gps.locate attempt
-local REPORT_INTERVAL = 1   -- seconds between broadcasts (≈3s cadence)
+local GPS_TIMEOUT     = 2    -- seconds per gps.locate attempt
+local REPORT_INTERVAL = 1    -- seconds between broadcasts (≈3s cadence)
+local REFRESH_SECONDS = 10   -- how often the cannon list re-fetches itself
 local CFG_PATH        = "shipgps_cfg.txt"
 
 -- ------------------------------------------------------------
@@ -69,20 +89,69 @@ local function drawStatus(lines)
   end
 end
 
+-- Blocking GET returning the decoded JSON table (or nil on any failure).
+local function httpGetJSON(path)
+  if not http then return nil end
+  local ok, resp = pcall(http.get, BASE_URL .. path)
+  if not ok or not resp then return nil end
+  local raw = resp.readAll()
+  resp.close()
+  local decoded, data = pcall(textutils.unserializeJSON, raw)
+  if decoded and type(data) == "table" then return data end
+  return nil
+end
+
+-- ------------------------------------------------------------
+-- Config  (role + assigned cannon)
+-- ------------------------------------------------------------
+local cfg = {
+  role       = nil,   -- "front" | "back"
+  cannonId   = nil,   -- registry id on the website
+  cannonName = nil,   -- display name, cached for the status screen
+}
+
+local function readConfig()
+  if not fs.exists(CFG_PATH) then return end
+  local f = fs.open(CFG_PATH, "r")
+  if not f then return end
+  local raw = trim(f.readAll())
+  f.close()
+  if raw == "" then return end
+
+  -- Backwards compatibility: the original file was just the role on one line.
+  if raw == "front" or raw == "back" then
+    cfg.role = raw
+    return
+  end
+
+  for line in raw:gmatch("[^\r\n]+") do
+    local k, v = line:match("^([%w_]+)%s*=%s*(.-)%s*$")
+    if k == "role" then
+      if v == "front" or v == "back" then cfg.role = v end
+    elseif k == "cannonId" then
+      cfg.cannonId = tonumber(v)
+    elseif k == "cannonName" then
+      cfg.cannonName = v
+    end
+  end
+end
+
+local function writeConfig()
+  local f = fs.open(CFG_PATH, "w")
+  f.writeLine("role=" .. tostring(cfg.role or ""))
+  f.writeLine("cannonId=" .. tostring(cfg.cannonId or ""))
+  f.writeLine("cannonName=" .. tostring(cfg.cannonName or ""))
+  f.close()
+end
+
 -- ------------------------------------------------------------
 -- Role (front / back)
 -- ------------------------------------------------------------
-local role = nil
-if fs.exists(CFG_PATH) then
-  local f = fs.open(CFG_PATH, "r")
-  local saved = trim(f.readLine())
-  f.close()
-  if saved == "front" or saved == "back" then role = saved end
-end
-
-if not role then
+local function setupRole()
+  term.setBackgroundColor(colors.black)
   term.clear()
   term.setCursorPos(1, 1)
+  term.setTextColor(colors.white)
   print("=== Sublevel Ship GPS — first-time setup ===")
   print("")
   print("Which end of the ship is this computer on?")
@@ -91,22 +160,190 @@ if not role then
   print("")
   write("Enter 1 or 2: ")
   local choice = trim(read())
-  role = (choice == "2") and "back" or "front"
-  local f = fs.open(CFG_PATH, "w")
-  f.writeLine(role)
-  f.close()
+  cfg.role = (choice == "2") and "back" or "front"
+  writeConfig()
   print("")
-  print("Saved as " .. role .. ". Starting…")
+  print("Saved as " .. cfg.role .. ".")
   sleep(1)
+end
+
+-- ------------------------------------------------------------
+-- Cannon registry selection
+-- ------------------------------------------------------------
+local function fetchCannons()
+  local data = httpGetJSON(CANNONS_PATH)
+  if data and data.success and data.response and type(data.response.cannons) == "table" then
+    local list = {}
+    for _, c in ipairs(data.response.cannons) do
+      if type(c) == "table" and tonumber(c.id) then
+        table.insert(list, c)
+      end
+    end
+    table.sort(list, function(a, b) return tonumber(a.id) < tonumber(b.id) end)
+    return list
+  end
+  return nil
+end
+
+local function cannonLabel(c)
+  local name = c.name
+  if not name or name == "" then name = "Cannon " .. tostring(c.id) end
+  local tag = ""
+  if c.sublevel then tag = tag .. " [sublevel]" end
+  if c.status and c.status ~= "active" then tag = tag .. " [" .. tostring(c.status) .. "]" end
+  if c.computerId then tag = tag .. " · PC " .. tostring(c.computerId) end
+  return name .. tag
+end
+
+local function drawSelect(list, sel, status)
+  term.setBackgroundColor(colors.black)
+  term.clear()
+  term.setCursorPos(1, 1)
+  term.setTextColor(colors.yellow)
+  print("=== Assign this GPS (" .. tostring(cfg.role) .. ") to a cannon ===")
+  term.setTextColor(colors.white)
+  print("UP / DOWN to highlight, ENTER to confirm.")
+  print("")
+
+  if #list == 0 then
+    term.setTextColor(colors.red)
+    print("No cannons in the registry yet.")
+    term.setTextColor(colors.white)
+    print("Accept a cannon request on the website first.")
+  else
+    local width = term.getSize()
+    for i, c in ipairs(list) do
+      local line = "  " .. cannonLabel(c)
+      line = line:sub(1, width)
+      line = line .. string.rep(" ", math.max(0, width - #line))
+      if i == sel then
+        term.setBackgroundColor(colors.blue)
+        term.setTextColor(colors.white)
+      else
+        term.setBackgroundColor(colors.black)
+        term.setTextColor(colors.lightGrey)
+      end
+      print(line)
+    end
+  end
+
+  term.setBackgroundColor(colors.black)
+  term.setTextColor(colors.grey)
+  print("")
+  print(status or "")
+  print("auto-refresh every " .. REFRESH_SECONDS .. "s · ESC to cancel")
+end
+
+-- Live list (refreshes every REFRESH_SECONDS while the screen is open).
+-- Returns the chosen cannon table, or nil if the user cancelled.
+local function selectCannon()
+  local fetched = fetchCannons()
+  local list = fetched or {}
+  local status = fetched and "Loaded from the website." or "Could not reach the website."
+
+  local sel = 1
+  for i, c in ipairs(list) do
+    if cfg.cannonId ~= nil and tonumber(c.id) == tonumber(cfg.cannonId) then sel = i end
+  end
+
+  local timer = os.startTimer(REFRESH_SECONDS)
+  drawSelect(list, sel, status)
+
+  while true do
+    local event, a = os.pullEvent()
+    if event == "timer" and a == timer then
+      local fresh = fetchCannons()
+      if fresh then
+        list = fresh
+        status = "Registry refreshed."
+      else
+        status = "Website unreachable — keeping the last list."
+      end
+      if #list == 0 then sel = 1
+      elseif sel > #list then sel = #list
+      elseif sel < 1 then sel = 1 end
+      drawSelect(list, sel, status)
+      timer = os.startTimer(REFRESH_SECONDS)
+    elseif event == "key" then
+      if a == keys.up then
+        if sel > 1 then sel = sel - 1 end
+        drawSelect(list, sel, status)
+      elseif a == keys.down then
+        if sel < #list then sel = sel + 1 end
+        drawSelect(list, sel, status)
+      elseif a == keys.enter then
+        if #list > 0 then return list[sel] end
+      elseif a == keys.escape then
+        return nil
+      end
+    end
+  end
+end
+
+-- Opens the list and stores the choice. Returns true when assigned.
+local function assignCannon()
+  local chosen = selectCannon()
+  if not chosen then return false end
+  cfg.cannonId   = tonumber(chosen.id)
+  cfg.cannonName = chosen.name
+  if not cfg.cannonName or cfg.cannonName == "" then
+    cfg.cannonName = "Cannon " .. tostring(cfg.cannonId)
+  end
+  writeConfig()
+  term.setBackgroundColor(colors.black)
+  term.clear()
+  term.setCursorPos(1, 1)
+  term.setTextColor(colors.lime)
+  print("Assigned to " .. cfg.cannonName .. " (id " .. tostring(cfg.cannonId) .. ").")
+  term.setTextColor(colors.white)
+  sleep(1.5)
+  return true
 end
 
 -- ------------------------------------------------------------
 -- Main
 -- ------------------------------------------------------------
+readConfig()
+
+if not cfg.role then
+  setupRole()
+end
+
+-- Require an assignment before the beacon starts reporting.
+while not cfg.cannonId do
+  term.setBackgroundColor(colors.black)
+  term.clear()
+  term.setCursorPos(1, 1)
+  term.setTextColor(colors.white)
+  print("=== Sublevel Ship GPS — cannon assignment ===")
+  print("")
+  print("This beacon (" .. cfg.role .. ") must be assigned to the")
+  print("registered cannon it reports the ship heading for.")
+  print("")
+  print("Press any key to open the cannon list…")
+  os.pullEvent("key")
+  assignCannon()
+end
+
+-- Wait up to `seconds` for a timer, but return early if a key is pressed.
+-- This keeps the single-threaded main loop responsive to the C key without
+-- racing the status screen against a separate coroutine.
+local function sleepOrKey(seconds)
+  local timer = os.startTimer(seconds)
+  while true do
+    local event, a = os.pullEvent()
+    if event == "timer" and a == timer then return nil end
+    if event == "key" then return a end
+  end
+end
+
 local lastX, lastY, lastZ
 
 while true do
-  local lines = { "Sublevel Ship GPS — " .. role .. " receiver" }
+  local lines = { "Sublevel Ship GPS — " .. cfg.role .. " receiver" }
+  table.insert(lines, "Assigned to: " .. (cfg.cannonName or ("Cannon " .. tostring(cfg.cannonId or "?"))) ..
+                              " (id " .. tostring(cfg.cannonId or "?") .. ")")
+
   local modem = findWirelessModem()
 
   if not modem then
@@ -120,7 +357,10 @@ while true do
     local ok, x, y, z = pcall(gps.locate, GPS_TIMEOUT)
     if ok and x and y and z then
       lastX, lastY, lastZ = x, y, z
-      local msg = textutils.serializeJSON({ type = "ship_gps", role = role, x = x, y = y, z = z })
+      local msg = textutils.serializeJSON({
+        type = "ship_gps", role = cfg.role, cannonId = cfg.cannonId,
+        x = x, y = y, z = z,
+      })
       modem.transmit(CHANNEL, CHANNEL, msg)
       table.insert(lines, "GPS: X " .. tostring(x) .. "  Y " .. tostring(y) .. "  Z " .. tostring(z))
       table.insert(lines, "Broadcasting on channel " .. tostring(CHANNEL))
@@ -131,7 +371,12 @@ while true do
       end
     end
 
+    table.insert(lines, "Press C to change the assigned cannon.")
+
     drawStatus(lines)
-    sleep(REPORT_INTERVAL)
+    local key = sleepOrKey(REPORT_INTERVAL)
+    if key == keys.c then
+      assignCannon()
+    end
   end
 end
