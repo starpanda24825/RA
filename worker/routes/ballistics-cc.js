@@ -82,9 +82,13 @@ function sanitiseTowerList(list) {
 
 // POST /api/ballistics/cc/poll
 // Body: {
-//   computerId, x, y, z, length, facing, sublevel, message,
+//   computerId, name, x, y, z, length, facing, sublevel, message,
 //   yaw, pitch, sequence (last executed command sequence)
 // }
+//
+// `name` is the name the cannon gave itself at first boot. It is honoured while
+// the request is pending and ignored afterwards, so an officer's rename on the
+// website is never overwritten by the next ping.
 export async function ccPoll(request, env) {
   let body;
   try { body = await request.json(); }
@@ -92,6 +96,7 @@ export async function ccPoll(request, env) {
 
   const computerId = String(body.computerId || '').trim().slice(0, 64);
   if (!computerId) return ccJson(false, 'computerId required.');
+  const nameProposal = String(body.name || '').trim().slice(0, 80);
 
   const x       = num(body.x, 0);
   const y       = num(body.y, 0);
@@ -111,7 +116,7 @@ export async function ccPoll(request, env) {
 
   let cannon = await store.findCannonByComputerId(env, computerId);
   if (!cannon) {
-    cannon = await store.insertCannon(env, { computerId, x, y, z, length, facing, sublevel, message, shipYaw });
+    cannon = await store.insertCannon(env, { computerId, name: nameProposal, x, y, z, length, facing, sublevel, message, shipYaw });
   } else if (cannon.status === 'pending' || Number(cannon.sublevel) === 1) {
     // Pending requests and sublevel (mobile) cannons keep their reported
     // coordinates fresh on every ping; accepted static cannons do not,
@@ -122,6 +127,9 @@ export async function ccPoll(request, env) {
     // coordinates instead.
     const useReported = Number(cannon.sublevel) !== 1 || gpsOk;
     cannon = await store.refreshCannonFromComputer(env, cannon.id, {
+      // Only a pending cannon may be named by its computer. Once accepted, the
+      // website owns the name.
+      name: cannon.status === 'pending' ? nameProposal : undefined,
       x: useReported ? x : cannon.x,
       y: useReported ? y : cannon.y,
       z: useReported ? z : cannon.z,
@@ -223,6 +231,9 @@ export async function ccVehiclePoll(request, env) {
 
   const computerId = String(body.computerId || '').trim().slice(0, 64);
   if (!computerId) return ccJson(false, 'computerId required.');
+  // The name the vehicle gave itself at first boot — same rule as a cannon: it
+  // counts while the request is pending, and an officer's rename wins after.
+  const nameProposal = String(body.name || '').trim().slice(0, 80);
 
   const shipYaw = body.shipYaw == null ? null : num(body.shipYaw, null);
   const message = String(body.message || '').slice(0, 200);
@@ -231,9 +242,12 @@ export async function ccVehiclePoll(request, env) {
   try {
     vehicle = await store.findVehicleByComputerId(env, computerId);
     if (!vehicle) {
-      vehicle = await store.insertVehicle(env, { computerId, message, shipYaw });
+      vehicle = await store.insertVehicle(env, { computerId, name: nameProposal, message, shipYaw });
     } else {
-      vehicle = await store.refreshVehicleFromComputer(env, vehicle.id, { message, shipYaw });
+      vehicle = await store.refreshVehicleFromComputer(env, vehicle.id, {
+        name: vehicle.status === 'pending' ? nameProposal : undefined,
+        message, shipYaw,
+      });
     }
   } catch (err) {
     console.warn('CC vehicle poll: registry unavailable (run migration 0016?)', err);
@@ -320,6 +334,34 @@ export async function ccCannons(request, env) {
     vehicleId:  c.vehicle_id == null ? null : Number(c.vehicle_id),
   }));
   return ccJson(true, { cannons });
+}
+
+// GET /api/ballistics/cc/presets
+// Public reload-preset list for the Sublevel Cannon Computer's first-boot setup
+// menu. Only what the menu needs: a name to show and the timings to apply. Same
+// open model as the other CC routes — a computer being set up has no account,
+// and none of this is sensitive.
+export async function ccPresets(request, env) {
+  // A website with no presets yet (0017 not applied, or an empty registry)
+  // simply reports none, so the setup menu falls back to its built-in methods
+  // rather than failing.
+  let rows = [];
+  try {
+    rows = await store.listReloadPresets(env);
+  } catch (err) {
+    console.warn('CC presets: registry unavailable (run migration 0017?)', err);
+  }
+  const presets = (rows || []).map((p) => ({
+    id:         Number(p.id),
+    name:       p.name,
+    // Where in the sequence the reload happens: 'between' disassemble and
+    // assemble, or 'after' the cannon is assembled again.
+    kind:       p.kind === 'after' ? 'after' : 'between',
+    reloadTime: Number(p.reload_time),
+    pulse:      Number(p.pulse),
+    notes:      p.notes || '',
+  }));
+  return ccJson(true, { presets });
 }
 
 // GET /api/ballistics/cc/vehicles

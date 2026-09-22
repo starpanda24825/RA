@@ -399,8 +399,11 @@ export default {
         if (pathname === '/api/ballistics/cannons' && method === 'GET') return await ballistics.listCannons(request, env);
         if (pathname === '/api/ballistics/towers' && method === 'GET') return await ballistics.listTowers(request, env);
         if (pathname === '/api/ballistics/vehicles' && method === 'GET') return await ballistics.listVehicles(request, env);
+        if (pathname === '/api/ballistics/presets' && method === 'GET') return await ballistics.listPresets(request, env);
+        if (pathname === '/api/ballistics/presets' && method === 'POST') return await ballistics.createPreset(request, env);
         if (pathname === '/api/ballistics/cc/cannons' && method === 'GET') return await ballisticsCC.ccCannons(request, env);
         if (pathname === '/api/ballistics/cc/vehicles' && method === 'GET') return await ballisticsCC.ccVehicles(request, env);
+        if (pathname === '/api/ballistics/cc/presets' && method === 'GET') return await ballisticsCC.ccPresets(request, env);
         if (pathname === '/api/ballistics/cc/poll' && method === 'POST') return await ballisticsCC.ccPoll(request, env);
         if (pathname === '/api/ballistics/cc/vehicle/poll' && method === 'POST') return await ballisticsCC.ccVehiclePoll(request, env);
 
@@ -417,12 +420,19 @@ export default {
         m = pathname.match(/^\/api\/ballistics\/vehicles\/(\d+)\/accept$/);
         if (m && method === 'POST') return await ballistics.acceptVehicle(request, env, m[1]);
 
+        m = pathname.match(/^\/api\/ballistics\/vehicles\/(\d+)\/fire$/);
+        if (m && method === 'POST') return await ballistics.fireVehicle(request, env, m[1]);
+
         m = pathname.match(/^\/api\/ballistics\/vehicles\/(\d+)\/cannons$/);
         if (m && method === 'POST') return await ballistics.assignVehicleCannon(request, env, m[1]);
 
         m = pathname.match(/^\/api\/ballistics\/vehicles\/(\d+)$/);
         if (m && method === 'PUT') return await ballistics.updateVehicle(request, env, m[1]);
         if (m && method === 'DELETE') return await ballistics.deleteVehicle(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/ballistics\/presets\/(\d+)$/);
+        if (m && method === 'PUT') return await ballistics.updatePreset(request, env, m[1]);
+        if (m && method === 'DELETE') return await ballistics.deletePreset(request, env, m[1]);
 
         // ---- Ballistic Calculator / Land Registry: BlueMap proxy ----
         if (pathname === '/api/bluemap-config' && method === 'GET') return await bluemap.getConfig(request, env);

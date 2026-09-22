@@ -95,6 +95,9 @@
 -- ------------------------------------------------------------
 local BASE_URL = "https://regnumaeternum.starpanda24825.workers.dev"
 local POLL_PATH = "/api/ballistics/cc/poll"
+-- The saved reload mechanisms. Read ONCE, during first-boot setup, so the menu
+-- can offer the same list at every cannon.
+local PRESETS_PATH = "/api/ballistics/cc/presets"
 
 -- Mount peripheral type from cbcperipheral.
 local MOUNT_TYPE = "cbc_cannon_mount"
@@ -137,8 +140,10 @@ local ID_PATH  = "subcannon_id.txt"
 local cfg = {
   length       = 4,
   facing       = 0,
+  name         = "",     -- the name this cannon proposes; an officer may rename it
   reloadType   = "autoloader",  -- "autoloader" or "arm"
   reloadTime   = 0.5,    -- reload delay (seconds); placement depends on reloadType
+  reloadPreset = "",     -- name of the website preset this was set from (display only)
   message      = "",
   pollInterval = 1,      -- seconds after each poll; total loop ≈ 3s
   yawOffset    = 0,
@@ -192,8 +197,10 @@ local function writeConfig()
   local f = fs.open(CFG_PATH, "w")
   f.writeLine("length=" .. tostring(cfg.length))
   f.writeLine("facing=" .. tostring(cfg.facing))
+  f.writeLine("name=" .. tostring(cfg.name))
   f.writeLine("reloadType=" .. tostring(cfg.reloadType))
   f.writeLine("reloadTime=" .. tostring(cfg.reloadTime))
+  f.writeLine("reloadPreset=" .. tostring(cfg.reloadPreset))
   f.writeLine("message=" .. tostring(cfg.message))
   f.writeLine("pollInterval=" .. tostring(cfg.pollInterval))
   f.writeLine("yawOffset=" .. tostring(cfg.yawOffset))
@@ -215,7 +222,9 @@ local function loadConfig()
     if loaded.reloadType == "arm" or loaded.reloadType == "autoloader" then
       cfg.reloadType = loaded.reloadType
     end
+    cfg.name         = loaded.name or cfg.name
     cfg.reloadTime   = tonumber(loaded.reloadTime) or cfg.reloadTime
+    cfg.reloadPreset = loaded.reloadPreset or cfg.reloadPreset
     cfg.message      = loaded.message or cfg.message
     cfg.pollInterval = tonumber(loaded.pollInterval) or cfg.pollInterval
     cfg.yawOffset    = tonumber(loaded.yawOffset) or cfg.yawOffset
@@ -238,6 +247,23 @@ end
 
 local VALID_SIDES = { left = true, right = true, front = true, back = true, top = true, bottom = true }
 
+-- Assigned with the HTTP bridge, far below. Declared here because a `local
+-- function` defined after setup() would not be in scope inside it, and setup()
+-- is the one place that talks to the website before the main loop starts.
+local httpGetJSON
+local fetchReloadPresets
+
+-- One line describing what this cannon does between shots, for the status
+-- screen: a preset is worth being able to confirm at the cannon itself.
+local function reloadSummary()
+  local where = (cfg.reloadType == "arm") and "after assemble" or "between disassemble and assemble"
+  local label = cfg.reloadPreset
+  if label == "" then
+    label = (cfg.reloadType == "arm") and "Mechanical arm" or "Auto-Loader"
+  end
+  return string.format("%s — %s, %.2fs", label, where, cfg.reloadTime)
+end
+
 -- First-boot interactive setup.
 local function setup()
   term.clear()
@@ -253,19 +279,69 @@ local function setup()
 
   print("")
   print("Reload method:")
-  print("  1 = Auto-Loader    — reloads between disassemble and assemble")
-  print("  2 = Mechanical arm — reloads after the cannon is assembled")
-  local rt = readLine("Enter 1 or 2: ")
-  cfg.reloadType = (rt == "2") and "arm" or "autoloader"
+  print("  1 = Mechanical arm — reloads after the cannon is assembled")
 
-  local reloadPrompt
-  if cfg.reloadType == "arm" then
-    reloadPrompt = "Reload time in seconds (mechanical arm delay after assemble, e.g. 10): "
-  else
-    reloadPrompt = "Reload time in seconds (auto-loader delay between disassemble and assemble, e.g. 10): "
+  -- Every other mechanism is a preset saved on the website (Reload Presets
+  -- tab), so the same list is offered at every cannon instead of the timings
+  -- being typed in here. 'Custom' keeps the manual questions.
+  local presets = fetchReloadPresets()
+  local menu = { { kind = "arm" } }
+  for i = 1, #presets do
+    menu[#menu + 1] = { kind = "preset", preset = presets[i] }
   end
-  local reload = tonumber(readLine(reloadPrompt))
-  cfg.reloadTime = reload and math.max(0, reload) or cfg.reloadTime
+  menu[#menu + 1] = { kind = "custom" }
+
+  for i = 2, #menu do
+    local entry = menu[i]
+    if entry.kind == "preset" then
+      local p = entry.preset
+      local where = (p.kind == "after") and "after assemble" or "between disassemble and assemble"
+      print(("  %d = %s — reloads %s, %.2fs"):format(i, p.name, where, p.reloadTime))
+      if p.notes ~= "" then print("       " .. p.notes) end
+    else
+      print(("  %d = Custom — set the timings yourself"):format(i))
+    end
+  end
+  if #presets == 0 then
+    print("  (no saved mechanisms on the website yet — see the Reload Presets tab)")
+  end
+
+  -- Anything unrecognised falls back to the mechanical arm, which is what the
+  -- old two-option menu defaulted to as well.
+  local picked = menu[1]
+  local choice = tonumber(readLine(("Enter 1 to %d: "):format(#menu)))
+  if choice and menu[math.floor(choice)] then picked = menu[math.floor(choice)] end
+
+  cfg.reloadPreset = ""
+  if picked.kind == "preset" then
+    local p = picked.preset
+    -- A preset says WHERE in the sequence the reload happens and how long it
+    -- takes. The cannon's own trigger side is hardware, so that is still asked
+    -- below.
+    cfg.reloadType   = (p.kind == "after") and "arm" or "autoloader"
+    cfg.reloadTime   = p.reloadTime
+    cfg.reloadPulse  = p.pulse
+    cfg.reloadPreset = p.name
+    print(("  Using preset \"%s\"."):format(p.name))
+  elseif picked.kind == "arm" then
+    cfg.reloadType = "arm"
+    local reload = tonumber(readLine("Reload time in seconds (mechanical arm delay after assemble, e.g. 10): "))
+    cfg.reloadTime = reload and math.max(0, reload) or cfg.reloadTime
+  else
+    print("  Where does the reload happen?")
+    print("    1 = between disassemble and assemble")
+    print("    2 = after the cannon is assembled")
+    local where = readLine("Enter 1 or 2: ")
+    cfg.reloadType = (where == "2") and "arm" or "autoloader"
+    local reloadPrompt
+    if cfg.reloadType == "arm" then
+      reloadPrompt = "Reload time in seconds (delay after assemble, e.g. 10): "
+    else
+      reloadPrompt = "Reload time in seconds (delay between disassemble and assemble, e.g. 10): "
+    end
+    local reload = tonumber(readLine(reloadPrompt))
+    cfg.reloadTime = reload and math.max(0, reload) or cfg.reloadTime
+  end
 
   print("")
   print("Reload trigger:")
@@ -277,6 +353,11 @@ local function setup()
     rside = "back"
   end
   cfg.reloadRedstoneSide = rside
+
+  print("")
+  print("Cannon name in the registry.")
+  print("  Leave blank to be given the next free \"Cannon N\" when an officer accepts it.")
+  cfg.name = readLine("Name (blank = automatic): ")
 
   print("")
   print("Message shown to the officer reviewing your request.")
@@ -672,6 +753,48 @@ local function httpPost(path, body)
   return nil
 end
 
+-- Blocking GET returning the decoded JSON table, or nil on any failure. Used
+-- once, during setup, to pull the saved reload mechanisms.
+httpGetJSON = function(path)
+  local ok, result = pcall(function()
+    local req = http.get(BASE_URL .. path)
+    if req then
+      local raw = req.readAll()
+      req.close()
+      return raw
+    end
+    return nil
+  end)
+  if not ok or result == nil then return nil end
+  local ok2, decoded = pcall(textutils.unserializeJSON, result)
+  if ok2 and decoded then return decoded end
+  return nil
+end
+
+-- The saved reload mechanisms, shaped for the setup menu. Any failure simply
+-- yields none — the built-in methods are always offered, so a website that is
+-- down or has no presets yet never blocks a cannon being set up.
+fetchReloadPresets = function()
+  local decoded = httpGetJSON(PRESETS_PATH)
+  if not decoded or not decoded.success or not decoded.response then return {} end
+  local list = decoded.response.presets
+  if type(list) ~= "table" then return {} end
+  local out = {}
+  for i = 1, #list do
+    local p = list[i]
+    if type(p) == "table" and type(p.name) == "string" and p.name ~= "" then
+      out[#out + 1] = {
+        name       = p.name,
+        kind       = (p.kind == "after") and "after" or "between",
+        reloadTime = math.max(0, tonumber(p.reloadTime) or 1),
+        pulse      = math.max(0.05, tonumber(p.pulse) or 0.5),
+        notes      = tostring(p.notes or ""),
+      }
+    end
+  end
+  return out
+end
+
 -- ------------------------------------------------------------
 -- Firing sequence (same as static cannons):
 --   disassemble → assemble → aim → fire → disassemble
@@ -864,6 +987,7 @@ local function mainLoop()
       x = gpsX, y = gpsY, z = gpsZ,
       gpsOk = gpsOk,
       shipYaw = shipYaw,
+      name = cfg.name,
       length = cfg.length,
       facing = cfg.facing,
       sublevel = true,
@@ -890,6 +1014,10 @@ local function mainLoop()
     end
 
     table.insert(lines, "Sublevel Cannon Computer")
+    if cfg.name ~= "" then
+      table.insert(lines, "Name: " .. cfg.name)
+    end
+    table.insert(lines, "Reload: " .. reloadSummary())
     table.insert(lines, "Computer ID: " .. computerId)
     if gpsX ~= nil then
       table.insert(lines, ("GPS: X %d  Y %d  Z %d  (%d towers, %s, DOP %.0f, %.1fs old)"):format(

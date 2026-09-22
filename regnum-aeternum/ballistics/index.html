@@ -617,6 +617,7 @@
       <button class="bc-tab" id="tab-cannons" type="button">Cannon Registry</button>
       <button class="bc-tab" id="tab-vehicles" type="button">Vehicle Registry</button>
       <button class="bc-tab" id="tab-gps" type="button">GPS Network</button>
+      <button class="bc-tab" id="tab-presets" type="button">Reload Presets</button>
     </div>
 
     <div class="panel-inner" id="calc-panel">
@@ -681,13 +682,13 @@
 
       <div class="field-group" style="grid-column:1/-1;">
         <label>Registered Cannons</label>
-        <p class="field-hint">Static and mobile (sublevel) cannons that have been accepted. Edit a name or detail here, then fire from the Calculator tab.</p>
+        <p class="field-hint">Static and mobile (sublevel) cannons that have been accepted and are not on a ship. Edit a name or detail here, then fire from the Calculator tab. A cannon assigned to a vehicle is listed under that vehicle in the Vehicle Registry, and is fired by firing the vehicle.</p>
         <div class="registry-list" id="cannon-active-list"></div>
       </div>
 
       <div class="field-group" style="grid-column:1/-1;">
         <label>Pending Requests</label>
-        <p class="field-hint">Computers that have pinged in but are not yet accepted. Accept to register, or decline to remove.</p>
+        <p class="field-hint">Computers that have pinged in but are not yet accepted. The cannon names itself when it is set up in-game, and keeps that name unless you rename it after accepting. Accept to register, or decline to remove.</p>
         <div class="registry-list" id="cannon-pending-list"></div>
       </div>
 
@@ -703,15 +704,17 @@
           the cannon computers only apply the values they are given.
           <br/><br/>
           Assign the sublevel cannons that belong to the ship below. An assigned cannon stops running its own
-          command loop and is driven entirely by the vehicle; release it to hand control back. Deleting a
-          vehicle releases its cannons rather than removing them.
+          command loop and is no longer aimed or fired on its own: it leaves the Cannon Registry and the
+          Calculator's selector, and is aimed and fired as part of this ship — pick the ship in the Calculator to
+          fire every gun it owns at one target. Release a cannon to hand control back. Deleting a vehicle
+          releases its cannons rather than removing them.
         </p>
         <div class="registry-list" id="vehicle-active-list"></div>
       </div>
 
       <div class="field-group" style="grid-column:1/-1;">
         <label>Pending Vehicle Requests</label>
-        <p class="field-hint">Vehicle computers that have pinged in but are not yet accepted. Accept to register, or decline to remove.</p>
+        <p class="field-hint">Vehicle computers that have pinged in but are not yet accepted. Like a cannon, the ship names itself when it is set up in-game. Accept to register, or decline to remove.</p>
         <div class="registry-list" id="vehicle-pending-list"></div>
       </div>
 
@@ -746,6 +749,44 @@
           mis-keyed. A tower listed as ignored has been left out on purpose — check it against the map.
         </p>
         <div class="registry-list" id="gps-receiver-list"></div>
+      </div>
+
+    </div>
+
+    <div class="panel-inner" id="presets-panel" style="display:none;">
+
+      <div class="field-group" style="grid-column:1/-1;">
+        <label>Saved Reload Mechanisms</label>
+        <p class="field-hint">
+          Named reload mechanisms, saved here so a cannon computer can pull the list at
+          first-boot setup and pick one, instead of the timings being typed in at every
+          cannon. <b>Kind</b> is where in the firing sequence the reload happens, and that is
+          what makes one mechanism behave differently from another.
+          <br/><br/>
+          A cannon computer reads this list once, when it is first configured, and keeps the
+          timings it was given — so editing or deleting a preset never changes a cannon that
+          is already set up.
+        </p>
+        <div class="registry-list" id="preset-list"></div>
+      </div>
+
+      <div class="field-group" style="grid-column:1/-1;">
+        <label id="preset-form-title">Add a Reload Mechanism</label>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+          <input class="bc-input" id="preset-name" placeholder="Name — e.g. Piston Feed" style="flex:2 1 200px;"/>
+          <select class="bc-select" id="preset-kind" style="flex:3 1 260px;">
+            <option value="between">Reloads between disassemble and assemble</option>
+            <option value="after">Reloads after the cannon is assembled</option>
+          </select>
+          <input class="bc-input" id="preset-time" type="number" step="0.1" min="0" value="1" title="Reload time in seconds" style="flex:1 1 110px;"/>
+          <input class="bc-input" id="preset-pulse" type="number" step="0.1" min="0" value="0.5" title="Trigger pulse in seconds" style="flex:1 1 110px;"/>
+        </div>
+        <p class="field-hint">Name · kind · reload seconds · trigger pulse seconds</p>
+        <input class="bc-input" id="preset-notes" placeholder="What the mechanism is (optional)" style="margin-top:8px;"/>
+        <div class="registry-actions">
+          <button class="calc-btn" id="preset-save" type="button">Save Preset</button>
+          <button class="map-btn" id="preset-cancel" type="button" style="display:none;">Cancel Edit</button>
+        </div>
       </div>
 
     </div>
@@ -1546,7 +1587,7 @@
     }
 
     function fireButton(mode, sol) {
-      const s = fireButtonLabel(mode, sol, !!selectedCannonId);
+      const s = fireButtonLabel(mode, sol, fireTarget());
       const cls = mode === 'direct' ? 'calc-btn calc-btn--gold' : 'calc-btn';
       return '<button class="' + cls + '" data-fire-mode="' + mode + '" type="button"' +
         (s.disabled ? ' disabled' : '') +
@@ -1595,6 +1636,11 @@
     });
 
     const selCannon = selectedCannonId ? cannonsActive.find(x => String(x.id) === selectedCannonId) : null;
+    const selVehicle = selectedVehicleId
+      ? vehiclesActive.find(x => String(x.id) === selectedVehicleId)
+      : null;
+    const leadGun = (selVehicle && (selVehicle.cannons || [])[0]) || null;
+    const leadGunName = leadGun ? (leadGun.name || ('Cannon ' + leadGun.id)) : 'its first gun';
     const shipYawStat = (selCannon && selCannon.sublevel)
       ? (selCannon.ship_yaw != null
           ? statBlock('Ship Heading', Number(selCannon.ship_yaw).toFixed(1) + '° (' + yawCardinal(selCannon.ship_yaw) + ')', '')
@@ -1602,6 +1648,11 @@
       : '';
 
     const sharedStats =
+      (selVehicle
+        ? statBlock('Firing', (selVehicle.cannons || []).length + ' gun' +
+            ((selVehicle.cannons || []).length === 1 ? '' : 's') + ' on ' +
+            escHtml(selVehicle.name || ('Vehicle ' + selVehicle.id)), 'highlight')
+        : '') +
       statBlock('Cannon Turn', turnStr, 'highlight') +
       statBlock('Target Heading', yaw.toFixed(1) + '° (' + cardinal + ')', '') +
       shipYawStat +
@@ -1614,6 +1665,11 @@
       statBlock('Charges', selectedCharges, '');
 
     document.getElementById('result-stats').innerHTML =
+      (selVehicle
+        ? '<div class="result-note">Ship firing — every gun on ' + escHtml(selVehicle.name || ('Vehicle ' + selVehicle.id)) +
+          ' is aimed from its own mount when you fire. The turn and arc above are for its lead gun, ' +
+          escHtml(leadGunName) + '.</div>'
+        : '') +
       optimalCard + directCard +
       '<div class="shared-stats"><div class="shared-stats__title">Shared Shot Parameters</div><div class="result-grid">' + sharedStats + '</div></div>';
 
@@ -1726,12 +1782,16 @@
 
   // ════════════════════════════════════════════════════════════
   // 8b. STATIC CANNON CONTROL
-  let cannonsActive    = [];
+  let cannonsActive    = [];   // accepted cannons NOT owned by an active vehicle
+  let cannonsManaged   = [];   // accepted cannons an ACCEPTED vehicle owns
   let cannonsPending   = [];
   let vehiclesActive   = [];
   let vehiclesPending  = [];
   let gpsTowers        = [];
+  let reloadPresets    = [];
+  let editingPresetId  = null;
   let selectedCannonId = null;        // '' = manual entry
+  let selectedVehicleId = null;       // '' = no ship selected
 
   const staticCannonSel = document.getElementById('static-cannon');
   const fireStatus      = document.getElementById('fire-status');
@@ -1749,6 +1809,7 @@
       if (!r.ok) return;
       const data = await r.json();
       cannonsActive  = data.active  || [];
+      cannonsManaged = data.managed || [];
       cannonsPending = data.pending || [];
       renderCannonDots();
       populateCannonDropdown();
@@ -1772,7 +1833,9 @@
   // (mobile) cannons move as their computer pushes new GPS coordinates.
   function renderCannonDots() {
     const seen = new Set();
-    for (const c of cannonsActive) {
+    // A ship's guns are drawn too: they are off the registry now, but an officer
+    // still needs to see where they are.
+    for (const c of cannonsActive.concat(cannonsManaged)) {
       const key = String(c.id);
       seen.add(key);
       const latlng = mcToLL(Number(c.x) || 0, Number(c.z) || 0);
@@ -1796,11 +1859,22 @@
 
   function populateCannonDropdown() {
     const prev = staticCannonSel.value;
+    // A vehicle is a firing unit in its own right: its guns are not listed
+    // individually any more, because their heading is the ship's and they are
+    // fired as one. Selecting the vehicle fires every gun it owns.
+    const vehicleOpts = vehiclesActive.map(v => {
+      const guns = (v.cannons || []).length;
+      return '<option value="v' + v.id + '">' + escHtml(v.name || ('Vehicle ' + v.id)) +
+        ' — ' + guns + ' gun' + (guns === 1 ? '' : 's') + '</option>';
+    }).join('');
+    const cannonOpts = cannonsActive.map(c =>
+      '<option value="' + c.id + '">' + escHtml(c.name || ('Cannon ' + c.id)) + (c.sublevel ? ' (sublevel)' : '') + '</option>'
+    ).join('');
     staticCannonSel.innerHTML = '<option value="">— None (manual entry) —</option>' +
-      cannonsActive.map(c =>
-        '<option value="' + c.id + '">' + escHtml(c.name || ('Cannon ' + c.id)) + (c.sublevel ? ' (sublevel)' : '') + '</option>'
-      ).join('');
-    if (prev && cannonsActive.some(c => String(c.id) === prev)) staticCannonSel.value = prev;
+      (vehicleOpts ? '<optgroup label="Vehicles — fires every gun on the ship">' + vehicleOpts + '</optgroup>' : '') +
+      (cannonOpts ? '<optgroup label="Cannons">' + cannonOpts + '</optgroup>' : '');
+    if (prev && (vehiclesActive.some(v => 'v' + v.id === prev) ||
+                 cannonsActive.some(c => String(c.id) === prev))) staticCannonSel.value = prev;
   }
 
   function cannonOnline(c) {
@@ -1828,11 +1902,35 @@
     updateCalcBtn();
   }
 
+  // Selecting a ship fills the form from its LEAD gun — its first assigned
+  // cannon — so there is a real arc on the map to read. Firing is a separate
+  // matter: each gun is solved from its own mount (see sendVehicleFire).
+  function applyVehicleToForm(v) {
+    const g = (v.cannons || [])[0];
+    if (!g) return;
+    applyCannonToForm({ x: g.x, y: g.y, z: g.z, facing: g.facing, length: g.length });
+  }
+
   // While a sublevel (mobile) cannon is selected, follow its GPS position:
   // every poll refreshes the cannon coords in the form so a trajectory is
   // always computed against the cannon's latest position, not the one it had
   // when it was first picked. Static cannons and manual entry are left alone.
   function refreshSelectedCannonCoords() {
+    // A selected ship follows its lead gun, exactly as a selected sublevel
+    // cannon follows itself.
+    if (selectedVehicleId) {
+      const v = vehiclesActive.find(x => String(x.id) === selectedVehicleId);
+      const g = v && (v.cannons || [])[0];
+      if (!g) return;
+      const vx = document.getElementById('cx');
+      const vy = document.getElementById('cy');
+      const vz = document.getElementById('cz');
+      if (String(vx.value) === String(g.x) && String(vy.value) === String(g.y) &&
+          String(vz.value) === String(g.z)) return;
+      vx.value = g.x; vy.value = g.y; vz.value = g.z;
+      placeCannon(g.x, g.z);
+      return;
+    }
     if (!selectedCannonId) return;
     const c = cannonsActive.find(x => String(x.id) === selectedCannonId);
     if (!c || !c.sublevel) return;
@@ -1847,21 +1945,46 @@
   }
 
   staticCannonSel.addEventListener('change', () => {
-    selectedCannonId = staticCannonSel.value || null;
-    if (selectedCannonId) {
-      const c = cannonsActive.find(x => String(x.id) === selectedCannonId);
+    const value = staticCannonSel.value || '';
+    selectedCannonId  = null;
+    selectedVehicleId = null;
+    if (value.charAt(0) === 'v') {
+      // A ship: fire the whole broadside at one target.
+      selectedVehicleId = value.slice(1);
+      const v = vehiclesActive.find(x => String(x.id) === selectedVehicleId);
+      if (v) applyVehicleToForm(v);
+    } else if (value) {
+      selectedCannonId = value;
+      const c = cannonsActive.find(x => String(x.id) === value);
       if (c) applyCannonToForm(c);
     }
     updateFireControl();
   });
 
-  function fireButtonLabel(mode, sol, hasCannon) {
+  // What the fire buttons will actually fire: one cannon, or every gun on a
+  // ship. null when nothing is selected.
+  function fireTarget() {
+    if (selectedVehicleId) {
+      const v = vehiclesActive.find(x => String(x.id) === selectedVehicleId);
+      const guns = v ? (v.cannons || []).length : 0;
+      if (!v || guns === 0) return null;
+      return { guns: guns, name: v.name || ('Vehicle ' + v.id) };
+    }
+    if (selectedCannonId) {
+      const c = cannonsActive.find(x => String(x.id) === selectedCannonId);
+      return { guns: 0, name: c ? (c.name || ('Cannon ' + c.id)) : 'cannon' };
+    }
+    return null;
+  }
+
+  function fireButtonLabel(mode, sol, target) {
     const isDirect = mode === 'direct';
+    const who = (target && target.guns) ? 'Fire all ' + target.guns + ' guns' : 'Fire';
     if (sol) {
       return {
-        label: 'Fire — ' + (isDirect ? 'Direct' : 'Optimal') + ' · ' + sol.pitch.toFixed(2) + '°',
-        disabled: !hasCannon,
-        title: hasCannon ? '' : 'Select a registered cannon to fire',
+        label: who + ' — ' + (isDirect ? 'Direct' : 'Optimal') + ' · ' + sol.pitch.toFixed(2) + '°',
+        disabled: !target,
+        title: target ? '' : 'Select a registered cannon, or a ship to fire all its guns',
       };
     }
     return {
@@ -1872,10 +1995,10 @@
   }
 
   function updateFireControl() {
-    const hasCannon = !!selectedCannonId;
+    const target = fireTarget();
     document.querySelectorAll('[data-fire-mode]').forEach(btn => {
       const mode = btn.dataset.fireMode;
-      const s = fireButtonLabel(mode, mode === 'direct' ? lastDirect : lastOptimal, hasCannon);
+      const s = fireButtonLabel(mode, mode === 'direct' ? lastDirect : lastOptimal, target);
       btn.disabled = s.disabled;
       btn.textContent = s.label;
       btn.title = s.title;
@@ -1892,7 +2015,75 @@
     });
   }
 
+  // Firing a ship: one target, every gun solved from its own mount — its own
+  // position, barrel length and resting facing — and queued together. The
+  // vehicle computer subtracts the live ship heading from each as it assigns
+  // them, which is what keeps the broadside on target while the ship turns.
+  async function sendVehicleFire(sol, label, btn) {
+    const v = vehiclesActive.find(x => String(x.id) === selectedVehicleId);
+    if (!v) return;
+    const guns = v.cannons || [];
+    const mode = (btn && btn.dataset.fireMode === 'direct') ? 'direct' : 'optimal';
+    const tx = parseFloat(document.getElementById('tx').value);
+    const ty = parseFloat(document.getElementById('ty').value) || 64;
+    const tz = parseFloat(document.getElementById('tz').value);
+    const shellIdx = parseInt(document.getElementById('shell-select').value, 10);
+    const shell = shells[shellIdx] || { drag: 0.99 };
+    const drag = parseFloat(shell.drag) || 0.99;
+    if (isNaN(tx) || isNaN(tz)) return;
+
+    const shots = [];
+    for (const g of guns) {
+      const yaw = computeYaw(Number(g.x), Number(g.z), tx, tz);
+      const yawR = yaw * Math.PI / 180;
+      const len = Number(g.length) || 4;
+      const bx = Number(g.x) - len * Math.sin(yawR);
+      const bz = Number(g.z) + len * Math.cos(yawR);
+      const s = (mode === 'direct')
+        ? directHitSolution(bx, Number(g.y), bz, tx, ty, tz, yaw, selectedCharges, drag)
+        : findOptimalSolution(bx, Number(g.y), bz, tx, ty, tz, yaw, selectedCharges, drag);
+      // A gun with no solution is left out rather than stopping the broadside:
+      // the rest of the ship still fires, and the count reported says how many did.
+      if (s) shots.push({ cannonId: Number(g.id), yaw: yaw, pitch: s.pitch });
+    }
+
+    fireStatus.classList.remove('err');
+    if (!shots.length) {
+      fireStatus.textContent = 'No gun on this ship has a ' + (mode === 'direct' ? 'direct' : 'optimal') +
+        ' solution to that target — try more powder charges or a different shell.';
+      fireStatus.classList.add('err');
+      return;
+    }
+
+    if (btn) btn.disabled = true;
+    fireStatus.textContent = 'Queuing ' + label + ' for ' + shots.length + ' gun' +
+      (shots.length === 1 ? '' : 's') + ' on ' + (v.name || ('Vehicle ' + v.id)) + '…';
+    try {
+      const r = await fetch('/api/ballistics/vehicles/' + v.id + '/fire', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shots: shots })
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        fireStatus.textContent = data.error || 'Could not send fire command.';
+        fireStatus.classList.add('err');
+      } else {
+        const silent = guns.length - shots.length;
+        fireStatus.textContent = label + ' sent to ' + shots.length + ' gun' +
+          (shots.length === 1 ? '' : 's') + ' on ' + (v.name || ('Vehicle ' + v.id)) +
+          ' — each will disassemble, assemble, aim and fire.' +
+          (silent > 0 ? ' ' + silent + ' gun' + (silent === 1 ? '' : 's') + ' had no solution and stayed silent.' : '');
+      }
+    } catch (e) {
+      fireStatus.textContent = 'Could not reach the server.';
+      fireStatus.classList.add('err');
+    }
+    updateFireControl();
+  }
+
   async function sendFire(sol, label, btn) {
+    if (selectedVehicleId) return sendVehicleFire(sol, label, btn);
     if (!selectedCannonId || !sol) return;
     const c = cannonsActive.find(x => String(x.id) === selectedCannonId);
     btn.disabled = true;
@@ -1971,12 +2162,18 @@
   function pendingCard(p) {
     const sub = p.sublevel ? '<span class="cannon-badge sublevel">Sublevel</span>' : '';
     const msg = p.message ? '<div class="cannon-card__msg">' + escHtml(p.message) + '</div>' : '';
+    // The cannon names itself at first boot, so show that name rather than only
+    // the computer id — it is what the officer is being asked to accept. A
+    // cannon that proposed nothing is still identified by its computer.
+    const named = !!p.name;
+    const title = named ? escHtml(p.name) : escHtml('Computer ' + p.computer_id);
     return '<div class="cannon-card" data-cannon-id="' + p.id + '">' +
       '<div class="cannon-card__head">' +
-        '<span class="cannon-card__name" style="cursor:default;">' + escHtml('Computer ' + p.computer_id) + '</span>' +
+        '<span class="cannon-card__name" style="cursor:default;">' + title + '</span>' +
         sub +
       '</div>' +
       '<div class="cannon-card__meta">' +
+        (named ? 'Computer ' + escHtml(p.computer_id) + '<br/>' : '') +
         'Mount: X ' + p.x + ' · Y ' + p.y + ' · Z ' + p.z + '<br/>' +
         'Length ' + p.length + ' blocks · Facing ' + p.facing + '° · Last seen ' + (p.last_seen_at ? new Date(p.last_seen_at).toLocaleString() : 'never') +
       '</div>' +
@@ -2128,11 +2325,15 @@
 
   function vehiclePendingCard(v) {
     const msg = v.message ? '<div class="cannon-card__msg">' + escHtml(v.message) + '</div>' : '';
+    // Same as a cannon: the vehicle names itself at first boot.
+    const named = !!v.name;
+    const title = named ? escHtml(v.name) : escHtml('Computer ' + v.computer_id);
     return '<div class="cannon-card" data-vehicle-id="' + v.id + '">' +
       '<div class="cannon-card__head">' +
-        '<span class="cannon-card__name" style="cursor:default;">' + escHtml('Computer ' + v.computer_id) + '</span>' +
+        '<span class="cannon-card__name" style="cursor:default;">' + title + '</span>' +
       '</div>' +
       '<div class="cannon-card__meta">' +
+        (named ? 'Computer ' + escHtml(v.computer_id) + '<br/>' : '') +
         'Last seen ' + (v.last_seen_at ? new Date(v.last_seen_at).toLocaleString() : 'never') +
       '</div>' +
       msg +
@@ -2326,9 +2527,117 @@
     '</div>';
   }
 
+  // ════════════════════════════════════════════
+  // 8d. RELOAD PRESETS
+  //    Named reload mechanisms saved here, pulled by a Sublevel Cannon
+  //    Computer at first-boot setup so an operator picks one instead of
+  //    typing timings at the cannon.
+  // ════════════════════════════════════════════
+  async function loadPresets() {
+    try {
+      const r = await fetch('/api/ballistics/presets');
+      if (!r.ok) return;
+      const data = await r.json();
+      reloadPresets = data.presets || [];
+      renderPresets();
+    } catch (e) { console.warn('Could not load reload presets.', e); }
+  }
+
+  function presetKindText(kind) {
+    return kind === 'after' ? 'after assemble' : 'between disassemble and assemble';
+  }
+
+  function renderPresets() {
+    const el = document.getElementById('preset-list');
+    if (!el) return;
+    el.innerHTML = reloadPresets.length
+      ? reloadPresets.map(p =>
+          '<div class="cannon-card" data-preset-id="' + p.id + '">' +
+            '<div class="cannon-card__head">' +
+              '<span class="cannon-card__name" style="cursor:default;">' + escHtml(p.name) + '</span>' +
+              '<span class="cannon-badge">' + escHtml(presetKindText(p.kind)) + '</span>' +
+            '</div>' +
+            '<div class="cannon-card__meta">' +
+              'Reload ' + Number(p.reload_time).toFixed(2) + 's · trigger pulse ' + Number(p.pulse).toFixed(2) + 's' +
+              (p.notes ? '<br/>' + escHtml(p.notes) : '') +
+            '</div>' +
+            '<div class="registry-actions">' +
+              '<button class="map-btn" data-preset-edit="' + p.id + '">Edit</button>' +
+              '<button class="map-btn danger" data-preset-delete="' + p.id + '">Delete</button>' +
+            '</div>' +
+          '</div>')
+        .join('')
+      : '<div class="registry-empty">No reload presets saved yet. Add one below and every cannon computer will offer it at setup.</div>';
+    document.querySelectorAll('[data-preset-edit]').forEach(b => b.addEventListener('click', () => editPreset(b.dataset.presetEdit)));
+    document.querySelectorAll('[data-preset-delete]').forEach(b => b.addEventListener('click', () => removePreset(b.dataset.presetDelete)));
+  }
+
+  function resetPresetForm() {
+    editingPresetId = null;
+    document.getElementById('preset-name').value = '';
+    document.getElementById('preset-kind').value = 'between';
+    document.getElementById('preset-time').value = '1';
+    document.getElementById('preset-pulse').value = '0.5';
+    document.getElementById('preset-notes').value = '';
+    document.getElementById('preset-form-title').textContent = 'Add a Reload Mechanism';
+    document.getElementById('preset-save').textContent = 'Save Preset';
+    document.getElementById('preset-cancel').style.display = 'none';
+  }
+
+  function editPreset(id) {
+    const p = reloadPresets.find(x => String(x.id) === String(id));
+    if (!p) return;
+    editingPresetId = String(id);
+    document.getElementById('preset-name').value = p.name;
+    document.getElementById('preset-kind').value = p.kind === 'after' ? 'after' : 'between';
+    document.getElementById('preset-time').value = p.reload_time;
+    document.getElementById('preset-pulse').value = p.pulse;
+    document.getElementById('preset-notes').value = p.notes || '';
+    document.getElementById('preset-form-title').textContent = 'Editing "' + p.name + '"';
+    document.getElementById('preset-save').textContent = 'Save Changes';
+    document.getElementById('preset-cancel').style.display = '';
+  }
+
+  async function savePreset() {
+    const body = {
+      name: document.getElementById('preset-name').value.trim(),
+      kind: document.getElementById('preset-kind').value,
+      reloadTime: Number(document.getElementById('preset-time').value),
+      pulse: Number(document.getElementById('preset-pulse').value),
+      notes: document.getElementById('preset-notes').value.trim(),
+    };
+    if (!body.name) { alert('Give the preset a name first.'); return; }
+    const url = editingPresetId ? '/api/ballistics/presets/' + editingPresetId : '/api/ballistics/presets';
+    const r = await fetch(url, {
+      method: editingPresetId ? 'PUT' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { alert(data.error || 'Could not save the preset.'); return; }
+    resetPresetForm();
+    await loadPresets();
+  }
+
+  async function removePreset(id) {
+    const p = reloadPresets.find(x => String(x.id) === String(id));
+    if (!confirm('Delete "' + (p ? p.name : 'this preset') + '"? Cannons already set up with it keep their timings.')) return;
+    const r = await fetch('/api/ballistics/presets/' + id, { method: 'DELETE' });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      alert(d.error || 'Could not delete the preset.');
+      return;
+    }
+    if (editingPresetId === String(id)) resetPresetForm();
+    await loadPresets();
+  }
+
+  document.getElementById('preset-save').addEventListener('click', savePreset);
+  document.getElementById('preset-cancel').addEventListener('click', resetPresetForm);
+
   function setTab(which) {
-    const tabs   = { calc: 'tab-calc', cannons: 'tab-cannons', vehicles: 'tab-vehicles', gps: 'tab-gps' };
-    const panels = { calc: 'calc-panel', cannons: 'registry-panel', vehicles: 'vehicles-panel', gps: 'gps-panel' };
+    const tabs   = { calc: 'tab-calc', cannons: 'tab-cannons', vehicles: 'tab-vehicles', gps: 'tab-gps', presets: 'tab-presets' };
+    const panels = { calc: 'calc-panel', cannons: 'registry-panel', vehicles: 'vehicles-panel', gps: 'gps-panel', presets: 'presets-panel' };
     Object.keys(panels).forEach(k => {
       document.getElementById(tabs[k]).classList.toggle('active', k === which);
       document.getElementById(panels[k]).style.display = (k === which) ? '' : 'none';
@@ -2339,6 +2648,7 @@
   document.getElementById('tab-cannons').addEventListener('click', () => { setTab('cannons'); loadCannons(); renderGps(); });
   document.getElementById('tab-vehicles').addEventListener('click', () => { setTab('vehicles'); loadCannons().then(loadVehicles); });
   document.getElementById('tab-gps').addEventListener('click', () => { setTab('gps'); loadCannons().then(() => { renderGps(); }); loadTowers(); });
+  document.getElementById('tab-presets').addEventListener('click', () => { setTab('presets'); resetPresetForm(); loadPresets(); });
 
   // Keep the map dots fresh: sublevel cannons push new GPS coordinates every
   // ~3s, so poll on the same cadence. While the registry tab is open we skip
@@ -2353,12 +2663,17 @@
   function vehiclesTabOpen() {
     return document.getElementById('vehicles-panel').style.display !== 'none';
   }
+  // Presets are only ever changed from this page, so there is nothing to poll
+  // for — the tab loads them when it is opened.
+  function presetsTabOpen() {
+    return document.getElementById('presets-panel').style.display !== 'none';
+  }
   let cannonsPollBusy = false;
   setInterval(async () => {
     if (cannonsPollBusy) return;
     cannonsPollBusy = true;
     try {
-      await loadCannons({ light: registryTabOpen() || gpsTabOpen() || vehiclesTabOpen() });
+      await loadCannons({ light: registryTabOpen() || gpsTabOpen() || vehiclesTabOpen() || presetsTabOpen() });
       if (gpsTabOpen()) renderGps();
       if (vehiclesTabOpen()) await loadVehicles({ light: true });
     } finally { cannonsPollBusy = false; }

@@ -88,6 +88,7 @@ local ID_PATH  = "cannon_id.txt"
 local cfg = {
   length     = 4,
   facing     = 0,
+  name       = "",     -- the name this cannon proposes; an officer may rename it
   message    = "",
   pollInterval = 1,      -- seconds between pings
   yawOffset  = 0,
@@ -136,6 +137,7 @@ local function writeConfig()
   local f = fs.open(CFG_PATH, "w")
   f.writeLine("length=" .. tostring(cfg.length))
   f.writeLine("facing=" .. tostring(cfg.facing))
+  f.writeLine("name=" .. tostring(cfg.name))
   f.writeLine("message=" .. tostring(cfg.message))
   f.writeLine("pollInterval=" .. tostring(cfg.pollInterval))
   f.writeLine("yawOffset=" .. tostring(cfg.yawOffset))
@@ -151,6 +153,7 @@ local function loadConfig()
   if loaded then
     cfg.length        = tonumber(loaded.length) or cfg.length
     cfg.facing        = tonumber(loaded.facing) or cfg.facing
+    cfg.name          = loaded.name or cfg.name
     cfg.message       = loaded.message or cfg.message
     cfg.pollInterval  = tonumber(loaded.pollInterval) or cfg.pollInterval
     cfg.yawOffset     = tonumber(loaded.yawOffset) or cfg.yawOffset
@@ -178,6 +181,11 @@ local function setup()
 
   local face = tonumber(readLine("Direction faced when assembled (0=S,90=W,180=N,270=E): "))
   cfg.facing = face or cfg.facing
+
+  print("")
+  print("Cannon name in the registry.")
+  print("  Leave blank to be given the next free \"Cannon N\" when an officer accepts it.")
+  cfg.name = readLine("Name (blank = automatic): ")
 
   print("")
   print("Message shown to the officer reviewing your request.")
@@ -374,6 +382,7 @@ while true do
     local body = {
       computerId = computerId,
       x = 0, y = 0, z = 0,
+      name = cfg.name,
       length = cfg.length,
       facing = cfg.facing,
       sublevel = false,
@@ -389,6 +398,9 @@ while true do
     local resp = httpPost(POLL_PATH, body)
 
     table.insert(lines, "Cannon Computer")
+    if cfg.name ~= "" then
+      table.insert(lines, "Name: " .. cfg.name)
+    end
     table.insert(lines, "Computer ID: " .. computerId)
 
     if resp == nil then

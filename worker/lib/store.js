@@ -1180,14 +1180,14 @@ export async function findCannonByComputerId(env, computerId) {
 }
 
 // First ping from an unknown computer → a 'pending' registration request.
-export async function insertCannon(env, { computerId, x, y, z, length, facing, sublevel, message, shipYaw }) {
+export async function insertCannon(env, { computerId, name, x, y, z, length, facing, sublevel, message, shipYaw }) {
   const now = nowIso();
   const result = await env.DB.prepare(
     `INSERT INTO ballistics_cannons
        (computer_id, name, x, y, z, length, facing, sublevel, message, ship_yaw, status,
         last_seen_at, created_at, updated_at)
-     VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`
-  ).bind(computerId, x, y, z, length, facing, sublevel ? 1 : 0, message,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`
+  ).bind(computerId, String(name || '').slice(0, 80), x, y, z, length, facing, sublevel ? 1 : 0, message,
          shipYaw == null ? null : Number(shipYaw), now, now, now).run();
   return findCannonById(env, result.meta.last_row_id);
 }
@@ -1195,14 +1195,17 @@ export async function insertCannon(env, { computerId, x, y, z, length, facing, s
 // Refresh a cannon's registration fields on a ping. Used while a request is
 // still pending, and for sublevel (mobile) cannons on every ping so their
 // GPS coordinates keep the map dot moving even after acceptance.
-export async function refreshCannonFromComputer(env, id, { x, y, z, length, facing, sublevel, message, shipYaw }) {
-  await env.DB.prepare(
-    `UPDATE ballistics_cannons
-        SET x = ?, y = ?, z = ?, length = ?, facing = ?, sublevel = ?, message = ?,
-            ship_yaw = ?, last_seen_at = ?, updated_at = ?
-      WHERE id = ?`
-  ).bind(x, y, z, length, facing, sublevel ? 1 : 0, message,
-         shipYaw == null ? null : Number(shipYaw), nowIso(), nowIso(), Number(id)).run();
+export async function refreshCannonFromComputer(env, id, { name, x, y, z, length, facing, sublevel, message, shipYaw }) {
+  const sets = ['x = ?', 'y = ?', 'z = ?', 'length = ?', 'facing = ?', 'sublevel = ?', 'message = ?',
+                'ship_yaw = ?', 'last_seen_at = ?', 'updated_at = ?'];
+  const binds = [x, y, z, length, facing, sublevel ? 1 : 0, message,
+                 shipYaw == null ? null : Number(shipYaw), nowIso(), nowIso()];
+  // A name is only ever taken from a computer while its request is still
+  // pending — after that the website owns the name, so an officer's rename is
+  // never overwritten by the next ping. The caller decides whether to pass it.
+  if (name !== undefined) { sets.push('name = ?'); binds.push(String(name || '').slice(0, 80)); }
+  binds.push(Number(id));
+  await env.DB.prepare(`UPDATE ballistics_cannons SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
   return findCannonById(env, id);
 }
 
@@ -1231,10 +1234,25 @@ export async function nextCannonName(env) {
   return 'Cannon ' + (max + 1);
 }
 
+// Names are not unique in the schema — an officer may rename a cannon to
+// anything, duplicates included. This is only used to decide whether a name a
+// computer proposed can be honoured or whether it must fall back to a default.
+async function cannonNameIsFree(env, name, exceptId) {
+  const row = await env.DB.prepare('SELECT id FROM ballistics_cannons WHERE name = ? AND id != ? LIMIT 1')
+    .bind(String(name), Number(exceptId)).first();
+  return !row;
+}
+
+// Accepting a request keeps the name the computer proposed when it registered
+// — the cannon naming itself — unless it proposed nothing or the name is
+// already in use, in which case it takes the next free default.
 export async function acceptCannon(env, id) {
   const cannon = await findCannonById(env, id);
   if (!cannon || cannon.status !== 'pending') return null;
-  const name = await nextCannonName(env);
+  const proposed = String(cannon.name || '').trim();
+  const name = (proposed && await cannonNameIsFree(env, proposed, id))
+    ? proposed
+    : await nextCannonName(env);
   await env.DB.prepare(
     `UPDATE ballistics_cannons SET status = 'active', name = ?, updated_at = ? WHERE id = ?`
   ).bind(name, nowIso(), Number(id)).run();
@@ -1340,6 +1358,67 @@ export async function listGpsTowers(env) {
   return results;
 }
 
+// ---------- ballistics: reload presets ----------
+
+// Named reload mechanisms saved on the website, so a cannon computer can pull
+// the list at setup instead of every operator typing timings at the cannon.
+// Solved here, reused at every cannon: see migration 0017.
+
+export async function listReloadPresets(env) {
+  const { results } = await env.DB.prepare(
+    'SELECT * FROM ballistics_reload_presets ORDER BY name ASC'
+  ).all();
+  return results;
+}
+
+export async function findReloadPresetById(env, id) {
+  return env.DB.prepare('SELECT * FROM ballistics_reload_presets WHERE id = ?').bind(Number(id)).first();
+}
+
+// 'between' reloads between disassemble and assemble (the auto-loader's
+// placement), 'after' reloads once the cannon is assembled again (the
+// mechanical arm's). Coerced here as well as by the table's CHECK so a bad
+// value can never reach a cannon.
+function presetKind(v) {
+  return v === 'after' ? 'after' : 'between';
+}
+
+function presetSeconds(v, fallback) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) return fallback;
+  return Math.min(3600, Math.round(n * 100) / 100);
+}
+
+export async function insertReloadPreset(env, { name, kind, reloadTime, pulse, notes }) {
+  const now = nowIso();
+  const result = await env.DB.prepare(
+    `INSERT INTO ballistics_reload_presets
+       (name, kind, reload_time, pulse, notes, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).bind(String(name).slice(0, 60), presetKind(kind), presetSeconds(reloadTime, 1),
+         presetSeconds(pulse, 0.5), String(notes || '').slice(0, 240), now, now).run();
+  return findReloadPresetById(env, result.meta.last_row_id);
+}
+
+export async function updateReloadPreset(env, id, fields) {
+  const sets = [];
+  const binds = [];
+  if (fields.name !== undefined)       { sets.push('name = ?');        binds.push(String(fields.name).slice(0, 60)); }
+  if (fields.kind !== undefined)       { sets.push('kind = ?');        binds.push(presetKind(fields.kind)); }
+  if (fields.reloadTime !== undefined) { sets.push('reload_time = ?'); binds.push(presetSeconds(fields.reloadTime, 1)); }
+  if (fields.pulse !== undefined)      { sets.push('pulse = ?');       binds.push(presetSeconds(fields.pulse, 0.5)); }
+  if (fields.notes !== undefined)      { sets.push('notes = ?');       binds.push(String(fields.notes).slice(0, 240)); }
+  if (!sets.length) return findReloadPresetById(env, id);
+  sets.push('updated_at = ?');
+  binds.push(nowIso(), Number(id));
+  await env.DB.prepare(`UPDATE ballistics_reload_presets SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
+  return findReloadPresetById(env, id);
+}
+
+export async function deleteReloadPreset(env, id) {
+  await env.DB.prepare('DELETE FROM ballistics_reload_presets WHERE id = ?').bind(Number(id)).run();
+}
+
 // ---------- ballistics: sublevel vehicles ----------
 
 // A vehicle computer coordinates every Sublevel Cannon Computer on one ship.
@@ -1355,24 +1434,26 @@ export async function findVehicleByComputerId(env, computerId) {
 }
 
 // First ping from an unknown vehicle computer → a 'pending' registration.
-export async function insertVehicle(env, { computerId, message, shipYaw }) {
+export async function insertVehicle(env, { computerId, name, message, shipYaw }) {
   const now = nowIso();
   const result = await env.DB.prepare(
     `INSERT INTO ballistics_vehicles
        (computer_id, name, message, status, ship_yaw, last_seen_at, created_at, updated_at)
-     VALUES (?, '', ?, 'pending', ?, ?, ?, ?)`
-  ).bind(computerId, message, shipYaw == null ? null : Number(shipYaw), now, now, now).run();
+     VALUES (?, ?, ?, 'pending', ?, ?, ?, ?)`
+  ).bind(computerId, String(name || '').slice(0, 80), message, shipYaw == null ? null : Number(shipYaw), now, now, now).run();
   return findVehicleById(env, result.meta.last_row_id);
 }
 
 // Every ping refreshes the vehicle's heartbeat, its notes and the ship heading
 // it has derived, whatever its status (so a pending vehicle still looks alive).
-export async function refreshVehicleFromComputer(env, id, { message, shipYaw }) {
-  await env.DB.prepare(
-    `UPDATE ballistics_vehicles
-        SET message = ?, ship_yaw = ?, last_seen_at = ?, updated_at = ?
-      WHERE id = ?`
-  ).bind(message, shipYaw == null ? null : Number(shipYaw), nowIso(), nowIso(), Number(id)).run();
+export async function refreshVehicleFromComputer(env, id, { name, message, shipYaw }) {
+  const sets = ['message = ?', 'ship_yaw = ?', 'last_seen_at = ?', 'updated_at = ?'];
+  const binds = [message, shipYaw == null ? null : Number(shipYaw), nowIso(), nowIso()];
+  // Same rule as a cannon: a proposed name only counts while the request is
+  // pending, so an officer's rename survives the next ping.
+  if (name !== undefined) { sets.push('name = ?'); binds.push(String(name || '').slice(0, 80)); }
+  binds.push(Number(id));
+  await env.DB.prepare(`UPDATE ballistics_vehicles SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
   return findVehicleById(env, id);
 }
 
@@ -1399,10 +1480,21 @@ export async function nextVehicleName(env) {
   return 'Vehicle ' + (max + 1);
 }
 
+async function vehicleNameIsFree(env, name, exceptId) {
+  const row = await env.DB.prepare('SELECT id FROM ballistics_vehicles WHERE name = ? AND id != ? LIMIT 1')
+    .bind(String(name), Number(exceptId)).first();
+  return !row;
+}
+
+// Same as acceptCannon: the vehicle names itself on registration, and the
+// officer can rename it afterwards.
 export async function acceptVehicle(env, id) {
   const vehicle = await findVehicleById(env, id);
   if (!vehicle || vehicle.status !== 'pending') return null;
-  const name = await nextVehicleName(env);
+  const proposed = String(vehicle.name || '').trim();
+  const name = (proposed && await vehicleNameIsFree(env, proposed, id))
+    ? proposed
+    : await nextVehicleName(env);
   await env.DB.prepare(
     `UPDATE ballistics_vehicles SET status = 'active', name = ?, updated_at = ? WHERE id = ?`
   ).bind(name, nowIso(), Number(id)).run();

@@ -111,6 +111,7 @@ local CANNON_MAX_AGE = 12
 -- Config defaults
 -- ------------------------------------------------------------
 local cfg = {
+  name = "",                 -- the name this ship proposes; an officer may rename it
   message = "",
   pollInterval = 1,          -- seconds between polls
   shipRelativeYaw = true,    -- mount yaw is measured in the ship's rotating
@@ -143,7 +144,9 @@ local function loadConfig()
     local line = f.readLine()
     if line == nil then break end
     local k, v = line:match("^([%w_]+)%s*=%s*(.-)%s*$")
-    if k == "message" then
+    if k == "name" then
+      cfg.name = v
+    elseif k == "message" then
       cfg.message = v
     elseif k == "pollInterval" then
       cfg.pollInterval = tonumber(v) or cfg.pollInterval
@@ -159,6 +162,7 @@ end
 local function writeConfig()
   local f = fs.open(CFG_PATH, "w")
   if not f then return end
+  f.writeLine("name=" .. tostring(cfg.name))
   f.writeLine("message=" .. tostring(cfg.message))
   f.writeLine("pollInterval=" .. tostring(cfg.pollInterval))
   f.writeLine("shipRelativeYaw=" .. tostring(cfg.shipRelativeYaw))
@@ -514,6 +518,7 @@ local function mainLoop()
 
     local body = {
       computerId = computerId,
+      name = cfg.name,
       shipYaw = shipYaw,
       message = cfg.message,
       cannons = cannonReports,
@@ -525,6 +530,9 @@ local function mainLoop()
 
     local lines = {}
     lines[#lines + 1] = { "=== Sublevel Vehicle Computer ===", colors.yellow }
+    if cfg.name ~= "" then
+      lines[#lines + 1] = "Name: " .. cfg.name
+    end
     lines[#lines + 1] = "Computer ID: " .. computerId
     if modemSide then
       lines[#lines + 1] = "Modem: " .. modemSide .. "  (cannons " .. VEHICLE_CHANNEL ..
@@ -674,6 +682,34 @@ local function mainLoop()
   end
 end
 
+local function readLine(prompt)
+  write(prompt)
+  return trim(read())
+end
+
+-- First-boot interactive setup. There is nothing to ask about the guns — each
+-- cannon computer owns its own aim settings — so this is only the ship's
+-- identity: what to call it, and a note for the officer reviewing it.
+local function setup()
+  term.clear()
+  term.setCursorPos(1, 1)
+  print("=== Sublevel Vehicle Computer — first-time setup ===")
+  print("")
+
+  print("Ship name in the registry.")
+  print("  Leave blank to be given the next free \"Vehicle N\" when an officer accepts it.")
+  cfg.name = readLine("Name (blank = automatic): ")
+
+  print("")
+  print("Message shown to the officer reviewing your request.")
+  cfg.message = readLine("Message (leave blank for none): ")
+
+  writeConfig()
+  print("")
+  print("Saved " .. CFG_PATH .. ". Starting…")
+  sleep(1)
+end
+
 -- ------------------------------------------------------------
 -- Main
 -- ------------------------------------------------------------
@@ -682,6 +718,11 @@ term.clear()
 term.setCursorPos(1, 1)
 
 loadConfig()
+-- A fresh install has no config file yet, so ask for the ship's identity once.
+if not fs.exists(CFG_PATH) then
+  setup()
+  loadConfig()
+end
 writeConfig()
 
 term.setTextColor(colors.yellow)
