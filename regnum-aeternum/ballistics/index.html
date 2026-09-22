@@ -615,6 +615,7 @@
     <div class="bc-tabs">
       <button class="bc-tab active" id="tab-calc" type="button">Calculator</button>
       <button class="bc-tab" id="tab-cannons" type="button">Cannon Registry</button>
+      <button class="bc-tab" id="tab-gps" type="button">GPS Network</button>
     </div>
 
     <div class="panel-inner" id="calc-panel">
@@ -687,6 +688,38 @@
         <label>Pending Requests</label>
         <p class="field-hint">Computers that have pinged in but are not yet accepted. Accept to register, or decline to remove.</p>
         <div class="registry-list" id="cannon-pending-list"></div>
+      </div>
+
+    </div>
+
+    <div class="panel-inner" id="gps-panel" style="display:none;">
+
+      <div class="field-group" style="grid-column:1/-1;">
+        <label>GPS Tower Network</label>
+        <p class="field-hint">
+          Each tower a cannon has heard from, at the block its modem sits on. Positions are worked out
+          entirely on the in-game computers — no distance ever reaches this website — so this list grows
+          without adding any load here.
+          <br/><br/>
+          <b>Four or more towers are needed, and at least one must sit well off the height of the others.</b>
+          A tower set that is flat cannot determine height at all, because your mirror image fits the
+          measurements just as well, and clients will refuse rather than guess. Spread the towers far
+          apart too: their spread governs accuracy far more than anything in the software. Above y=96
+          wireless range climbs from 64 blocks to 384, so a raised tower covers much more ground.
+        </p>
+        <div class="registry-list" id="gps-tower-list"></div>
+      </div>
+
+      <div class="field-group" style="grid-column:1/-1;">
+        <label>Receiver Health</label>
+        <p class="field-hint">
+          What each cannon's GPS engine is managing right now. <b>Towers used</b> is how many went into the
+          fix; <b>layout</b> is how well those towers span space, so 0% means a flat or collinear set that
+          cannot fix a position; <b>residual</b> is how well the measurements agree, in blocks, and is the
+          number that catches a tower that has been moved or mis-keyed. A tower listed as ignored has been
+          left out on purpose — check it against the map.
+        </p>
+        <div class="registry-list" id="gps-receiver-list"></div>
       </div>
 
     </div>
@@ -1581,6 +1614,7 @@
   // 8b. STATIC CANNON CONTROL
   let cannonsActive    = [];
   let cannonsPending   = [];
+  let gpsTowers        = [];
   let selectedCannonId = null;        // '' = manual entry
 
   const staticCannonSel = document.getElementById('static-cannon');
@@ -1797,6 +1831,7 @@
               ? '<br/>Ship heading ' + Number(c.ship_yaw).toFixed(1) + '° (' + yawCardinal(c.ship_yaw) + ')'
               : '<br/>Ship heading: — (no stern GPS)')
           : '') +
+        gpsSummaryLine(c) +
       '</div>' +
       '<div class="cannon-card__row">' +
         '<input class="cannon-mini-input" data-cannon-x="' + c.id + '" type="number" value="' + c.x + '" title="X"/>' +
@@ -1883,16 +1918,118 @@
     await loadCannons();
   }
 
+  // ════════════════════════════════════════════
+  // 8c. GPS NETWORK
+  //    The solving happens on the computers; this is a read-only view of the
+  //    tower registry and of what each receiver is managing.
+  // ════════════════════════════════════════════
+  function gpsInfo(c) {
+    if (!c || !c.gps_report) return null;
+    try {
+      return typeof c.gps_report === 'string' ? JSON.parse(c.gps_report) : c.gps_report;
+    } catch { return null; }
+  }
+
+  // One compact line for a cannon card in the registry.
+  function gpsSummaryLine(c) {
+    const g = gpsInfo(c);
+    if (!g) return '';
+    if (!g.ok) return '<br/>GPS: no usable fix' + (g.reason ? ' — ' + escHtml(g.reason) : '');
+    const bits = [];
+    if (g.towers != null) bits.push(g.towers + ' towers');
+    if (g.geometry != null) bits.push('layout ' + Math.round(g.geometry * 100) + '%');
+    if (g.residual != null) bits.push('residual ' + Number(g.residual).toFixed(2) + ' blocks');
+    if (g.age != null) bits.push(Number(g.age).toFixed(1) + 's old');
+    return '<br/>GPS: ' + bits.join(' · ');
+  }
+
+  async function loadTowers() {
+    try {
+      const r = await fetch('/api/ballistics/towers');
+      if (!r.ok) return;
+      const data = await r.json();
+      gpsTowers = data.towers || [];
+      renderGps();
+    } catch (e) { console.warn('Could not load GPS towers.', e); }
+  }
+
+  function renderGps() {
+    const towersEl   = document.getElementById('gps-tower-list');
+    const receiverEl = document.getElementById('gps-receiver-list');
+    if (!towersEl || !receiverEl) return;
+
+    towersEl.innerHTML = gpsTowers.length
+      ? gpsTowers.map(towerCard).join('')
+      : '<div class="registry-empty">No towers reported yet. Once a cannon running the GPS Network library gets a fix, the towers it hears from appear here.</div>';
+
+    const receivers = cannonsActive.concat(cannonsPending).filter(c => gpsInfo(c));
+    receiverEl.innerHTML = receivers.length
+      ? receivers.map(receiverCard).join('')
+      : '<div class="registry-empty">No GPS reports yet. Only cannons running the GPS Network library report their network health here.</div>';
+  }
+
+  function towerCard(t) {
+    const ageMs = t.lastSeenAt ? Date.now() - new Date(t.lastSeenAt).getTime() : null;
+    const fresh = ageMs != null && ageMs < 120000;
+    const heard = fresh
+      ? '<span class="cannon-badge online">Heard</span>'
+      : '<span class="cannon-badge offline">Quiet</span>';
+    const suspect = t.excluded > 0
+      ? '<span class="cannon-badge offline" title="Left out of fixes because its measurements did not fit the rest of the network — check this tower has not been moved.">Suspect</span>'
+      : '';
+    return '<div class="cannon-card">' +
+      '<div class="cannon-card__head">' +
+        '<span class="cannon-card__name" style="cursor:default;">Tower ' + escHtml(t.key) + '</span>' +
+        heard + suspect +
+      '</div>' +
+      '<div class="cannon-card__meta">' +
+        'Modem at X ' + t.x + ' · Y ' + t.y + ' · Z ' + t.z + '<br/>' +
+        'Reported ' + t.sightings + ' time' + (t.sightings === 1 ? '' : 's') +
+        (t.excluded ? ' · excluded ' + t.excluded + ' time' + (t.excluded === 1 ? '' : 's') : '') +
+        '<br/>Last heard ' + (t.lastSeenAt ? new Date(t.lastSeenAt).toLocaleString() : 'never') +
+      '</div>' +
+    '</div>';
+  }
+
+  function receiverCard(c) {
+    const g = gpsInfo(c) || {};
+    const badge = g.ok
+      ? '<span class="cannon-badge online">Good fix</span>'
+      : '<span class="cannon-badge offline">No fix</span>';
+    const bits = [];
+    if (g.towers != null) bits.push(g.towers + ' tower' + (g.towers === 1 ? '' : 's') + ' used');
+    if (g.seen != null && g.seen !== g.towers) bits.push(g.seen + ' heard');
+    if (g.geometry != null) bits.push('layout ' + Math.round(g.geometry * 100) + '%');
+    if (g.residual != null) bits.push('residual ' + Number(g.residual).toFixed(2) + ' blocks');
+    if (g.age != null) bits.push(Number(g.age).toFixed(1) + 's old');
+    if (g.shipSkew != null) bits.push('beacon skew ' + Number(g.shipSkew).toFixed(2) + 's');
+    let extra = '';
+    if (g.quality) extra += '<br/>Quality: ' + escHtml(g.quality);
+    if (g.excluded && g.excluded.length) {
+      extra += '<br/>Ignoring tower' + (g.excluded.length === 1 ? ' ' : 's ') + escHtml(g.excluded.join(', '));
+    }
+    if (!g.ok && g.reason) extra += '<br/>' + escHtml(g.reason);
+    return '<div class="cannon-card">' +
+      '<div class="cannon-card__head">' +
+        '<span class="cannon-card__name" style="cursor:default;">' + escHtml(c.name || ('Cannon ' + c.id)) + '</span>' +
+        badge +
+      '</div>' +
+      '<div class="cannon-card__meta">' + escHtml(bits.join(' · ')) + extra + '</div>' +
+    '</div>';
+  }
+
   function setTab(which) {
-    const calc = which === 'calc';
-    document.getElementById('tab-calc').classList.toggle('active', calc);
-    document.getElementById('tab-cannons').classList.toggle('active', !calc);
-    document.getElementById('calc-panel').style.display = calc ? '' : 'none';
-    document.getElementById('registry-panel').style.display = calc ? 'none' : '';
+    const tabs   = { calc: 'tab-calc',   cannons: 'tab-cannons',   gps: 'tab-gps' };
+    const panels = { calc: 'calc-panel', cannons: 'registry-panel', gps: 'gps-panel' };
+    Object.keys(panels).forEach(k => {
+      document.getElementById(tabs[k]).classList.toggle('active', k === which);
+      document.getElementById(panels[k]).style.display = (k === which) ? '' : 'none';
+    });
   }
 
   document.getElementById('tab-calc').addEventListener('click', () => setTab('calc'));
-  document.getElementById('tab-cannons').addEventListener('click', () => { setTab('cannons'); loadCannons(); });
+  document.getElementById('tab-cannons').addEventListener('click', () => { setTab('cannons'); loadCannons(); renderGps(); });
+  document.getElementById('tab-gps').addEventListener('click', () => { setTab('gps'); loadCannons().then(() => { renderGps(); }); loadTowers(); });
 
   // Keep the map dots fresh: sublevel cannons push new GPS coordinates every
   // ~3s, so poll on the same cadence. While the registry tab is open we skip
@@ -1901,13 +2038,21 @@
   function registryTabOpen() {
     return document.getElementById('registry-panel').style.display !== 'none';
   }
+  function gpsTabOpen() {
+    return document.getElementById('gps-panel').style.display !== 'none';
+  }
   let cannonsPollBusy = false;
   setInterval(async () => {
     if (cannonsPollBusy) return;
     cannonsPollBusy = true;
-    try { await loadCannons({ light: registryTabOpen() }); }
-    finally { cannonsPollBusy = false; }
+    try {
+      await loadCannons({ light: registryTabOpen() || gpsTabOpen() });
+      if (gpsTabOpen()) renderGps();
+    } finally { cannonsPollBusy = false; }
   }, 3000);
+
+  // The tower registry changes far more slowly than positions do.
+  setInterval(() => { if (gpsTabOpen()) loadTowers(); }, 15000);
 
   // 9. AUTH — last, because showApp() needs `map` to already exist
   // ════════════════════════════════════════════════════════════

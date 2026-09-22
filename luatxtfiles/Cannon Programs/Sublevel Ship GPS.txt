@@ -1,45 +1,79 @@
 -- ============================================================
 -- Sublevel Ship GPS — Regnum Aeternum
--- ComputerCraft FRONT / BACK position beacon for mobile/sublevel
--- ships.
+-- ComputerCraft FRONT / BACK position beacon for mobile/sublevel ships.
+-- ============================================================
 --
--- ────────────────────────────────────────────────────────────
 -- WHAT THIS IS
--- ────────────────────────────────────────────────────────────
--- A sublevel ship needs two GPS points to know which way it is
--- pointing. This program runs on TWO separate computers on the
--- ship: one at the FRONT (bow) and one at the BACK (stern),
--- placed as far apart as possible along the fore-aft centerline.
--- Each broadcasts its gps.locate() position over the wireless
--- modem. The Sublevel Cannon Computer (a third computer, connected
--- to the cannon) listens to both and derives the ship's heading.
+--   A sublevel ship needs two GPS points to know which way it is pointing.
+--   This program runs on TWO separate computers on the ship: one at the FRONT
+--   (bow) and one at the BACK (stern), placed as far apart as possible along
+--   the fore-aft centerline. Each broadcasts its position over the wireless
+--   modem. The Sublevel Cannon Computer (a third computer, connected to the
+--   cannon) listens to both and derives the ship's heading.
 --
--- ────────────────────────────────────────────────────────────
+-- WHAT CHANGED FROM THE OLD VERSION
+--   It now uses the gpsnet engine (GPS Network) instead of gps.locate().
+--   Three things follow from that:
+--
+--   1) IT NO LONGER STALLS. gps.locate() blocks for up to its whole timeout,
+--      and the old loop sat in it for two thirds of every cycle. Here a modem
+--      coroutine does all the listening and the beacon reads a cached fix, so
+--      the screen stays live and the broadcast cadence stays steady.
+--
+--   2) SIMULTANEOUS SAMPLING. The heading is the direction from the stern fix
+--      to the bow fix, so if the ship is TURNING while the two beacons take
+--      their fixes at different moments, the two points do not describe one
+--      rigid ship and the heading is wrong — by roughly half the turn rate
+--      times the gap between fixes. A ship turning at 10°/s with fixes a
+--      second apart would be 5° out, which is a lot at long range.
+--      The cannon computer now broadcasts a SYNC tick on channel 4120 and
+--      both beacons take a fresh fix the instant they hear it, so their two
+--      positions come from the same instant. Each broadcast carries the age
+--      of the fix it used, so the cannon computer can see the remaining skew.
+--      If no SYNC ever arrives the beacon just free-runs as before.
+--
+--   3) FIXES ARE VALIDATED. Each fix is solved from the whole tower set and
+--      checked against its own residuals, so a tower that has been moved or
+--      mis-keyed is detected and left out instead of bending the heading.
+--
+-- ============================================================
 -- IN-GAME SETUP (run this on BOTH computers)
--- ────────────────────────────────────────────────────────────
---   1. Place a Computer at the bow and another at the stern, on
---      the centerline, as far apart as the ship allows.
---   2. Put a wireless (or ender) modem on each, and give the
---      computer a wireless network connection (http must work).
---   3. Put this program on each as "startup" (it is a daemon).
---   4. On first boot each asks whether it is the FRONT or BACK
---      computer and saves that role. Answer FRONT for the bow
---      computer and BACK for the stern one.
---   5. It then shows the live cannon registry pulled from the
---      website. Use the UP / DOWN arrow keys to highlight the
---      cannon this ship's GPS pair reports to and press ENTER.
---      Both computers (front and back) must pick the SAME cannon.
---      The list re-fetches itself every 10 seconds.
+-- ============================================================
+--   1. Place a Computer at the bow and another at the stern, on the
+--      centerline, as far apart as the ship allows.
+--   2. Put a wireless (or ender) modem on each, and give the computer a
+--      wireless network connection (http must work).
+--   3. Install this program as "startup", and install the GPS Network
+--      library next to it as "gpsnet.lua":
+--
+--        wget https://raw.githubusercontent.com/starpanda24825/RA/refs/heads/main/luatxtfiles/Cannon%20Programs/GPS%20Network%20V1.txt gpsnet.lua
+--
+--      Both files must sit in the same folder. You also need FOUR OR MORE
+--      towers running the "GPS Tower" program (see that file) within wireless
+--      range of the ship.
+--   4. On first boot each asks whether it is the FRONT or BACK computer and
+--      saves that role. Answer FRONT for the bow computer and BACK for the
+--      stern one.
+--   5. It then shows the live cannon registry pulled from the website. Use
+--      the UP / DOWN arrow keys to highlight the cannon this ship's GPS pair
+--      reports to and press ENTER. Both computers (front and back) must pick
+--      the SAME cannon. The list re-fetches itself every 10 seconds.
 --
 -- ASSIGNMENT — WHY IT MATTERS
---   Every broadcast is tagged with the chosen cannon's registry
---   id, and the cannon computer only accepts beacons addressed to
---   itself. Two ships parked near each other therefore can no
---   longer swap front/back fixes, so a shipYaw can never be
---   applied to the wrong vehicle.
+--   Every broadcast is tagged with the chosen cannon's registry id, and the
+--   cannon computer only accepts beacons addressed to itself. Two ships
+--   parked near each other therefore can no longer swap front/back fixes, so
+--   a shipYaw can never be applied to the wrong vehicle.
 --
---   Press C at any time on the status screen to re-open the
---   cannon list and change the assignment.
+--   Press C at any time on the status screen to re-open the cannon list and
+--   change the assignment.
+--
+-- HOW FAR APART SHOULD THE TWO BEACONS BE?
+--   As far as the ship allows — it is the single biggest factor in aiming
+--   accuracy. Heading error is roughly 57.3 x (fix error / separation), so
+--   with fixes good to a block, a 20-block separation is ~3° of heading error
+--   and a 60-block separation is ~1°. Squeezing more precision out of GPS
+--   below one block buys nothing; moving these two computers apart does.
 -- ============================================================
 
 -- ------------------------------------------------------------
@@ -48,12 +82,14 @@
 local BASE_URL     = "https://regnumaeternum.starpanda24825.workers.dev"
 local CANNONS_PATH = "/api/ballistics/cc/cannons"
 
--- Channel the positions are broadcast on. MUST match the
--- SHIP_GPS_CHANNEL constant in the Sublevel Cannon Computer program.
+-- Channel the positions are broadcast on, and the channel the cannon
+-- computer sends its SYNC ticks on. MUST match SHIP_GPS_CHANNEL in the
+-- Sublevel Cannon Computer program.
 local CHANNEL = 4120
 
-local GPS_TIMEOUT     = 2    -- seconds per gps.locate attempt
-local REPORT_INTERVAL = 1    -- seconds between broadcasts (≈3s cadence)
+local REPORT_INTERVAL = 1    -- fallback seconds between broadcasts when no SYNC
+local SYNC_WAIT       = 1    -- seconds to wait for a fix after a SYNC tick
+local FIX_FRESH_AGE   = 0.6  -- a fix younger than this counts as "just taken"
 local REFRESH_SECONDS = 10   -- how often the cannon list re-fetches itself
 local CFG_PATH        = "shipgps_cfg.txt"
 
@@ -67,28 +103,6 @@ local function trim(s)
   return s
 end
 
-local function findWirelessModem()
-  for _, side in ipairs(peripheral.getNames()) do
-    if peripheral.getType(side) == "modem" then
-      local m = peripheral.wrap(side)
-      if m.isWireless and m.isWireless() then
-        return m
-      end
-    end
-  end
-  return nil
-end
-
-local function drawStatus(lines)
-  term.setBackgroundColor(colors.black)
-  term.clear()
-  term.setCursorPos(1, 1)
-  term.setTextColor(colors.white)
-  for _, line in ipairs(lines) do
-    print(line)
-  end
-end
-
 -- Blocking GET returning the decoded JSON table (or nil on any failure).
 local function httpGetJSON(path)
   if not http then return nil end
@@ -99,6 +113,47 @@ local function httpGetJSON(path)
   local decoded, data = pcall(textutils.unserializeJSON, raw)
   if decoded and type(data) == "table" then return data end
   return nil
+end
+
+-- ------------------------------------------------------------
+-- Screen
+-- ------------------------------------------------------------
+-- Only lines whose contents actually changed are redrawn. Terminal writes are
+-- among the most expensive things a CC computer does, and this program is a
+-- daemon: repainting an identical screen several times a second is exactly
+-- the kind of self-inflicted load that makes a network feel slow.
+local screenCache = {}
+
+local function resetScreen()
+  screenCache = {}
+  term.setBackgroundColor(colors.black)
+  term.setTextColor(colors.white)
+  term.clear()
+end
+
+local function drawScreen(lines)
+  local width = term.getSize()
+  local count = #lines
+  if #screenCache > count then count = #screenCache end
+  for i = 1, count do
+    local entry = lines[i]
+    local text, colour = "", colors.white
+    if type(entry) == "table" then
+      text, colour = entry[1] or "", entry[2] or colors.white
+    elseif type(entry) == "string" then
+      text = entry
+    end
+    if #text > width then text = text:sub(1, width) end
+    local padded = text .. string.rep(" ", math.max(0, width - #text))
+    local key = tostring(colour) .. "\1" .. padded
+    if screenCache[i] ~= key then
+      term.setBackgroundColor(colors.black)
+      term.setTextColor(colour)
+      term.setCursorPos(1, i)
+      term.write(padded)
+      screenCache[i] = key
+    end
+  end
 end
 
 -- ------------------------------------------------------------
@@ -148,10 +203,8 @@ end
 -- Role (front / back)
 -- ------------------------------------------------------------
 local function setupRole()
-  term.setBackgroundColor(colors.black)
-  term.clear()
+  resetScreen()
   term.setCursorPos(1, 1)
-  term.setTextColor(colors.white)
   print("=== Sublevel Ship GPS — first-time setup ===")
   print("")
   print("Which end of the ship is this computer on?")
@@ -165,6 +218,7 @@ local function setupRole()
   print("")
   print("Saved as " .. cfg.role .. ".")
   sleep(1)
+  resetScreen()
 end
 
 -- ------------------------------------------------------------
@@ -196,8 +250,7 @@ local function cannonLabel(c)
 end
 
 local function drawSelect(list, sel, status)
-  term.setBackgroundColor(colors.black)
-  term.clear()
+  resetScreen()
   term.setCursorPos(1, 1)
   term.setTextColor(colors.yellow)
   print("=== Assign this GPS (" .. tostring(cfg.role) .. ") to a cannon ===")
@@ -290,19 +343,248 @@ local function assignCannon()
     cfg.cannonName = "Cannon " .. tostring(cfg.cannonId)
   end
   writeConfig()
-  term.setBackgroundColor(colors.black)
-  term.clear()
+  resetScreen()
   term.setCursorPos(1, 1)
   term.setTextColor(colors.lime)
   print("Assigned to " .. cfg.cannonName .. " (id " .. tostring(cfg.cannonId) .. ").")
   term.setTextColor(colors.white)
   sleep(1.5)
+  resetScreen()
   return true
+end
+
+-- ------------------------------------------------------------
+-- GPS engine
+-- ------------------------------------------------------------
+-- os.loadAPI loads gpsnet.lua and exposes it as the global `gpsnet`.
+local function loadGpsnet()
+  if type(gpsnet) ~= "table" then
+    pcall(os.loadAPI, "gpsnet.lua")
+  end
+  if type(gpsnet) ~= "table" then
+    resetScreen()
+    term.setCursorPos(1, 1)
+    term.setTextColor(colors.red)
+    print("GPS Network library missing.")
+    term.setTextColor(colors.white)
+    print("")
+    print("This program needs gpsnet.lua in the same folder.")
+    print("Download it as gpsnet.lua, next to this program:")
+    print("")
+    print("    wget https://raw.githubusercontent.com/starpanda24825/RA/")
+    print("         refs/heads/main/luatxtfiles/Cannon%20Programs/")
+    print("         GPS%20Network%20V1.txt gpsnet.lua")
+    print("")
+    print("Press any key to exit.")
+    os.pullEvent("key")
+    error("gpsnet.lua not installed", 0)
+  end
+  return gpsnet
+end
+
+local gpsnet = loadGpsnet()
+
+-- The beacon drives its own pings (on SYNC ticks), so the engine's automatic
+-- schedule is pushed far out of the way.
+local engine = gpsnet.new({ interval = 3600, window = 0.5, maxAge = 5 })
+
+-- ------------------------------------------------------------
+-- Shared state (written by the modem coroutine, read by the beacon loop)
+-- ------------------------------------------------------------
+local pendingSync = nil      -- seq of the SYNC tick we still owe an answer to
+local syncSeenAt  = nil      -- when that tick arrived
+local lastSyncAt  = nil      -- when ANY sync last arrived (for the screen)
+local netError    = nil
+
+local stats = {
+  sent      = 0,   -- broadcasts made
+  missed    = 0,   -- times we wanted a fix and could not get one
+  lastSeq   = nil,
+  lastSentAt = nil,
+}
+
+-- ------------------------------------------------------------
+-- Modem coroutine
+-- ------------------------------------------------------------
+-- One coroutine owns the modem. Every modem_message goes to the GPS engine,
+-- and anything on the ship channel that is a SYNC tick is recorded. Nothing
+-- blocks on a fix here, so this loop never stops listening.
+local function networkPump()
+  while true do
+    local ok, err = pcall(function()
+      engine:attach()
+      engine:openChannel(CHANNEL)
+      while true do
+        local _, side, channel, replyChannel, message, distance = os.pullEvent("modem_message")
+        -- Argument order is (side, channel, message, distance). replyChannel
+        -- is NOT part of it: the engine's channel is already its own, so it
+        -- filters on `channel` alone.
+        engine:onMessage(side, channel, message, distance)
+
+        if channel == CHANNEL and type(message) == "string" then
+          local parsed, data = pcall(textutils.unserializeJSON, message)
+          if parsed and type(data) == "table" and data.type == "ship_sync" then
+            local seq = tonumber(data.seq)
+            if seq and (pendingSync == nil or seq ~= pendingSync) then
+              pendingSync = seq
+              syncSeenAt = os.clock()
+            end
+            lastSyncAt = os.clock()
+          end
+        end
+      end
+    end)
+    -- A detached or replaced modem lands here; reattach and carry on rather
+    -- than taking the whole daemon down with it.
+    netError = ok and nil or tostring(err)
+    sleep(1)
+  end
+end
+
+-- ------------------------------------------------------------
+-- Fix + broadcast
+-- ------------------------------------------------------------
+-- Force a fresh ping and wait a moment for it. Returns x, y, z, meta (the
+-- meta may describe a slightly older fix if nothing new arrived in time).
+local function takeFix(maxWait)
+  engine:request()
+  local deadline = os.clock() + (maxWait or SYNC_WAIT)
+  while os.clock() < deadline do
+    local x, y, z, meta = engine:get()
+    if x and meta.age <= FIX_FRESH_AGE then return x, y, z, meta end
+    engine:update()
+    sleep(0.1)
+  end
+  return engine:get()
+end
+
+local function broadcast(x, y, z, meta, seq)
+  if not engine.modem then return false end
+  local payload = textutils.serializeJSON({
+    type     = "ship_gps",
+    role     = cfg.role,
+    cannonId = cfg.cannonId,
+    x        = x,
+    y        = y,
+    z        = z,
+    age      = meta and meta.age or nil,   -- staleness when sent
+    seq      = seq,                        -- which SYNC tick this answers
+  })
+  local ok = pcall(function() engine.modem.transmit(CHANNEL, CHANNEL, payload) end)
+  if ok then
+    stats.sent = stats.sent + 1
+    stats.lastSeq = seq
+    stats.lastSentAt = os.clock()
+  end
+  return ok
+end
+
+local function ageText(seconds)
+  if not seconds then return "—" end
+  if seconds < 1 then return string.format("%.0fms", seconds * 1000) end
+  return string.format("%.1fs", seconds)
+end
+
+-- ------------------------------------------------------------
+-- Beacon loop (screen + broadcast cadence + the C key)
+-- ------------------------------------------------------------
+local function mainLoop()
+  local lastSentAt = -1e9
+
+  while true do
+    engine:update()
+    engine:openChannel(CHANNEL)      -- reopens itself if the modem is swapped
+
+    -- Answer a SYNC tick immediately: that is what makes the other beacon's
+    -- fix and ours describe the same instant.
+    local now = os.clock()
+    local seq = pendingSync
+    local sent = false
+    if seq ~= nil and (syncSeenAt == nil or now - syncSeenAt <= SYNC_WAIT + 0.4) then
+      local x, y, z, meta = takeFix(SYNC_WAIT)
+      if x and broadcast(x, y, z, meta, seq) then
+        lastSentAt = os.clock()
+        sent = true
+      end
+    end
+    if seq ~= nil then pendingSync = nil end
+
+    -- Otherwise free-run, so a ship still reports if the cannon computer is
+    -- off, rebooting, or out of range.
+    if not sent and now - lastSentAt >= REPORT_INTERVAL then
+      local x, y, z, meta = takeFix(SYNC_WAIT)
+      if x then
+        if broadcast(x, y, z, meta, nil) then lastSentAt = os.clock() end
+      else
+        stats.missed = stats.missed + 1
+      end
+    end
+
+    local x, y, z, meta = engine:get()
+    local lines = {}
+    lines[#lines + 1] = { "=== Sublevel Ship GPS — " .. tostring(cfg.role) .. " ===", colors.yellow }
+    lines[#lines + 1] = "Assigned to: " .. (cfg.cannonName or ("Cannon " .. tostring(cfg.cannonId)))
+    lines[#lines + 1] = ""
+
+    if x then
+      lines[#lines + 1] = { ("Position:  %d, %d, %d"):format(
+        math.floor(x + 0.5), math.floor(y + 0.5), math.floor(z + 0.5)), colors.white }
+      lines[#lines + 1] = ("Fix:       %d tower(s), %s, layout %d%%, %s old"):format(
+        meta.towers, meta.quality, math.floor((meta.geometry or 0) * 100), ageText(meta.age))
+      if meta.excluded and #meta.excluded > 0 then
+        lines[#lines + 1] = { "Ignored:   tower at " .. table.concat(meta.excluded, ", ") ..
+          " does not fit the others", colors.orange }
+      end
+    else
+      lines[#lines + 1] = { "Position:  no fix yet", colors.red }
+      lines[#lines + 1] = { "Reason:    " .. tostring(engine.reason or "locating…"), colors.red }
+    end
+
+    lines[#lines + 1] = ""
+    local since = lastSyncAt and (os.clock() - lastSyncAt) or nil
+    if since and since < 15 then
+      lines[#lines + 1] = { "Cannon computer: in contact (" .. ageText(since) .. " ago) — fixes are "
+        .. "sampled together.", colors.lime }
+    elseif stats.sent > 0 then
+      lines[#lines + 1] = { "Cannon computer: not heard from — free-running every "
+        .. REPORT_INTERVAL .. "s.", colors.grey }
+    else
+      lines[#lines + 1] = { "Waiting for the cannon computer's SYNC…", colors.grey }
+    end
+
+    lines[#lines + 1] = ("Broadcast: %d sent%s"):format(stats.sent,
+      stats.lastSentAt and (" — last " .. ageText(os.clock() - stats.lastSentAt) .. " ago") or "")
+    if stats.missed > 0 then
+      lines[#lines + 1] = { "Missed:    " .. stats.missed .. " (no fix available)", colors.orange }
+    end
+    if netError then
+      lines[#lines + 1] = { "Network:   " .. netError, colors.red }
+    end
+
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = { "Channel " .. CHANNEL .. " · press C to change the assigned cannon.", colors.grey }
+
+    drawScreen(lines)
+
+    -- Short tick, and watch for keys so C is answered promptly.
+    local timer = os.startTimer(0.25)
+    local handled = false
+    while not handled do
+      local event, a = os.pullEvent()
+      if event == "timer" and a == timer then
+        handled = true
+      elseif event == "key" and a == keys.c then
+        assignCannon()
+        handled = true
+      end
+    end
+  end
 end
 
 -- ------------------------------------------------------------
 -- Main
 -- ------------------------------------------------------------
+resetScreen()
 readConfig()
 
 if not cfg.role then
@@ -311,13 +593,11 @@ end
 
 -- Require an assignment before the beacon starts reporting.
 while not cfg.cannonId do
-  term.setBackgroundColor(colors.black)
-  term.clear()
+  resetScreen()
   term.setCursorPos(1, 1)
-  term.setTextColor(colors.white)
   print("=== Sublevel Ship GPS — cannon assignment ===")
   print("")
-  print("This beacon (" .. cfg.role .. ") must be assigned to the")
+  print("This beacon (" .. tostring(cfg.role) .. ") must be assigned to the")
   print("registered cannon it reports the ship heading for.")
   print("")
   print("Press any key to open the cannon list…")
@@ -325,58 +605,30 @@ while not cfg.cannonId do
   assignCannon()
 end
 
--- Wait up to `seconds` for a timer, but return early if a key is pressed.
--- This keeps the single-threaded main loop responsive to the C key without
--- racing the status screen against a separate coroutine.
-local function sleepOrKey(seconds)
-  local timer = os.startTimer(seconds)
-  while true do
-    local event, a = os.pullEvent()
-    if event == "timer" and a == timer then return nil end
-    if event == "key" then return a end
-  end
-end
-
-local lastX, lastY, lastZ
-
-while true do
-  local lines = { "Sublevel Ship GPS — " .. cfg.role .. " receiver" }
-  table.insert(lines, "Assigned to: " .. (cfg.cannonName or ("Cannon " .. tostring(cfg.cannonId or "?"))) ..
-                              " (id " .. tostring(cfg.cannonId or "?") .. ")")
-
-  local modem = findWirelessModem()
-
-  if not modem then
-    table.insert(lines, "Status: no wireless modem attached")
-    table.insert(lines, "Attach a wireless/ender modem and reboot.")
-    drawStatus(lines)
-    sleep(2)
+-- First-boot GPS self-check, so a tower problem is obvious immediately rather
+-- than showing up as a mysteriously wrong heading later.
+do
+  resetScreen()
+  term.setCursorPos(1, 1)
+  term.setTextColor(colors.yellow)
+  print("=== GPS self-check (this needs gpsnet.lua) ===")
+  term.setTextColor(colors.white)
+  local lines, ok = gpsnet.diagnose(engine)
+  for _, line in ipairs(lines) do print(line) end
+  print("")
+  if ok then
+    term.setTextColor(colors.lime)
+    print("Beacon starting…")
   else
-    modem.open(CHANNEL)
-
-    local ok, x, y, z = pcall(gps.locate, GPS_TIMEOUT)
-    if ok and x and y and z then
-      lastX, lastY, lastZ = x, y, z
-      local msg = textutils.serializeJSON({
-        type = "ship_gps", role = cfg.role, cannonId = cfg.cannonId,
-        x = x, y = y, z = z,
-      })
-      modem.transmit(CHANNEL, CHANNEL, msg)
-      table.insert(lines, "GPS: X " .. tostring(x) .. "  Y " .. tostring(y) .. "  Z " .. tostring(z))
-      table.insert(lines, "Broadcasting on channel " .. tostring(CHANNEL))
-    else
-      table.insert(lines, "GPS: no fix")
-      if lastX then
-        table.insert(lines, "Last fix: " .. tostring(lastX) .. ", " .. tostring(lastY) .. ", " .. tostring(lastZ))
-      end
-    end
-
-    table.insert(lines, "Press C to change the assigned cannon.")
-
-    drawStatus(lines)
-    local key = sleepOrKey(REPORT_INTERVAL)
-    if key == keys.c then
-      assignCannon()
-    end
+    term.setTextColor(colors.orange)
+    print("The beacon will keep retrying in the background.")
   end
+  term.setTextColor(colors.white)
+  sleep(3)
 end
+
+resetScreen()
+
+-- The modem coroutine listens; this coroutine broadcasts and draws. Nothing
+-- blocks on a fix, so a slow tower never freezes the beacon.
+parallel.waitForAll(networkPump, mainLoop)

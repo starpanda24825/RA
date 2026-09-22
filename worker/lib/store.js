@@ -1282,3 +1282,61 @@ export async function ackCannonCommand(env, id, sequence) {
   ).bind(Number(sequence), nowIso(), Number(id)).run();
 }
 
+// ---------- ballistics: GPS network ----------
+
+// Latest GPS health snapshot from a cannon. A display blob rather than a
+// column per field: we never query or aggregate on it, and it is rewritten
+// once a second, so it stays a single UPDATE.
+export async function recordGpsReport(env, cannonId, report) {
+  await env.DB.prepare(
+    'UPDATE ballistics_cannons SET gps_report = ?, updated_at = ? WHERE id = ?'
+  ).bind(report ? JSON.stringify(report) : null, nowIso(), Number(cannonId)).run();
+}
+
+// Upsert the towers a cannon has heard from. Clients only send a tower list
+// when it actually changes (or once a minute as a safety net), so this is
+// touched a handful of times rather than once a second, and the whole list
+// goes out as one batched D1 call.
+export async function recordGpsTowers(env, towers, reportedBy, excludedKeys) {
+  if (!Array.isArray(towers) || towers.length === 0) return 0;
+  const now = nowIso();
+  const excluded = new Set((Array.isArray(excludedKeys) ? excludedKeys : []).map(String));
+  const statements = [];
+  const seen = new Set();
+
+  for (const t of towers.slice(0, 64)) {
+    const x = Math.round(Number(t && t.x));
+    const y = Math.round(Number(t && t.y));
+    const z = Math.round(Number(t && t.z));
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+    const key = `${x},${y},${z}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    statements.push(
+      env.DB.prepare(
+        `INSERT INTO ballistics_gps_towers
+           (tower_key, x, y, z, sightings, excluded_count, reported_by,
+            first_seen_at, last_seen_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(tower_key) DO UPDATE SET
+           last_seen_at   = excluded.last_seen_at,
+           sightings      = sightings + 1,
+           excluded_count = excluded_count + excluded.excluded_count,
+           reported_by    = excluded.reported_by,
+           updated_at     = excluded.updated_at`
+      ).bind(key, x, y, z, excluded.has(key) ? 1 : 0, String(reportedBy || '').slice(0, 64),
+             now, now, now, now)
+    );
+  }
+
+  if (statements.length) await env.DB.batch(statements);
+  return statements.length;
+}
+
+export async function listGpsTowers(env) {
+  const { results } = await env.DB.prepare(
+    'SELECT * FROM ballistics_gps_towers ORDER BY y DESC, x ASC'
+  ).all();
+  return results;
+}
+

@@ -1,0 +1,819 @@
+-- ============================================================
+-- Regnum Aeternum — GPS Network client  (gpsnet.lua)
+-- ============================================================
+--
+-- A drop-in replacement for ComputerCraft's stock `gps.locate()`, built
+-- for the Crown's tower network.
+--
+-- WHY THIS EXISTS
+--   Stock gps.locate() has three problems that get worse as the network
+--   grows:
+--
+--   1) IT USUALLY WAITS OUT ITS FULL TIMEOUT.
+--      It pings the towers, builds a fix from three of them, and gets
+--      back TWO candidate positions (mirror images across the plane of
+--      those three towers). It can only finish once a tower that is OFF
+--      that plane rules one of them out. If every tower sits at roughly
+--      the same height, that never happens and the call burns its whole
+--      timeout — then returns nil ("Ambiguous position").
+--
+--   2) IT FLOODS THE CHANNEL.
+--      It pings on channel 65534 and asks for replies on 65534, which
+--      every other GPS computer also has open. So every tower's reply
+--      is delivered to every receiver in range. With N receivers and M
+--      towers that is N x M events per receiver per ping. A busy
+--      computer drops events over 256, loses towers, and fails.
+--
+--   3) IT BLOCKS WHATEVER CALLS IT.
+--      A fix costs up to the timeout, inline, with no caching.
+--
+--   This module fixes all three:
+--
+--   1) It solves the whole tower set at once with least squares rather
+--      than three-and-hope. Four or more towers off-plane give the exact
+--      answer in ONE pass, so a fix normally lands in 4 replies instead
+--      of a timeout. It also verifies the result by its residuals, and
+--      repairs the set by leaving out a tower that does not fit — so a
+--      moved, unloaded or mis-keyed tower is detected and excluded
+--      instead of quietly poisoning the fix.
+--
+--   2) It pings on 65534 (towers listen there — this is required) but
+--      asks for replies on a PRIVATE channel derived from the computer's
+--      id. Only this computer has that channel open, so it receives its
+--      own towers and nothing else. Per-receiver traffic drops by a
+--      factor of N. Stock `gps host` towers honour the requested reply
+--      channel, so existing towers keep working untouched.
+--
+--   3) Fixes are cached. `engine:get()` never blocks: it hands back the
+--      newest validated fix and its age, and the caller decides whether
+--      that is fresh enough. Pings run on their own schedule in a
+--      background coroutine.
+--
+-- INSTALL
+--   Put this file next to your program as `gpsnet.lua`, then:
+--       os.loadAPI("gpsnet.lua")
+--       local engine = gpsnet.new()
+--   Your towers can keep running stock `gps host x y z`, or the leaner
+--   "GPS Tower" program (recommended — stock towers redraw their terminal
+--   on every single request).
+--
+-- USAGE
+--   local modem, side = gpsnet.findModem()
+--   local engine = gpsnet.new()
+--   engine:attach()
+--
+--   parallel.waitForAll(
+--     function()                      -- 1. modem pump
+--       while true do
+--         local _, s, chan, reply, msg, dist = os.pullEvent("modem_message")
+--         engine:onMessage(s, chan, msg, dist)   -- NOTE: msg and dist only,
+--                                               -- reply is not part of it
+--       end
+--     end,
+--     function()                      -- 2. your loop
+--       while true do
+--         engine:update()             -- schedules pings, expires old fixes
+--         local x, y, z, meta = engine:get()
+--         if x then print(("fix %d,%d,%d (%s, %d towers)"):format(
+--           x, y, z, meta.quality, meta.towers)) end
+--         sleep(0.5)
+--       end
+--     end
+--   )
+--
+-- TOWER LAYOUT (this matters more than the code)
+--   * FOUR OR MORE towers, and at least one clearly OFF-PLANE — a tower
+--     on a hill, a tower, a shaft, a mountain. A flat ring of towers at
+--     one height cannot determine your Y at all (a mirror image fits
+--     equally well); this module detects that and refuses rather than
+--     guessing.
+--   * SPREAD THEM FAR APART. Clustered towers make the maths
+--     ill-conditioned and cost you blocks of accuracy.
+--   * RAISE THEM. Wireless range scales from 64 blocks up to 384 above
+--     y=96, so an elevated tower covers far more ground.
+--   * KEEP THEM LOADED. A tower in an unloaded chunk silently stops
+--     answering; the network will report it as missing.
+-- ============================================================
+
+local VERSION = "1.0"
+
+-- CC's standard GPS channel. Towers listen here and a ping must be sent
+-- on it, so this is not configurable.
+local GPS_CHANNEL = 65534
+
+-- Replies come back on REPLY_BASE + (computerId % REPLY_SPAN). Kept high
+-- and clear of 65534, of rednet (which uses channels equal to computer
+-- ids) and of the ship-beacon channel (4120).
+local REPLY_BASE = 52000
+local REPLY_SPAN = 1000
+
+local DEFAULTS = {
+  -- Residual tolerance, in blocks, for a fix to count as "exact". CC's
+  -- distances are exact (Math.sqrt of the squared distance between modem
+  -- positions), so a consistent tower set lands at ~1e-12. 0.05 therefore
+  -- cleanly separates a healthy set from one with a tower whose
+  -- coordinates are off by even a fraction of a block.
+  strictTol = 0.05,
+  -- Last-resort tolerance. If no consistent subset can be found we would
+  -- rather hand back a slightly sloppy fix (clearly labelled "degraded")
+  -- than no fix at all — a cannon can still aim from it.
+  looseTol  = 1.0,
+  -- Tower layout quality below which the geometry is treated as unable to
+  -- fix a position at all (0..1; see geometryQuality). A layout that is
+  -- genuinely flat or collinear scores 0; a real, usable network scores far
+  -- above this. Raise it if you would rather have no fix than a poor one.
+  minCond   = 1e-3,
+  -- Seconds between automatic pings.
+  interval  = 1.0,
+  -- Seconds to keep collecting replies before giving up on a ping.
+  window    = 0.6,
+  -- A cached fix older than this is reported as stale.
+  maxAge    = 3.0,
+  -- Fixes need this many towers.
+  minTowers = 4,
+}
+
+-- ------------------------------------------------------------
+-- Small maths helpers
+-- ------------------------------------------------------------
+
+-- Every number the solver touches is kept in floating point. CC's Lua is
+-- double-based, but a build with an integer subtype would compute the normal
+-- matrix and its determinant in integers, where coordinates of a few hundred
+-- blocks already overflow 64 bits and silently corrupt the answer.
+-- Multiplying by 1.0 pins the whole solver to double semantics (and is a
+-- no-op on a double-only build).
+local ONE = 1.0
+
+local function sq(v) return v * v * ONE end
+
+local function dist3(ax, ay, az, bx, by, bz)
+  return math.sqrt(sq(ax - bx) + sq(ay - by) + sq(az - bz))
+end
+
+-- Gaussian elimination with partial pivoting. Returns nil when the system
+-- is singular (which, here, means the tower geometry cannot pin a
+-- position — a real answer, not a numerical accident).
+local function solveLinear(N, rhs)
+  local n = #rhs
+  local M = {}
+  for i = 1, n do
+    local row = {}
+    for j = 1, n do row[j] = N[i][j] end
+    row[n + 1] = rhs[i]
+    M[i] = row
+  end
+  for c = 1, n do
+    local piv, best = c, math.abs(M[c][c])
+    for r = c + 1, n do
+      local v = math.abs(M[r][c])
+      if v > best then piv, best = r, v end
+    end
+    if best < 1e-9 then return nil end
+    if piv ~= c then M[piv], M[c] = M[c], M[piv] end
+    local pv = M[c][c]
+    for r = c + 1, n do
+      local f = M[r][c] / pv
+      if f ~= 0 then
+        for k = c, n + 1 do M[r][k] = M[r][k] - f * M[c][k] end
+      end
+    end
+  end
+  local x = {}
+  for r = n, 1, -1 do
+    local s = M[r][n + 1]
+    for k = r + 1, n do s = s - M[r][k] * x[k] end
+    x[r] = s / M[r][r]
+  end
+  return x
+end
+
+-- How well the tower directions span space, on a 0..1 scale. 1 means the
+-- towers are perfectly spread (their directions form an orthogonal basis); 0
+-- means the layout cannot fix a position at all — collinear, or all at one
+-- height, where a mirror image of you fits the measurements just as well.
+--
+-- Built from UNIT row directions rather than the raw normal matrix, for two
+-- reasons: the number is then independent of how far apart the towers are and
+-- where in the world they sit, and every term stays within 0..1 so it cannot
+-- overflow however wide the network grows. (The raw determinant of AtA
+-- reaches ~1e21 for a network spanning a few hundred blocks.)
+local function geometryQuality(rows, dim)
+  local N = {}
+  for i = 1, dim do
+    N[i] = {}
+    for j = 1, dim do N[i][j] = 0 end
+  end
+  local used = 0
+  for r = 1, #rows do
+    local a = rows[r]
+    local norm = 0
+    for i = 1, dim do norm = norm + a[i] * a[i] end
+    norm = math.sqrt(norm)
+    if norm > 0 then
+      used = used + 1
+      for i = 1, dim do
+        local ai = a[i] / norm
+        for j = 1, dim do N[i][j] = N[i][j] + ai * (a[j] / norm) end
+      end
+    end
+  end
+  if used < dim then return 0 end
+  local tr = 0
+  for i = 1, dim do tr = tr + N[i][i] end
+  if tr <= 0 then return 0 end
+  local det
+  if dim == 2 then
+    det = N[1][1] * N[2][2] - N[1][2] * N[2][1]
+  else
+    det = N[1][1] * (N[2][2] * N[3][3] - N[2][3] * N[3][2])
+        - N[1][2] * (N[2][1] * N[3][3] - N[2][3] * N[3][1])
+        + N[1][3] * (N[2][1] * N[3][2] - N[2][2] * N[3][1])
+  end
+  return math.abs(det) / (tr / dim) ^ dim
+end
+
+-- Accumulate N = AtA and AtB for a least-squares system.
+local function normalEquations(rows, b, dim)
+  local N, rhs = {}, {}
+  for i = 1, dim do
+    N[i] = {}
+    for j = 1, dim do N[i][j] = 0 end
+    rhs[i] = 0
+  end
+  for r = 1, #rows do
+    local a = rows[r]
+    for i = 1, dim do
+      for j = 1, dim do N[i][j] = N[i][j] + a[i] * a[j] * ONE end
+      rhs[i] = rhs[i] + a[i] * b[r] * ONE
+    end
+  end
+  return N, rhs
+end
+
+-- Residual statistics for a candidate position against the measurements.
+local function residuals(hosts, dists, x, y, z)
+  local sum, worst, worstIdx = 0, 0, 0
+  for i = 1, #hosts do
+    local h = hosts[i]
+    local d = dist3(x, y, z, h[1], h[2], h[3]) - dists[i]
+    sum = sum + d * d
+    if math.abs(d) > worst then worst, worstIdx = math.abs(d), i end
+  end
+  return math.sqrt(sum / #hosts), worst, worstIdx
+end
+
+-- ------------------------------------------------------------
+-- The two solvers
+-- ------------------------------------------------------------
+
+-- Full 3D multilateration. Differencing the sphere equations against the
+-- first tower removes the quadratic term, leaving an exactly linear
+-- system, so with CC's exact distances this is a one-shot solve — no
+-- iteration, no initial guess. Needs 4+ towers: three leave a mirror
+-- ambiguity that only a fourth, off-plane tower can break.
+local function solve3D(hosts, dists, minCond)
+  local n = #hosts
+  if n < 4 then return nil end
+  local h1 = hosts[1]
+  local h1sq = sq(h1[1]) + sq(h1[2]) + sq(h1[3])
+  local rows, b = {}, {}
+  for i = 2, n do
+    local hi = hosts[i]
+    rows[#rows + 1] = {
+      2 * (hi[1] - h1[1]),
+      2 * (hi[2] - h1[2]),
+      2 * (hi[3] - h1[3]),
+    }
+    b[#b + 1] = sq(dists[1]) - sq(dists[i])
+             + (sq(hi[1]) + sq(hi[2]) + sq(hi[3])) - h1sq
+  end
+  local geometry = geometryQuality(rows, 3)
+  if geometry < minCond then return nil end
+  local N, rhs = normalEquations(rows, b, 3)
+  local p = solveLinear(N, rhs)
+  if not p then return nil end
+  local rms, worst = residuals(hosts, dists, p[1], p[2], p[3])
+  return { x = p[1], y = p[2], z = p[3], rms = rms, worst = worst, geometry = geometry }
+end
+
+-- 2D fallback for a tower network that is all at one height: such a
+-- network cannot resolve Y at all, but if the caller knows roughly how
+-- high it is (the last fix, say) the X/Z solution is exact. Three towers
+-- suffice because the mirror ambiguity lived in Y.
+local function solve2D(hosts, dists, y, minCond)
+  local n = #hosts
+  if n < 3 then return nil end
+  local radii = {}
+  for i = 1, n do
+    local r2 = sq(dists[i]) - sq(y - hosts[i][2])
+    if r2 <= 0 then return nil end        -- tower too far below/above the assumed height
+    radii[i] = math.sqrt(r2)
+  end
+  local h1 = hosts[1]
+  local h1sq = sq(h1[1]) + sq(h1[3])
+  local rows, b = {}, {}
+  for i = 2, n do
+    local hi = hosts[i]
+    rows[#rows + 1] = { 2 * (hi[1] - h1[1]), 2 * (hi[3] - h1[3]) }
+    b[#b + 1] = sq(radii[1]) - sq(radii[i]) + (sq(hi[1]) + sq(hi[3])) - h1sq
+  end
+  local geometry = geometryQuality(rows, 2)
+  if geometry < minCond then return nil end
+  local N, rhs = normalEquations(rows, b, 2)
+  local p = solveLinear(N, rhs)
+  if not p then return nil end
+  local sum, worst = 0, 0
+  for i = 1, n do
+    local d = math.sqrt(sq(p[1] - hosts[i][1]) + sq(p[2] - hosts[i][3])) - radii[i]
+    sum = sum + d * d
+    if math.abs(d) > worst then worst = math.abs(d) end
+  end
+  return { x = p[1], z = p[2], rms = math.sqrt(sum / n), worst = worst, geometry = geometry }
+end
+
+-- Solve a subset of the measurements. `skip` is a set of 1-based indices
+-- to leave out. Returns the accepted fix or nil.
+local function solveSubset(hosts, dists, skip, opts)
+  local h, d = {}, {}
+  for i = 1, #hosts do
+    if not (skip and skip[i]) then
+      h[#h + 1] = hosts[i]
+      d[#d + 1] = dists[i]
+    end
+  end
+  local r = solve3D(h, d, opts.minCond)
+  if not r or r.rms > opts.strictTol then return nil end
+  return { x = r.x, y = r.y, z = r.z, rms = r.rms, geometry = r.geometry, used = #h }
+end
+
+-- Try the whole measured set, then progressively smaller consistent
+-- subsets (one tower dropped, then two, restricted to the worst-fitting
+-- candidates so the search stays bounded). This is what turns "a tower
+-- has been moved / is mis-keyed / was spoofed" from a corrupt fix into a
+-- clean one plus a list of suspects.
+local function solveNetwork(hosts, dists, prevY, opts)
+  local n = #hosts
+  local best = nil            -- best (lowest residual) attempt, for the degraded tier
+
+  local function consider(skip, label)
+    local r = solveSubset(hosts, dists, skip, opts)
+    if r then return r end
+    return nil
+  end
+
+  if n >= opts.minTowers then
+    local full = consider(nil)
+    if full then
+      return { x = full.x, y = full.y, z = full.z, rms = full.rms, geometry = full.geometry,
+               used = full.used, excluded = {}, quality = "exact" }
+    end
+    -- Remember the raw fit so a hopeless network still gets a labelled answer.
+    local raw = solve3D(hosts, dists, opts.minCond)
+    if raw then best = { x = raw.x, y = raw.y, z = raw.z, rms = raw.rms, geometry = raw.geometry,
+                         used = n, excluded = {}, quality = "degraded" } end
+  end
+
+  if n >= opts.minTowers + 1 then
+    for drop = 1, n do
+      local r = consider({ [drop] = true })
+      if r then
+        return { x = r.x, y = r.y, z = r.z, rms = r.rms, geometry = r.geometry,
+                 used = r.used, excluded = { drop }, quality = "repaired" }
+      end
+    end
+  end
+
+  if n >= opts.minTowers + 2 then
+    -- Only the worst-fitting towers are plausible culprits, so rank by the
+    -- residual of the raw fit and try pairs among the top four.
+    local raw = solve3D(hosts, dists, opts.minCond)
+    if raw then
+      local ranked = {}
+      for i = 1, n do
+        local h = hosts[i]
+        ranked[i] = {
+          i = i,
+          res = math.abs(dist3(raw.x, raw.y, raw.z, h[1], h[2], h[3]) - dists[i]),
+        }
+      end
+      table.sort(ranked, function(a, b) return a.res > b.res end)
+      local top = math.min(4, n)
+      for i = 1, top do
+        for j = i + 1, top do
+          local skip = { [ranked[i].i] = true, [ranked[j].i] = true }
+          local r = consider(skip)
+          if r then
+            return { x = r.x, y = r.y, z = r.z, rms = r.rms, geometry = r.geometry,
+                     used = r.used, excluded = { ranked[i].i, ranked[j].i },
+                     quality = "repaired" }
+          end
+        end
+      end
+    end
+  end
+
+  -- Coplanar network, but we know roughly how high we are.
+  if prevY and n >= 3 then
+    for drop = 0, n do
+      local h, d, excluded = {}, {}, {}
+      for i = 1, n do
+        if i ~= drop then
+          h[#h + 1] = hosts[i]
+          d[#d + 1] = dists[i]
+        else
+          excluded[1] = i
+        end
+      end
+      if drop == 0 then excluded = {} end
+      local r = solve2D(h, d, prevY, opts.minCond)
+      if r and r.rms <= opts.strictTol then
+        return { x = r.x, y = prevY, z = r.z, rms = r.rms, geometry = r.geometry,
+                 used = #h, excluded = excluded, quality = "pinned-y" }
+      end
+    end
+  end
+
+  -- Nothing was clean. Hand back the best fit we saw, clearly labelled.
+  if best and best.rms <= opts.looseTol then return best end
+  if n < opts.minTowers then
+    return nil, ("need %d+ towers, heard %d"):format(opts.minTowers, n)
+  end
+  return nil, "no consistent tower set"
+end
+
+-- ------------------------------------------------------------
+-- Modem + channel helpers
+-- ------------------------------------------------------------
+
+-- Every wireless modem attached to this computer, as {side, modem} pairs.
+local function wirelessModems()
+  local out = {}
+  local names = peripheral.getNames()
+  for i = 1, #names do
+    local side = names[i]
+    if peripheral.getType(side) == "modem" then
+      local ok, m = pcall(peripheral.wrap, side)
+      if ok and m then
+        local okw, w = pcall(m.isWireless)
+        if okw and w then out[#out + 1] = { side = side, modem = m } end
+      end
+    end
+  end
+  return out
+end
+
+-- The private reply channel for a computer id.
+function replyChannel(computerId)
+  local id = tonumber(computerId) or 0
+  return REPLY_BASE + (id % REPLY_SPAN)
+end
+
+-- The first wireless modem, or nil. Side is the peripheral name.
+function findModem()
+  local m = wirelessModems()
+  if #m == 0 then return nil end
+  return m[1].modem, m[1].side, #m
+end
+
+function version() return VERSION end
+function channel() return GPS_CHANNEL end
+
+-- ------------------------------------------------------------
+-- The engine
+-- ------------------------------------------------------------
+
+-- opts (all optional):
+--   interval, window, strictTol, looseTol, minCond, maxAge, minTowers
+--   id        — override the computer id used for the reply channel
+--   modem     — use this modem instead of auto-detecting
+--   side      — its peripheral side
+function new(opts)
+  opts = opts or {}
+  local cfg = {}
+  for k, v in pairs(DEFAULTS) do cfg[k] = v end
+  for k, v in pairs(opts) do cfg[k] = v end
+
+  local self = {
+    cfg        = cfg,
+    towers     = {},          -- key -> { x, y, z, seen, last }
+    towerCount = 0,
+    fix        = nil,         -- newest validated fix
+    reason     = "starting",
+    pending    = nil,         -- the ping currently collecting replies
+    lastPing   = nil,
+    modem      = nil,
+    side       = nil,
+    channel    = nil,
+    opened     = {},          -- extra channels opened on our modem
+    multiModem = false,
+    stats      = { pings = 0, fixes = 0, missed = 0, excluded = 0, lastTowers = 0,
+                   lastRMS = 0, lastQuality = nil },
+  }
+
+  local id = tonumber(cfg.id) or (os.getComputerID and os.getComputerID()) or 0
+
+  -- Find (or re-find) a modem and make sure our reply channel is open on
+  -- it. Safe to call repeatedly: a modem that has been removed, replaced
+  -- or re-attached is picked up here.
+  function self:attach()
+    local found = wirelessModems()
+    self.multiModem = #found > 1
+    local chosen = nil
+    if cfg.side then
+      for i = 1, #found do
+        if found[i].side == cfg.side then chosen = found[i] end
+      end
+    end
+    if not chosen and cfg.modem then
+      chosen = { side = cfg.side or "?", modem = cfg.modem }
+    end
+    if not chosen and #found > 0 then chosen = found[1] end
+
+    if not chosen then
+      if self.modem then
+        -- Modem went away: close our channel on the old wrapper so a
+        -- re-attached modem starts from a clean state.
+        pcall(function() self.modem.closeAll() end)
+      end
+      self.modem, self.side, self.channel = nil, nil, nil
+      self.reason = "no wireless modem attached"
+      return false
+    end
+
+    local ch = replyChannel(id)
+    if self.side ~= chosen.side or self.channel ~= ch then
+      self.modem, self.side, self.channel = chosen.modem, chosen.side, ch
+      -- Channels belong to a modem, not to us, so they do not survive a modem
+      -- being swapped out. Forget them and reopen on the new one.
+      self.opened = {}
+      local ok, err = pcall(function() self.modem.open(ch) end)
+      if not ok then
+        self.reason = "cannot open reply channel " .. tostring(ch) .. ": " .. tostring(err)
+        return false
+      end
+    end
+    return true
+  end
+
+  -- Open one of the program's own channels on the engine's modem (a ship
+  -- beacon channel, say). Safe to call in a loop: it only does anything the
+  -- first time, and it reopens automatically after a modem is replaced.
+  function self:openChannel(ch)
+    if ch == nil then return false end
+    if not self:attach() then return false end
+    if self.opened[ch] then return true end
+    local ok = pcall(function() self.modem.open(ch) end)
+    if ok then
+      self.opened[ch] = true
+      self.reason = nil
+    end
+    return ok
+  end
+
+  -- Begin a fix: clear the slate and ping every tower in range. Towers
+  -- hear this on 65534 and answer on our private channel.
+  function self:request()
+    if not self:attach() then return false end
+    self.pending = { at = os.clock(), hosts = {}, dists = {}, keys = {}, seen = 0, dropped = 0 }
+    self.lastPing = self.pending.at
+    self.stats.pings = self.stats.pings + 1
+    local ok, err = pcall(function() self.modem.transmit(GPS_CHANNEL, self.channel, "PING") end)
+    if not ok then
+      self.pending = nil
+      self.reason = "transmit failed: " .. tostring(err)
+      return false
+    end
+    return true
+  end
+
+  -- Feed every modem_message event here. Filters to our own channel, so
+  -- nothing else on the network (including other computers' GPS traffic)
+  -- reaches the solver.
+  function self:onMessage(side, chan, msg, distance)
+    if self.channel == nil then return false end
+    if chan ~= self.channel then return false end
+    -- The distance is measured from the modem that received the packet. If
+    -- this computer has more than one wireless modem, ignore packets that
+    -- landed on a different one or they would be measured from the wrong
+    -- place.
+    if self.multiModem and side ~= self.side then return false end
+    if type(distance) ~= "number" then return false end
+    if type(msg) ~= "table" or #msg < 3 then return false end
+    local x, y, z = tonumber(msg[1]), tonumber(msg[2]), tonumber(msg[3])
+    if not x or not y or not z then return false end
+
+    -- Remember the tower forever (for the registry and for the map), and
+    -- count how many distinct towers answered this ping.
+    local key = ("%d,%d,%d"):format(math.floor(x), math.floor(y), math.floor(z))
+    local t = self.towers[key]
+    if not t then
+      t = { x = x, y = y, z = z, seen = 0, last = 0 }
+      self.towers[key] = t
+      self.towerCount = self.towerCount + 1
+    end
+    t.seen = t.seen + 1
+    t.last = os.clock()
+
+    local p = self.pending
+    if not p then return true end
+    -- One tower, one measurement. Stock towers always report the same
+    -- coordinates; a computer in range that is not a tower would land here
+    -- too and simply be treated as one (its distances are real, so its
+    -- coordinates must be too).
+    local idx = p.keys[key]
+    if idx then
+      p.dists[idx] = distance
+    else
+      p.hosts[#p.hosts + 1] = { x, y, z, key = key }
+      p.dists[#p.dists + 1] = distance
+      p.keys[key] = #p.hosts
+    end
+    p.seen = #p.hosts
+    return true
+  end
+
+  -- Solve whatever the current ping has collected, if it has enough.
+  function self:attempt()
+    local p = self.pending
+    if not p or #p.hosts < 3 then return false end
+    local prevY = self.fix and self.fix.y or nil
+    local pos, err = solveNetwork(p.hosts, p.dists, prevY, cfg)
+    if not pos then
+      p.reason = err
+      -- Surface why, so a status screen (and the website) can say more than
+      -- "no fix". A later successful attempt clears it.
+      self.reason = err
+      return false
+    end
+    p.solved = true
+    self.fix = {
+      x = pos.x, y = pos.y, z = pos.z,
+      t = os.clock(),
+      quality = pos.quality,
+      rms = pos.rms,
+      geometry = pos.geometry,
+      towers = pos.used,
+      seen = #p.hosts,
+      excluded = pos.excluded,
+      excludedKeys = {},
+    }
+    -- Name the towers we threw out, so the status screen and the website
+    -- can point at the actual block.
+    for i = 1, #pos.excluded do
+      local h = p.hosts[pos.excluded[i]]
+      if h then
+        self.fix.excludedKeys[#self.fix.excludedKeys + 1] = h.key
+          or ("%d,%d,%d"):format(math.floor(h[1]), math.floor(h[2]), math.floor(h[3]))
+      end
+    end
+    self.stats.fixes = self.stats.fixes + 1
+    self.stats.lastTowers = pos.used
+    self.stats.lastRMS = pos.rms
+    self.stats.lastQuality = pos.quality
+    if #pos.excluded > 0 then self.stats.excluded = self.stats.excluded + 1 end
+    self.reason = nil
+    return true
+  end
+
+  -- Call regularly (from your main loop). Starts pings on schedule, gives
+  -- up on a ping that has run out of time, and expires stale fixes.
+  function self:update()
+    local ok, err = pcall(function()
+      self:attach()
+      local now = os.clock()
+      local p = self.pending
+      if p then
+        if p.solved then
+          self.pending = nil
+        elseif now - p.at > cfg.window then
+          -- Window closed. One last look at what arrived.
+          if not self:attempt() then
+            self.stats.missed = self.stats.missed + 1
+            self.reason = p.reason or ("only " .. #p.hosts .. " tower(s) answered")
+          end
+          self.pending = nil
+        end
+      end
+      if not self.pending then
+        local since = self.lastPing and (now - self.lastPing) or 1e9
+        if since >= cfg.interval then
+          if not self:request() then
+            self.reason = self.reason or "cannot ping"
+          end
+        end
+      end
+    end)
+    if not ok then self.reason = "engine error: " .. tostring(err) end
+  end
+
+  -- Non-blocking: the newest validated fix plus its age and quality.
+  -- Returns x, y, z, meta. `meta.stale` is set once the fix is older than
+  -- cfg.maxAge.
+  function self:get()
+    local f = self.fix
+    if not f then return nil, tostring(self.reason or "no fix yet") end
+    local age = os.clock() - f.t
+    return f.x, f.y, f.z, {
+      age = age,
+      stale = age > cfg.maxAge,
+      quality = f.quality,
+      rms = f.rms,
+      towers = f.towers,
+      seen = f.seen,
+      excluded = f.excludedKeys,
+      geometry = f.geometry,
+    }
+  end
+
+  -- Blocking convenience for one-off use (setup, self-check). Yields, so
+  -- it must run in a coroutine that is not the modem pump; while it waits
+  -- the pump keeps feeding this engine.
+  function self:waitForFix(maxWait)
+    local deadline = os.clock() + (maxWait or cfg.window + 0.5)
+    self:request()
+    while os.clock() < deadline do
+      self:update()
+      local x, y, z, meta = self:get()
+      if x and not meta.stale and meta.age <= (maxWait or cfg.maxAge) then return x, y, z, meta end
+      sleep(0.1)
+    end
+    return nil, tostring(self.reason or "timed out")
+  end
+
+  -- Human-readable one-liner for a status screen.
+  function self:status()
+    local f = self.fix
+    if not f then return "GPS: " .. tostring(self.reason or "no fix yet") end
+    local age = os.clock() - f.t
+    return ("GPS: X %d  Y %d  Z %d  (%s, %d towers, layout %d%%, %.0fms ago)"):format(
+      math.floor(f.x + 0.5), math.floor(f.y + 0.5), math.floor(f.z + 0.5),
+      f.quality, f.towers, math.floor((f.geometry or 0) * 100), age * 1000)
+  end
+
+  -- Towers this computer has heard from, for the website registry.
+  function self:towerList()
+    local list = {}
+    for _, t in pairs(self.towers) do
+      list[#list + 1] = { x = t.x, y = t.y, z = t.z, seen = t.seen }
+    end
+    table.sort(list, function(a, b) return a.seen > b.seen end)
+    return list
+  end
+
+  -- Counters plus the tower registry. (Named getStats, not stats, so it
+  -- cannot collide with the self.stats field above.)
+  function self:getStats() return self.stats, self.towers end
+
+  return self
+end
+
+-- ------------------------------------------------------------
+-- Diagnostics
+-- ------------------------------------------------------------
+
+-- Explain, in plain language, why fixes are or are not working. Used by
+-- the programs' first-boot self-check.
+function diagnose(engine)
+  local lines = {}
+  local modems = wirelessModems()
+  if #modems == 0 then
+    lines[#lines + 1] = "FAIL: no wireless modem attached."
+    lines[#lines + 1] = "      Attach a wireless (or ender) modem to this computer."
+    return lines, false
+  end
+  lines[#lines + 1] = ("Modem on '%s'%s"):format(
+    modems[1].side, (#modems > 1 and (" (" .. #modems .. " wireless modems attached)") or ""))
+  lines[#lines + 1] = ("Reply channel: %d (private to this computer)"):format(replyChannel(
+    (os.getComputerID and os.getComputerID()) or 0))
+
+  local x, y, z, meta = engine:waitForFix(engine.cfg.window + 0.6)
+  if x then
+    lines[#lines + 1] = ("OK: position %d, %d, %d"):format(
+      math.floor(x + 0.5), math.floor(y + 0.5), math.floor(z + 0.5))
+    lines[#lines + 1] = ("    %d tower(s) used, quality '%s', layout %d%%, residual %.3f"):format(
+      meta.towers, meta.quality, math.floor((meta.geometry or 0) * 100), meta.rms)
+    if meta.excluded and #meta.excluded > 0 then
+      lines[#lines + 1] = "    Excluded (inconsistent): " .. table.concat(meta.excluded, "  ")
+    end
+    if #engine:towerList() < 4 then
+      lines[#lines + 1] = "WARNING: fewer than four towers heard."
+      lines[#lines + 1] = "         Four are needed, with at least one off the plane"
+      lines[#lines + 1] = "         of the others (a different height)."
+    end
+    return lines, true
+  end
+
+  lines[#lines + 1] = "FAIL: " .. tostring(z or "no fix")
+  local towers = engine:towerList()
+  if #towers == 0 then
+    lines[#lines + 1] = "      No tower answered. Towers must run a GPS host"
+    lines[#lines + 1] = "      program, stay chunk-loaded, and be within range"
+    lines[#lines + 1] = "      (64 blocks, or up to 384 above y=96)."
+  else
+    lines[#lines + 1] = ("      %d tower(s) answered but the geometry is not"):format(#towers)
+    lines[#lines + 1] = "      solvable. Place at least one tower well above or"
+    lines[#lines + 1] = "      below the others, and spread them far apart."
+  end
+  return lines, false
+end

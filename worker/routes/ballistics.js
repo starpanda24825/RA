@@ -35,6 +35,37 @@ export async function listCannons(request, env) {
   });
 }
 
+// GET /api/ballistics/towers → { towers: [...] }
+// The GPS tower registry: every tower any cannon has reported hearing, with
+// how often it has been seen and how often it had to be excluded for not
+// fitting the rest of the network. Towers are written from the CC poll, so
+// this is a read-only view for the GPS Network tab.
+export async function listTowers(request, env) {
+  const auth = await requireBallistics(request, env);
+  if (auth.error) return auth.error;
+  // Telemetry: an unapplied migration must not break the page, so a missing
+  // table simply reads as "no towers yet".
+  let rows = [];
+  try {
+    rows = await store.listGpsTowers(env);
+  } catch (err) {
+    console.warn('Could not list GPS towers (run migration 0015?)', err);
+  }
+  const towers = (rows || []).map((t) => ({
+    id:        t.id,
+    key:       t.tower_key,
+    x:         Number(t.x),
+    y:         Number(t.y),
+    z:         Number(t.z),
+    sightings: Number(t.sightings) || 0,
+    excluded:  Number(t.excluded_count) || 0,
+    reportedBy: t.reported_by || '',
+    firstSeenAt: t.first_seen_at,
+    lastSeenAt:  t.last_seen_at,
+  }));
+  return json({ towers });
+}
+
 // POST /api/ballistics/cannons/:id/accept — approve a pending request.
 export async function acceptCannon(request, env, id) {
   const auth = await requireBallistics(request, env);

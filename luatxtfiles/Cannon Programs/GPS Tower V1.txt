@@ -1,0 +1,213 @@
+-- ============================================================
+-- GPS Tower — Regnum Aeternum
+-- ============================================================
+--
+-- A lean, drop-in stand-in for ComputerCraft's stock `gps host`.
+--
+-- WHY REPLACE THE STOCK HOST?
+--   Stock `gps host` redraws its terminal on EVERY request it answers — a
+--   cursor reposition plus a print of a running counter:
+--
+--       nServed = nServed + 1
+--       if nServed > 1 then term.setCursorPos(1, y - 1) end
+--       print(nServed .. " GPS requests served")
+--
+--   Drawing to the terminal is one of the more expensive things a CC
+--   computer can do, and a computer only gets about 5 ms of execution per
+--   world tick. On a busy network — every cannon, every ship beacon and
+--   every receiver pinging once a second — the towers burn a real slice of
+--   that budget redrawing a counter, and a tower that overruns its budget is
+--   paused and answers late or not at all. That is one of the reasons a large
+--   network "lags" even though nothing is actually wrong with the radio.
+--
+--   This program speaks exactly the same protocol but redraws its status line
+--   at most once every STATUS_INTERVAL seconds, no matter how many requests
+--   arrive in between.
+--
+-- PROTOCOL — identical to stock, so the two are interchangeable
+--   * Listen on channel 65534 (gps.CHANNEL_GPS).
+--   * On a message whose payload is the string "PING", reply with the table
+--     { x, y, z } on the reply channel the sender asked for.
+--   Nothing else is sent, ever. This means:
+--     - stock `gps.locate()` still works against this tower,
+--     - stock `gps host` and this program can be mixed freely,
+--     - and the leaner gpsnet client works with either.
+--
+-- INSTALL / RUN
+--   It is a daemon: put it on the tower computer as `startup.lua`.
+--
+--       shell.run("gpstower", x, y, z)
+--
+--   or by hand to test:
+--
+--       gpstower <x> <y> <z>
+--
+--   The coordinates must be those of THE BLOCK THE MODEM IS ON, in whole
+--   blocks. That is the point CC measures every distance from, so a tower
+--   given the wrong block quietly ruins every fix in range. Stand on the
+--   tower and read F3, or dig out the modem and read the block coordinates
+--   directly.
+--
+-- TOWER PLACEMENT
+--   * Four or more towers are needed, and at least one must be well off the
+--     plane of the others — a tower, a hill, a shaft, a mountain. A set of
+--     towers all at one height cannot determine height at all (your mirror
+--     image fits the measurements just as well), and every client will say so
+--     rather than guess.
+--   * Spread them far apart; clustered towers cost accuracy.
+--   * Above y=96 the wireless range climbs from 64 blocks to 384, so a raised
+--     tower covers far more ground.
+--   * Keep the chunk loaded. An unloaded tower silently stops answering.
+-- ============================================================
+
+local VERSION = "1.0"
+
+-- CC's standard GPS channel. Towers must listen here; clients ping here.
+local GPS_CHANNEL = 65534
+
+-- How often the status screen redraws. This is the only drawing this program
+-- ever does, and it is deliberately slow.
+local STATUS_INTERVAL = 5
+
+local tArgs = { ... }
+
+local function usage()
+  print("GPS Tower " .. VERSION)
+  print("")
+  print("Usage:  gpstower <x> <y> <z>")
+  print("")
+  print("Acts as a GPS host: it answers position pings on channel " .. GPS_CHANNEL)
+  print("so that computers, ships and cannons can work out where they are.")
+  print("")
+  print("Give it the coordinates of the block the MODEM is on, in whole")
+  print("blocks — that is the point every distance is measured from, so a")
+  print("tower given the wrong block quietly ruins every fix in range.")
+  print("")
+  print("Recommended startup.lua:")
+  print('    shell.run("gpstower", ' .. 'x, y, z' .. ")")
+end
+
+local x = tonumber(tArgs[1])
+local y = tonumber(tArgs[2])
+local z = tonumber(tArgs[3])
+if not (x and y and z) then
+  usage()
+  return
+end
+-- Whole blocks only. A fractional coordinate would put a constant offset on
+-- every distance measured from this tower, which nothing downstream could
+-- detect or correct for.
+x, y, z = math.floor(x + 0.5), math.floor(y + 0.5), math.floor(z + 0.5)
+
+-- ------------------------------------------------------------
+-- Helpers
+-- ------------------------------------------------------------
+
+local function findWirelessModem()
+  local names = peripheral.getNames()
+  for i = 1, #names do
+    local side = names[i]
+    if peripheral.getType(side) == "modem" then
+      local ok, m = pcall(peripheral.wrap, side)
+      if ok and m then
+        local okw, wireless = pcall(m.isWireless)
+        if okw and wireless then return m, side end
+      end
+    end
+  end
+  return nil, nil
+end
+
+local function formatUptime(seconds)
+  seconds = math.max(0, math.floor(seconds))
+  local h = math.floor(seconds / 3600)
+  local m = math.floor((seconds % 3600) / 60)
+  local s = seconds % 60
+  return ("%d:%02d:%02d"):format(h, m, s)
+end
+
+-- ------------------------------------------------------------
+-- Modem attachment
+-- ------------------------------------------------------------
+-- Called at boot, whenever a peripheral is added or removed, and on every
+-- status tick, so yanking or upgrading a modem needs no reboot.
+
+local modem, modemSide = nil, nil
+local served = 0
+local started = os.clock()
+
+local function attach()
+  local found, side = findWirelessModem()
+  if not found then
+    if modem then pcall(function() modem.close(GPS_CHANNEL) end) end
+    modem, modemSide = nil, nil
+    return false
+  end
+  if modemSide ~= side then
+    if modem then pcall(function() modem.close(GPS_CHANNEL) end) end
+    modem, modemSide = found, side
+    local ok = pcall(function() modem.open(GPS_CHANNEL) end)
+    if not ok then
+      modem, modemSide = nil, nil
+      return false
+    end
+  end
+  return true
+end
+
+local function drawStatus()
+  term.clear()
+  term.setCursorPos(1, 1)
+  print("=== GPS Tower " .. VERSION .. " ===")
+  print("Position:  " .. x .. ", " .. y .. ", " .. z)
+  if modemSide then
+    print("Modem:     " .. modemSide .. "  (listening on channel " .. GPS_CHANNEL .. ")")
+  else
+    print("Modem:     none attached")
+  end
+  print("Served:    " .. served .. " request(s)")
+  print("Uptime:    " .. formatUptime(os.clock() - started))
+  print("")
+  if modemSide then
+    print("Answering pings. This screen refreshes every " .. STATUS_INTERVAL .. "s; it")
+    print("never redraws per request, which keeps this tower fast when the")
+    print("network is busy.")
+  else
+    print("Waiting for a wireless modem — attach one and it will be picked")
+    print("up automatically.")
+  end
+end
+
+-- ------------------------------------------------------------
+-- Serve
+-- ------------------------------------------------------------
+
+attach()
+drawStatus()
+
+local statusTimer = os.startTimer(STATUS_INTERVAL)
+
+while true do
+  local event, p1, p2, p3, p4, p5 = os.pullEvent()
+
+  if event == "modem_message" then
+    local msgSide, channel, replyChannel, message, distance = p1, p2, p3, p4, p5
+    -- Only answer pings that arrived on our own modem (with one modem that is
+    -- always the case, but it keeps the reply's distance honest if a second
+    -- modem is ever fitted), on the GPS channel, carrying the exact word
+    -- "PING", and with a distance present (a wired modem reports none).
+    if modem and msgSide == modemSide and channel == GPS_CHANNEL
+       and message == "PING" and distance then
+      served = served + 1
+      pcall(function() modem.transmit(replyChannel, GPS_CHANNEL, { x, y, z }) end)
+    end
+
+  elseif event == "timer" and p1 == statusTimer then
+    attach()
+    drawStatus()
+    statusTimer = os.startTimer(STATUS_INTERVAL)
+
+  elseif event == "peripheral" or event == "peripheral_detach" then
+    attach()
+  end
+end

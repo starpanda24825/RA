@@ -13,15 +13,17 @@
 --      This is what lets a CC computer talk to a cannon mount.
 --
 -- REQUIRED EXTRAS
---   - A wireless modem on this computer, and a GPS host on the
---     network. The world is already set up so that gps.locate(2)
---     returns this computer's coordinates — that is how the website
---     knows where the moving cannon is on the map.
+--   - A wireless modem on this computer.
+--   - The GPS Network library installed next to this program as
+--     "gpsnet.lua", and FOUR OR MORE GPS towers within range running the
+--     "GPS Tower" program (stock "gps host" towers work too). That is
+--     how the website knows where the moving cannon is on the map.
 --   - For ship heading: TWO more computers running the "Sublevel Ship
 --     GPS" program — one at the FRONT (bow) and one at the BACK
---     (stern), as far apart as possible along the fore-aft centerline.
---     This cannon computer listens to both and derives the ship's
---     orientation.
+--     (stern), placed as far apart as the ship allows along the
+--     fore-aft centerline. This cannon computer listens to both and
+--     derives the ship's orientation. Their separation is the single
+--     biggest factor in how accurate that heading is.
 --
 -- BUILD
 --   1. Build your cannon on the ship's cannon mount (NOT the fixed
@@ -51,11 +53,12 @@
 --        a) Polls for fire commands (yaw + pitch). On a command it
 --           runs the same sequence as static cannons:
 --              disassemble → assemble → aim → fire → disassemble
---        b) A concurrent GPS worker keeps calling gps.locate() and the
+--        b) A concurrent GPS engine keeps a validated fix flowing, and the
 --           main loop pushes the freshest coordinates to the website
---           roughly every 3 seconds, so its dot on the map follows the
---           cannon as the ship moves. Until the first real fix is found
---           it never reports a position, so the dot never snaps to 0,0,0.
+--           roughly every second — along with the tower count, layout
+--           quality and fix age, so the GPS page can show how healthy the
+--           tower network is. Until the first real fix is found it never
+--           reports a position, so the dot never snaps to 0,0,0.
 --
 -- DIRECTION FACED WHEN ASSEMBLED ("facing")
 --   Same convention as the static Cannon Computer:
@@ -84,10 +87,16 @@ local POLL_PATH = "/api/ballistics/cc/poll"
 -- Mount peripheral type from cbcperipheral.
 local MOUNT_TYPE = "cbc_cannon_mount"
 
--- How long (seconds) to let gps.locate run per fix attempt. GPS runs in a
--- concurrent worker (see bottom of file), so this blocks that worker — not
--- the poll / fire loop.
-local GPS_TIMEOUT = 2
+-- GPS settings for the gpsnet engine. The engine runs in its own coroutine
+-- and never blocks the poll / fire loop, so these only control how often a
+-- fresh fix is attempted and how long it collects tower replies for.
+local GPS_INTERVAL = 1     -- seconds between automatic fix attempts
+local GPS_WINDOW   = 0.6   -- seconds to wait for tower replies before giving up
+
+-- How often (seconds) this computer tells the ship's two GPS beacons to take
+-- a reading at the same instant. See the ship-heading section for why that
+-- matters more than raw GPS precision.
+local SHIP_SYNC_INTERVAL = 1.5
 
 -- Sequence timing (seconds). reloadTime is user-configurable and set during
 -- first-boot setup; its placement depends on reloadType (auto-loader reloads
@@ -306,99 +315,83 @@ end
 -- ------------------------------------------------------------
 -- GPS location
 -- ------------------------------------------------------------
--- GPS runs in its own worker coroutine (see the bottom of this file) so a
--- fresh fix is maintained continuously, even while the main loop is busy
--- polling the website or running the multi-second fire sequence.
+-- Positions come from the gpsnet engine — the "GPS Network" library, which
+-- must be installed next to this program as gpsnet.lua. It replaces the
+-- stock gps.locate() with something far better behaved:
+--
+--   * It solves the WHOLE tower set at once (least squares) instead of taking
+--     three towers and hoping, so a fix normally lands in four replies rather
+--     than running out a two-second timeout.
+--   * It checks the answer against its own residuals and throws out any tower
+--     that does not fit, so a tower that has been moved, mis-keyed or is
+--     answering from somewhere else is DETECTED instead of quietly bending
+--     the position — and with it the aim.
+--   * Replies come back on a private channel, so this computer hears its own
+--     towers and nothing else. Stock gps.locate() asks for replies on the
+--     shared channel, which means every receiver in range is sent every
+--     reply; that is fine for a handful of computers and hopeless for a
+--     network.
+--   * The newest fix is cached, so nothing ever blocks waiting for one. The
+--     main loop reads a position and its age and carries on.
+--
+-- A fix needs FOUR OR MORE towers, at least one of them clearly off the plane
+-- of the others (a different height). Three towers, or a set of towers all at
+-- one height, cannot determine a position at all; the engine says so rather
+-- than guessing. See the GPS Network file for the details.
 
--- Shared state: gpsWorker() updates this, the main loop reads it.
-local gpsState = {
-  x = nil, y = nil, z = nil,
-  everFixed = false,
-  reason = "Locating…",
-}
-
--- Seconds to wait between GPS fix attempts. Combined with GPS_TIMEOUT this
--- keeps a new fix flowing roughly every 3 seconds (matching the website).
-local GPS_POLL_INTERVAL = 1
-
-local function findWirelessModem()
-  for _, side in ipairs(peripheral.getNames()) do
-    if peripheral.getType(side) == "modem" then
-      local m = peripheral.wrap(side)
-      if m.isWireless and m.isWireless() then
-        return m
-      end
-    end
+local function loadGpsnet()
+  if type(gpsnet) ~= "table" then
+    pcall(os.loadAPI, "gpsnet.lua")
   end
-  return nil
+  if type(gpsnet) ~= "table" then
+    term.setBackgroundColor(colors.black)
+    term.clear()
+    term.setCursorPos(1, 1)
+    term.setTextColor(colors.red)
+    print("GPS Network library missing (gpsnet.lua).")
+    term.setTextColor(colors.white)
+    print("")
+    print("Download the \"GPS Network\" file next to this program as")
+    print("gpsnet.lua:")
+    print("")
+    print("    wget https://raw.githubusercontent.com/starpanda24825/RA/")
+    print("         refs/heads/main/luatxtfiles/Cannon%20Programs/")
+    print("         GPS%20Network%20V1.txt gpsnet.lua")
+    print("")
+    print("Press any key to exit.")
+    os.pullEvent("key")
+    error("gpsnet.lua not installed", 0)
+  end
+  return gpsnet
 end
 
--- One GPS fix attempt. On success stores the fix in gpsState; on failure
--- records a human-readable reason for the status screen.
-local function gpsTick()
-  if not (gps and gps.locate) then
-    gpsState.reason = "gps API unavailable"
-    return
-  end
-  if not findWirelessModem() then
-    gpsState.reason = "No wireless modem attached"
-    return
-  end
-  local ok, x, y, z = pcall(gps.locate, GPS_TIMEOUT)
-  if ok and x ~= nil and y ~= nil and z ~= nil then
-    gpsState.x, gpsState.y, gpsState.z = x, y, z
-    gpsState.everFixed = true
-    gpsState.reason = nil
-  else
-    gpsState.reason = "No GPS fix — hosts out of range or not loaded"
-  end
-end
+local gpsnet = loadGpsnet()
+local engine = gpsnet.new({ interval = GPS_INTERVAL, window = GPS_WINDOW, maxAge = 4 })
 
--- Concurrent GPS worker. Never throws, so one bad fix attempt can't take
--- down the whole daemon.
-local function gpsWorker()
+-- Concurrent GPS scheduler. The modem itself is pumped by networkPump()
+-- below; this only drives the ping schedule and expires stale fixes, and it
+-- never throws, so one bad attempt cannot take the daemon down.
+local function gpsScheduler()
   while true do
-    local ok, err = pcall(gpsTick)
-    if not ok then
-      gpsState.reason = "GPS error: " .. tostring(err)
-    end
-    sleep(GPS_POLL_INTERVAL)
+    local ok, err = pcall(function() engine:update() end)
+    if not ok then engine.reason = "GPS error: " .. tostring(err) end
+    sleep(0.25)
   end
 end
 
--- First-boot GPS self-check: prints the exact reason GPS is (or isn't)
--- working before the daemon loop takes over the screen. A successful fix is
--- reused as the daemon's starting position so it never flashes "no fix yet".
+-- First-boot GPS self-check. It runs with the modem coroutine already live
+-- (see the bottom of this file) so it can genuinely obtain a fix, and it
+-- prints the specific reason a fix is or is not available.
 local function gpsSelfCheck()
+  term.setBackgroundColor(colors.black)
   term.clear()
   term.setCursorPos(1, 1)
+  term.setTextColor(colors.yellow)
   print("=== GPS self-check ===")
-  if not (gps and gps.locate) then
-    print("FAIL: the gps API is unavailable on this computer.")
-    return
-  end
-  if not findWirelessModem() then
-    print("FAIL: no wireless modem attached.")
-    print("       Attach a wireless (or ender) modem so GPS can work.")
-    return
-  end
-  -- debug=true makes CC print its own diagnostics (the exact reason a fix
-  -- could not be established, distances to each host, etc.).
-  local ok, x, y, z = pcall(gps.locate, GPS_TIMEOUT, true)
-  if not ok then
-    print("FAIL: gps.locate errored: " .. tostring(x))
-    return
-  end
-  if x and y and z then
-    gpsState.x, gpsState.y, gpsState.z = x, y, z
-    gpsState.everFixed = true
-    gpsState.reason = nil
-    print("OK: position is " .. tostring(x) .. ", " .. tostring(y) .. ", " .. tostring(z))
-  else
-    print("FAIL: gps.locate could not establish a position.")
-    print("       GPS hosts must run 'gps host x y z', stay chunk-loaded,")
-    print("       and be within wireless range of this computer.")
-  end
+  term.setTextColor(colors.white)
+  local lines, ok = gpsnet.diagnose(engine)
+  for _, line in ipairs(lines) do print(line) end
+  return ok
 end
 
 -- ------------------------------------------------------------
@@ -418,8 +411,16 @@ local SHIP_GPS_CHANNEL = 4120   -- must match the Ship GPS program
 -- the heading (and therefore the aim) would belong to the wrong vehicle.
 local myCannonId = nil
 
-local frontX, frontY, frontZ = nil, nil, nil
-local backX,  backY,  backZ  = nil, nil, nil
+-- The two beacons' most recent accepted fixes. Each carries how old its fix
+-- was when the beacon sent it (age) and which SYNC tick it answered (seq), so
+-- the heading can be judged as well as calculated.
+local BEACON_MAX_AGE = 8     -- seconds before a beacon's fix is too old to use
+local SYNC_TOLERANCE = 0.75  -- seconds of mismatch worth warning about
+
+local front = nil   -- { x, y, z, age, seq, at }
+local back  = nil
+
+local gpsNetError = nil
 
 -- math.atan2 exists in CC:Tweaked (Lua 5.1 semantics), but fall back to the
 -- two-argument math.atan so heading math can't silently break on an upgrade.
@@ -428,44 +429,145 @@ if not atan2 and math.atan then
   atan2 = function(y, x) return math.atan(y, x) end
 end
 
+-- Ship heading, as the direction from the stern fix to the bow fix, in the
+-- website's convention (0 = south, 90 = west, 180 = north, 270 = east).
+--
+-- Also returns how far apart in time the two fixes were taken. The heading is
+-- only exact if both points describe the SAME instant: if the ship turned
+-- between them, the bow-to-stern line is rotated by roughly half the turn
+-- rate times that gap. A ship turning at 10°/s with fixes a second apart is
+-- about 5° out, which matters a great deal at long range. This computer
+-- broadcasts a SYNC tick so both beacons sample together; the returned skew
+-- is the number that says whether they did.
 local function computeShipYaw()
-  if frontX == nil or backX == nil or not atan2 then return nil end
-  local dx = frontX - backX
-  local dz = frontZ - backZ
-  if math.abs(dx) < 0.001 and math.abs(dz) < 0.001 then return nil end
+  if not front or not back or not atan2 then return nil, nil end
+  local dx = front.x - back.x
+  local dz = front.z - back.z
+  if math.abs(dx) < 0.001 and math.abs(dz) < 0.001 then return nil, nil end
+
+  local now = os.clock()
+  if (now - front.at) > BEACON_MAX_AGE or (now - back.at) > BEACON_MAX_AGE then
+    return nil, nil
+  end
+
   local deg = math.deg(atan2(-dx, dz))
-  return ((deg % 360) + 360) % 360
+  local yaw = ((deg % 360) + 360) % 360
+
+  local skew
+  if front.seq and back.seq and front.seq == back.seq then
+    -- Both answered the same tick, so the gap is just the difference in how
+    -- long each beacon's round trip took — a fraction of a tick.
+    skew = math.abs((front.age or 0) - (back.age or 0))
+  else
+    -- Different ticks, or an older beacon that sends no seq: fall back to the
+    -- gap between when the two broadcasts arrived here.
+    skew = math.abs(front.at - back.at)
+  end
+  return yaw, skew
 end
 
--- Concurrent listener for the front/back GPS computers' broadcasts. Only
--- beacons addressed to this cannon (data.cannonId == myCannonId) are accepted.
--- The body is pcall'd so a detached/replaced modem restarts the listener
--- instead of taking the whole daemon down (parallel.waitForAll rethrows).
-local function shipGpsListener()
+-- Concurrent modem pump. ONE coroutine owns the modem and deals with
+-- everything that arrives on it:
+--
+--   * GPS replies are handed straight to the engine;
+--   * broadcasts from the ship's two GPS computers are recorded, but only
+--     when they are addressed to THIS cannon (data.cannonId == myCannonId).
+--     Without that check two ships within wireless range would overwrite each
+--     other's front/back fixes, and the aim would belong to the wrong
+--     vehicle;
+--   * SYNC ticks from the website are ignored here (they are ours).
+--
+-- The body is pcall'd so a detached or replaced modem restarts the pump
+-- rather than taking the whole daemon down (parallel.waitForAll rethrows).
+local function networkPump()
   while true do
-    local ok = pcall(function()
-      local modem = findWirelessModem()
-      if modem then
-        modem.open(SHIP_GPS_CHANNEL)
-        while true do
-          local e, side, chan, replyChan, msg = os.pullEvent("modem_message")
-          if e == "modem_message" and chan == SHIP_GPS_CHANNEL then
-            local parsed, data = pcall(textutils.unserializeJSON, msg)
-            if parsed and type(data) == "table" and data.type == "ship_gps"
-               and data.x and data.z and myCannonId ~= nil
-               and tonumber(data.cannonId) == tonumber(myCannonId) then
-              if data.role == "back" then
-                backX, backY, backZ = data.x, data.y, data.z
-              else
-                frontX, frontY, frontZ = data.x, data.y, data.z
-              end
-            end
+    local ok, err = pcall(function()
+      engine:attach()
+      engine:openChannel(SHIP_GPS_CHANNEL)
+      while true do
+        local _, side, channel, replyChannel, message, distance = os.pullEvent("modem_message")
+        -- Argument order is (side, channel, message, distance). replyChannel
+        -- is NOT part of it: the engine's channel is already its own, so it
+        -- filters on `channel` alone.
+        engine:onMessage(side, channel, message, distance)
+
+        if channel == SHIP_GPS_CHANNEL and type(message) == "string" then
+          local parsed, data = pcall(textutils.unserializeJSON, message)
+          if parsed and type(data) == "table" and data.type == "ship_gps"
+             and data.x and data.z and myCannonId ~= nil
+             and tonumber(data.cannonId) == tonumber(myCannonId) then
+            local fix = {
+              x = tonumber(data.x), y = tonumber(data.y), z = tonumber(data.z),
+              age = tonumber(data.age), seq = tonumber(data.seq),
+              at = os.clock(),
+            }
+            if data.role == "back" then back = fix else front = fix end
           end
         end
       end
     end)
-    sleep(ok and 5 or 1)
+    gpsNetError = ok and nil or tostring(err)
+    sleep(1)
   end
+end
+
+-- Tell both beacons to take a reading at the same instant. Each answers a
+-- SYNC tick immediately, so their positions come from one moment and the
+-- heading between them is a rigid-body measurement rather than two samples of
+-- a turning ship. One small message per SHIP_SYNC_INTERVAL is all it costs.
+local syncSeq = 0
+local function shipSyncBroadcaster()
+  while true do
+    if engine:openChannel(SHIP_GPS_CHANNEL) and engine.modem then
+      syncSeq = syncSeq + 1
+      local payload = textutils.serializeJSON({ type = "ship_sync", seq = syncSeq })
+      pcall(function()
+        engine.modem.transmit(SHIP_GPS_CHANNEL, SHIP_GPS_CHANNEL, payload)
+      end)
+    end
+    sleep(SHIP_SYNC_INTERVAL)
+  end
+end
+
+-- A compact health summary of the GPS network, piggy-backed on the poll we
+-- already make every second. That way the website can show the state of the
+-- tower network without a single extra request, however big the network gets.
+-- The tower list itself is only sent when it actually changes.
+local towerSignature = nil
+local towersSentAt = 0
+
+local function gpsReport(meta, skew)
+  local report = { reason = tostring(engine.reason or "") }
+  if meta then
+    report.ok       = not meta.stale
+    report.quality  = meta.quality
+    report.geometry = meta.geometry
+    report.residual = meta.rms
+    report.towers   = meta.towers
+    report.seen     = meta.seen
+    report.age      = meta.age
+    report.stale    = meta.stale
+    report.shipSkew = skew
+    if meta.excluded and #meta.excluded > 0 then report.excluded = meta.excluded end
+    report.reason = (engine.reason ~= nil) and tostring(engine.reason) or nil
+  else
+    report.ok = false
+  end
+
+  local list = engine:towerList()
+  local parts = {}
+  for i = 1, #list do
+    parts[i] = list[i].x .. "," .. list[i].y .. "," .. list[i].z
+  end
+  table.sort(parts)
+  local signature = table.concat(parts, ";")
+  if signature ~= towerSignature or (os.clock() - towersSentAt) > 60 then
+    towerSignature = signature
+    towersSentAt = os.clock()
+    report.towerList = list
+    report.towerSignature = signature
+  end
+  return report
 end
 
 -- ------------------------------------------------------------
@@ -625,10 +727,6 @@ if not readConfig() then
   loadConfig()
 end
 
--- Print a clear GPS diagnostic before the daemon loop takes over the screen.
-gpsSelfCheck()
-sleep(1)
-
 local lastSequence = 0
 
 local function mainLoop()
@@ -642,15 +740,16 @@ local function mainLoop()
       pcall(function() curPitch = mount.getPitch() or 0 end)
     end
 
-    -- Read the latest fix from the concurrent GPS worker. If we have never
-    -- obtained a fix, x/y/z stay nil so the website keeps its last known
-    -- position instead of snapping the cannon's dot to 0,0,0.
-    local gpsOk = gpsState.everFixed
-    local shipYaw = computeShipYaw()
+    -- Read the newest validated fix from the GPS engine. If we have never had
+    -- one, x/y/z stay nil so the website keeps its last known position instead
+    -- of snapping the cannon's dot to 0,0,0.
+    local gpsX, gpsY, gpsZ, gpsMeta = engine:get()
+    local gpsOk = gpsX ~= nil
+    local shipYaw, shipSkew = computeShipYaw()
 
     local body = {
       computerId = computerId,
-      x = gpsState.x, y = gpsState.y, z = gpsState.z,
+      x = gpsX, y = gpsY, z = gpsZ,
       gpsOk = gpsOk,
       shipYaw = shipYaw,
       length = cfg.length,
@@ -660,6 +759,7 @@ local function mainLoop()
       yaw = curYaw,
       pitch = curPitch,
       sequence = lastSequence,
+      gps = gpsReport(gpsMeta, shipSkew),
     }
 
     local resp = httpPost(POLL_PATH, body)
@@ -672,17 +772,30 @@ local function mainLoop()
 
     table.insert(lines, "Sublevel Cannon Computer")
     table.insert(lines, "Computer ID: " .. computerId)
-    if gpsState.x ~= nil then
-      local stale = gpsState.reason ~= nil
-      table.insert(lines, "GPS: X " .. tostring(gpsState.x) .. "  Y " .. tostring(gpsState.y) .. "  Z " .. tostring(gpsState.z) .. (stale and " (stale)" or ""))
+    if gpsX ~= nil then
+      table.insert(lines, ("GPS: X %d  Y %d  Z %d  (%d towers, %s, layout %d%%, %.1fs old)"):format(
+        math.floor(gpsX + 0.5), math.floor(gpsY + 0.5), math.floor(gpsZ + 0.5),
+        gpsMeta.towers, gpsMeta.quality, math.floor((gpsMeta.geometry or 0) * 100), gpsMeta.age))
     else
       table.insert(lines, "GPS: no fix yet")
+      table.insert(lines, "GPS issue: " .. tostring(engine.reason or "locating…"))
     end
-    if gpsState.reason then
-      table.insert(lines, "GPS issue: " .. gpsState.reason)
+    if gpsMeta and gpsMeta.excluded and #gpsMeta.excluded > 0 then
+      table.insert(lines, "GPS: ignoring tower at " .. table.concat(gpsMeta.excluded, ", "))
+    end
+    if gpsNetError then
+      table.insert(lines, "Network: " .. gpsNetError)
     end
     if shipYaw then
-      table.insert(lines, "Ship heading: " .. string.format("%.1f", shipYaw) .. "°")
+      local skewNote = ""
+      if shipSkew then
+        if shipSkew <= SYNC_TOLERANCE then
+          skewNote = string.format(" (beacons synced %.2fs)", shipSkew)
+        else
+          skewNote = string.format(" (WARNING: beacons %.2fs apart)", shipSkew)
+        end
+      end
+      table.insert(lines, "Ship heading: " .. string.format("%.1f", shipYaw) .. "°" .. skewNote)
     elseif myCannonId == nil then
       table.insert(lines, "Ship heading: waiting for registry id…")
     else
@@ -730,7 +843,21 @@ local function mainLoop()
   end
 end
 
--- Run the GPS worker, the ship-heading listener, and the poll/fire loop at
--- the same time. Each gets its own coroutine; gps.locate(), the modem
--- listener and http.post() all yield, so none blocks the others.
-parallel.waitForAll(gpsWorker, shipGpsListener, mainLoop)
+-- Four coroutines: one runs the GPS engine's schedule, one owns the modem
+-- and everything arriving on it, one tells the ship's beacons when to sample,
+-- and one polls the website and fires. Every one of them yields rather than
+-- blocking, so a slow tower or a slow website can never stall firing.
+--
+-- The self-check runs first, with the modem coroutine already live, so it can
+-- genuinely obtain a fix instead of just timing out.
+local function bootSequence()
+  local ok = gpsSelfCheck()
+  if not ok then
+    print("")
+    print("The daemon will keep retrying in the background.")
+  end
+  sleep(3)
+  mainLoop()
+end
+
+parallel.waitForAll(networkPump, gpsScheduler, shipSyncBroadcaster, bootSequence)
