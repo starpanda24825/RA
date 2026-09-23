@@ -49,6 +49,23 @@
 --      that is fresh enough. Pings run on their own schedule in a
 --      background coroutine.
 --
+-- STAYING ATTACHED
+--   A receiver's channel list lives on the modem and can be changed from
+--   underneath it — another program on the same computer, rednet, or a modem
+--   that was broken and replaced. A receiver that only opens its private
+--   channel once then goes deaf for the rest of its uptime, and every tower
+--   in range looks silent no matter what the towers do. So `attach()`
+--   re-wraps the modem and VERIFIES (modem.isOpen) that its own channel and
+--   every extra channel opened on it really are open, re-opening whatever is
+--   not, and the tower registry tracks liveness so a tower that stops
+--   answering stops being reported instead of being remembered for ever.
+--
+--   The reply window is adaptive too. A tower on a loaded chunk can answer
+--   later than the soft window; dropping it every time would make a healthy
+--   tower permanently invisible to a receiver that is simply further behind.
+--   A fix is taken as soon as the reply set is as complete as the last good
+--   one was, and otherwise the engine keeps listening until `windowMax`.
+--
 -- INSTALL
 --   Put this file next to your program as `gpsnet.lua`, then:
 --       os.loadAPI("gpsnet.lua")
@@ -100,7 +117,7 @@
 --     force-load the towers or keep them in a permanently loaded area.
 -- ============================================================
 
-local VERSION = "1.0"
+local VERSION = "1.1"
 
 -- CC's standard GPS channel. Towers listen here and a ping must be sent
 -- on it, so this is not configurable.
@@ -149,8 +166,23 @@ local DEFAULTS = {
   minCond   = 1e-9,
   -- Seconds between automatic pings.
   interval  = 1.0,
-  -- Seconds to keep collecting replies before giving up on a ping.
+  -- Soft window, in seconds: once this much time has passed and the reply set
+  -- is solvable, the fix is taken.
   window    = 0.6,
+  -- Hard window. When the soft window passes with too small a reply set the
+  -- engine keeps listening until this, so a tower that is merely slow (a
+  -- loaded chunk, a busy server tick) is still counted instead of being
+  -- dropped every single time. A tower that is dropped every time is a tower
+  -- that looks silent even though it is answering.
+  windowMax = 2.0,
+  -- How often a pending ping may be re-solved while it is still collecting,
+  -- so a reply that lands mid-window can complete a set that did not solve.
+  retryEvery = 0.3,
+  -- How long a tower stays "live" after its last reply. Towers that have not
+  -- answered for this long are forgotten locally and stop being reported, so
+  -- a tower whose chunk has been unloaded or that has been moved cannot haunt
+  -- the registry (or the exclusion counts) for ever.
+  towerTtl  = 15.0,
   -- A cached fix older than this is reported as stale.
   maxAge    = 3.0,
   -- Fixes need this many towers.
@@ -413,11 +445,17 @@ local function solveSubset(hosts, dists, skip, opts)
            dop = r.dop, used = #h }
 end
 
--- Try the whole measured set, then progressively smaller consistent
--- subsets (one tower dropped, then two, restricted to the worst-fitting
--- candidates so the search stays bounded). This is what turns "a tower
--- has been moved / is mis-keyed / was spoofed" from a corrupt fix into a
--- clean one plus a list of suspects.
+-- Try the whole measured set, then progressively smaller consistent subsets
+-- (one tower dropped, then two, restricted to the worst-fitting candidates so
+-- the search stays bounded). This is what turns "a tower has been moved / is
+-- mis-keyed / was spoofed" from a corrupt fix into a clean one.
+--
+-- The towers left out are reported WITH THAT ONE FIX and nothing more. It is an
+-- observation about where the receiver was standing and what that tower's reply
+-- looked like from there, not a verdict on the tower: from a different position
+-- the same tower may fit perfectly. The website judges these over a time window
+-- for exactly that reason (see migration 0022), so a single exclusion never
+-- brands a tower.
 local function solveNetwork(hosts, dists, prevY, opts)
   local n = #hosts
   local best = nil            -- best (lowest residual) attempt, for the degraded tier
@@ -521,6 +559,34 @@ end
 -- Modem + channel helpers
 -- ------------------------------------------------------------
 
+-- Every modem's side, cheapest possible look: peripheral names and types
+-- only, with no wrapping. `peripheral.wrap` builds a fresh method table, so it
+-- is done only when the engine actually needs a modem — never on the per-tick
+-- path a healthy receiver takes (see attach).
+local function modemSides()
+  local out = {}
+  local names = peripheral.getNames()
+  for i = 1, #names do
+    if peripheral.getType(names[i]) == "modem" then out[#out + 1] = names[i] end
+  end
+  return out
+end
+
+-- The first genuinely WIRELESS modem among these sides, as {side, modem}, or
+-- nil. Wrapping is what separates a wireless modem from a wired one, so this is
+-- the expensive half of the lookup — and the only half that needs doing when
+-- the engine has to (re)acquire a modem.
+local function wrapWireless(sides)
+  for i = 1, #sides do
+    local ok, m = pcall(peripheral.wrap, sides[i])
+    if ok and m then
+      local okw, wireless = pcall(m.isWireless)
+      if okw and wireless then return { side = sides[i], modem = m } end
+    end
+  end
+  return nil
+end
+
 -- Every wireless modem attached to this computer, as {side, modem} pairs.
 local function wirelessModems()
   local out = {}
@@ -536,6 +602,19 @@ local function wirelessModems()
     end
   end
   return out
+end
+
+-- Is `ch` actually open on this modem? Three answers, and the middle one is
+-- the one that matters: true (open), false (not open), nil (the wrapper is
+-- stale — the peripheral is gone and the caller must re-wrap before trusting
+-- anything it says). Used everywhere a channel is assumed to be open, because
+-- a channel can be closed from under us and a receiver that never checks goes
+-- permanently deaf.
+local function channelIsOpen(m, ch)
+  if not m or ch == nil then return false end
+  local ok, open = pcall(m.isOpen, ch)
+  if not ok then return nil end
+  return open == true
 end
 
 -- The private reply channel for a computer id.
@@ -590,26 +669,74 @@ function new(opts)
 
   local id = tonumber(cfg.id) or (os.getComputerID and os.getComputerID()) or 0
 
-  -- Find (or re-find) a modem and make sure our reply channel is open on
-  -- it. Safe to call repeatedly: a modem that has been removed, replaced
-  -- or re-attached is picked up here.
-  function self:attach()
-    local found = wirelessModems()
-    self.multiModem = #found > 1
-    local chosen = nil
-    if cfg.side then
-      for i = 1, #found do
-        if found[i].side == cfg.side then chosen = found[i] end
+  -- Every extra channel the program opened on this modem (ship beacons, a
+  -- vehicle link) is VERIFIED here and re-opened if it has been closed, so one
+  -- channel closed underneath us cannot silence an otherwise healthy receiver.
+  -- Cheap: isOpen calls only, no wrapping.
+  local function ensureExtras()
+    for extra in pairs(self.opened) do
+      if channelIsOpen(self.modem, extra) ~= true then
+        pcall(function() self.modem.open(extra) end)
+        if channelIsOpen(self.modem, extra) ~= true then self.opened[extra] = nil end
       end
     end
-    if not chosen and cfg.modem then
-      chosen = { side = cfg.side or "?", modem = cfg.modem }
-    end
-    if not chosen and #found > 0 then chosen = found[1] end
+  end
 
-    if not chosen then
+  -- Find (or re-find) a modem and make sure our reply channel is open on it.
+  -- Safe — and expected — to call repeatedly: a modem that has been removed,
+  -- replaced or re-attached is picked up here, and a channel that was closed
+  -- underneath us is opened again.
+  --
+  -- The channels are VERIFIED rather than assumed. `open` is a property of the
+  -- modem and anything else on this computer can close it (rednet, another
+  -- program, a broken modem being replaced), and the failure mode used to be a
+  -- receiver that quietly went deaf for the rest of its uptime: every tower in
+  -- the world looked silent, and no amount of reloading a tower changed that.
+  --
+  -- The healthy case does the least possible work, because this runs on every
+  -- update(): the modem we are already holding, on the side we want, with its
+  -- channel verifiably open, is a couple of cheap peripheral calls and nothing
+  -- else — no wrap, no open, no writes.
+  function self:attach()
+    local sides = modemSides()
+    self.multiModem = #sides > 1
+
+    local ch = replyChannel(id)
+    for i = 1, #sides do
+      local side = sides[i]
+      -- Fast path. `cfg.side`, if given, must match; otherwise any side we are
+      -- already attached to counts. `self.modem` is only ever set from a modem
+      -- that was verified wireless, so holding one is enough to trust it.
+      if self.modem and self.side == side and (not cfg.side or cfg.side == side)
+         and channelIsOpen(self.modem, ch) == true then
+        self.channel = ch
+        ensureExtras()
+        return true
+      end
+    end
+
+    local chosen = nil
+    if cfg.modem then
+      -- An explicitly supplied modem (a test, or a program that already holds
+      -- one) is used as given.
+      chosen = { side = cfg.side or self.side or "?", modem = cfg.modem }
+    else
+      -- Try the configured side first, then the one we were already using,
+      -- then any other modem on the computer.
+      local preferred = cfg.side or self.side
+      local ordered = {}
+      if preferred then
+        for i = 1, #sides do if sides[i] == preferred then ordered[#ordered + 1] = sides[i] end end
+      end
+      for i = 1, #sides do
+        if sides[i] ~= preferred then ordered[#ordered + 1] = sides[i] end
+      end
+      chosen = wrapWireless(ordered)
+    end
+
+    if not chosen or not chosen.modem then
       if self.modem then
-        -- Modem went away: close our channel on the old wrapper so a
+        -- Modem went away: close our channels on the old wrapper so a
         -- re-attached modem starts from a clean state.
         pcall(function() self.modem.closeAll() end)
       end
@@ -618,41 +745,46 @@ function new(opts)
       return false
     end
 
-    local ch = replyChannel(id)
-    if self.side ~= chosen.side or self.channel ~= ch then
-      self.modem, self.side, self.channel = chosen.modem, chosen.side, ch
+    if self.side ~= chosen.side then
       -- Channels belong to a modem, not to us, so they do not survive a modem
-      -- being swapped out. Forget them and reopen on the new one.
+      -- being swapped out. Forget the extras and re-open them below.
       self.opened = {}
-      local ok, err = pcall(function() self.modem.open(ch) end)
-      if not ok then
-        self.reason = "cannot open reply channel " .. tostring(ch) .. ": " .. tostring(err)
+    end
+    self.modem, self.side, self.channel = chosen.modem, chosen.side, ch
+
+    if channelIsOpen(self.modem, ch) ~= true then
+      pcall(function() self.modem.open(ch) end)
+      if channelIsOpen(self.modem, ch) ~= true then
+        self.reason = "cannot open reply channel " .. tostring(ch)
         return false
       end
     end
+
+    ensureExtras()
     return true
   end
 
   -- Open one of the program's own channels on the engine's modem (a ship
-  -- beacon channel, say). Safe to call in a loop: it only does anything the
-  -- first time, and it reopens automatically after a modem is replaced.
+  -- beacon channel, say). Safe to call in a loop: it verifies the channel and
+  -- re-opens it whenever it is closed, including after a modem is replaced.
   function self:openChannel(ch)
     if ch == nil then return false end
     if not self:attach() then return false end
-    if self.opened[ch] then return true end
-    local ok = pcall(function() self.modem.open(ch) end)
-    if ok then
-      self.opened[ch] = true
-      self.reason = nil
+    if channelIsOpen(self.modem, ch) ~= true then
+      pcall(function() self.modem.open(ch) end)
+      if channelIsOpen(self.modem, ch) ~= true then return false end
     end
-    return ok
+    self.opened[ch] = true
+    self.reason = nil
+    return true
   end
 
   -- Begin a fix: clear the slate and ping every tower in range. Towers
   -- hear this on 65534 and answer on our private channel.
   function self:request()
     if not self:attach() then return false end
-    self.pending = { at = os.clock(), hosts = {}, dists = {}, keys = {}, seen = 0, dropped = 0 }
+    self.pending = { at = os.clock(), hosts = {}, dists = {}, keys = {}, seen = 0, dropped = 0,
+                     triedAt = nil }
     self.lastPing = self.pending.at
     self.stats.pings = self.stats.pings + 1
     local ok, err = pcall(function() self.modem.transmit(GPS_CHANNEL, self.channel, "PING") end)
@@ -756,21 +888,61 @@ function new(opts)
 
   -- Call regularly (from your main loop). Starts pings on schedule, gives
   -- up on a ping that has run out of time, and expires stale fixes.
+  -- Forget towers that have stopped answering. A tower that has been removed,
+  -- moved or whose chunk has stopped loading must leave the registry, or the
+  -- website fills with ghosts that still look "heard" and that keep being
+  -- blamed for fixes they are no longer part of.
+  function self:pruneTowers()
+    local now = os.clock()
+    local pruned = 0
+    for key, t in pairs(self.towers) do
+      if now - t.last > cfg.towerTtl then
+        self.towers[key] = nil
+        pruned = pruned + 1
+      end
+    end
+    if pruned > 0 then self.towerCount = self.towerCount - pruned end
+    return pruned
+  end
+
   function self:update()
     local ok, err = pcall(function()
       self:attach()
+      self:pruneTowers()
       local now = os.clock()
       local p = self.pending
       if p then
         if p.solved then
           self.pending = nil
-        elseif now - p.at > cfg.window then
-          -- Window closed. One last look at what arrived.
-          if not self:attempt() then
-            self.stats.missed = self.stats.missed + 1
-            self.reason = p.reason or ("only " .. #p.hosts .. " tower(s) answered")
+        else
+          local elapsed = now - p.at
+          -- How many towers a fix normally hears. Hearing that many again is
+          -- as complete a set as the last fix had, so there is nothing to
+          -- wait for — which is what makes the common case land in a few
+          -- hundred milliseconds instead of always burning the full window.
+          local expected = (self.fix and self.fix.seen) or cfg.minTowers
+          local complete = #p.hosts >= math.max(cfg.minTowers, expected)
+          local canSolve  = #p.hosts >= cfg.minTowers
+          local throttle  = (not p.triedAt) or (elapsed - p.triedAt >= cfg.retryEvery)
+
+          if elapsed >= cfg.windowMax then
+            -- Out of time. One last look at whatever arrived — and if it is
+            -- still not enough, that failure is worth counting and naming.
+            p.triedAt = elapsed
+            if not self:attempt() then
+              self.stats.missed = self.stats.missed + 1
+              self.reason = p.reason or ("only " .. #p.hosts .. " tower(s) answered")
+            end
+            self.pending = nil
+          elseif throttle and (complete or (elapsed >= cfg.window and canSolve)) then
+            -- Solve as soon as the set is complete, or once the soft window
+            -- has passed and the set is at least solvable. A failed attempt
+            -- here is NOT the end of the ping: more replies may still turn an
+            -- inconsistent set into a solvable one, so collection carries on
+            -- until windowMax.
+            p.triedAt = elapsed
+            if self:attempt() then self.pending = nil end
           end
-          self.pending = nil
         end
       end
       if not self.pending then
@@ -810,14 +982,26 @@ function new(opts)
   -- it must run in a coroutine that is not the modem pump; while it waits
   -- the pump keeps feeding this engine.
   function self:waitForFix(maxWait)
-    local deadline = os.clock() + (maxWait or cfg.window + 0.5)
+    local wait = maxWait or (cfg.window + 0.5)
+    local deadline = os.clock() + wait
     self:request()
     while os.clock() < deadline do
       self:update()
       local x, y, z, meta = self:get()
-      if x and not meta.stale and meta.age <= (maxWait or cfg.maxAge) then return x, y, z, meta end
+      if x and not meta.stale and meta.age <= wait then return x, y, z, meta end
       sleep(0.1)
     end
+    -- Out of time. Take whatever this ping actually collected before giving up,
+    -- so the reason names the real problem ("need 4+ towers, heard 2") instead
+    -- of still reading "starting" — which is what a caller's first-boot
+    -- self-check would otherwise print at the operator.
+    if self.pending and not self.pending.solved then
+      self.pending.triedAt = nil
+      self:attempt()
+      self.pending = nil
+    end
+    local x, y, z, meta = self:get()
+    if x and not meta.stale then return x, y, z, meta end
     return nil, tostring(self.reason or "timed out")
   end
 
@@ -831,11 +1015,20 @@ function new(opts)
       f.quality, f.towers, f.dop or 0, age * 1000)
   end
 
-  -- Towers this computer has heard from, for the website registry.
+  -- Towers this computer has heard from RECENTLY, for the website registry.
+  -- Live ones only, deliberately: a tower that has gone quiet (unloaded chunk,
+  -- destroyed, moved, out of range) must stop being reported, or the registry
+  -- accumulates ghosts that still read as "heard" while the network that has to
+  -- work with them is a tower or two short. The website keeps each tower's own
+  -- history, so a tower going quiet is visible there as exactly that.
   function self:towerList()
+    local now = os.clock()
     local list = {}
     for _, t in pairs(self.towers) do
-      list[#list + 1] = { x = t.x, y = t.y, z = t.z, seen = t.seen }
+      local age = now - t.last
+      if age <= cfg.towerTtl then
+        list[#list + 1] = { x = t.x, y = t.y, z = t.z, seen = t.seen, age = age }
+      end
     end
     table.sort(list, function(a, b) return a.seen > b.seen end)
     return list

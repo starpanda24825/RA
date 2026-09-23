@@ -60,10 +60,14 @@ export async function listCannons(request, env) {
 }
 
 // GET /api/ballistics/towers → { towers: [...] }
-// The GPS tower registry: every tower any cannon has reported hearing, with
-// how often it has been seen and how often it had to be excluded for not
-// fitting the rest of the network. Towers are written from the CC poll, so
-// this is a read-only view for the GPS Network tab.
+// The GPS tower registry: every tower any cannon has reported hearing recently,
+// with how often it has been seen and how often it had to be left out of a fix
+// for not fitting the rest of the network. Towers are written from the CC poll,
+// so this is a read-only view for the GPS Network tab.
+//
+// `excludedRecent`/`excludedAt` describe the CURRENT window (migration 0022)
+// and are what the page warns on; `excluded` is the lifetime total and is only
+// shown as history, because a tower left out once, long ago, is not a fault.
 export async function listTowers(request, env) {
   const auth = await requireBallistics(request, env);
   if (auth.error) return auth.error;
@@ -83,6 +87,10 @@ export async function listTowers(request, env) {
     z:         Number(t.z),
     sightings: Number(t.sightings) || 0,
     excluded:  Number(t.excluded_count) || 0,
+    // Recent-window figures. Absent columns (0022 not applied) simply read as
+    // "nothing recent", which is the safe direction for a warning.
+    excludedRecent: Number(t.excluded_recent) || 0,
+    excludedAt:     t.excluded_at || null,
     reportedBy: t.reported_by || '',
     firstSeenAt: t.first_seen_at,
     lastSeenAt:  t.last_seen_at,

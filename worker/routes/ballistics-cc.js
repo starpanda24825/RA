@@ -144,6 +144,18 @@ export async function ccPoll(request, env) {
     });
   }
 
+  // GPS network health, piggy-backed on this poll. The position itself is
+  // solved entirely on the computer — not a single distance is sent here — so
+  // server load does not grow with the number of receivers or towers. What we
+  // keep is the state of the network, for the GPS Network tab of the
+  // calculator.
+  //
+  // The snapshot rides along on the heartbeat's own UPDATE (see
+  // heartbeatCannon), so a poll costs the same number of writes with it as
+  // without. Only the tower LIST is a statement of its own, and it is only sent
+  // when the set the cannon can actually hear has changed.
+  const gpsReport = (body.gps && typeof body.gps === 'object') ? sanitiseGpsReport(body.gps) : null;
+
   // Report the current aim state (heartbeat) regardless of status. The reload
   // mechanism the cannon reports rides along on this same write rather than
   // costing a second one, and only when it actually reported one — a program
@@ -153,27 +165,20 @@ export async function ccPoll(request, env) {
     pitch: num(body.pitch, 0),
     reloadType: reloadType || undefined,
     reloadTime: reloadTime == null ? undefined : reloadTime,
+    gpsReport,
   });
 
-  // GPS network health, piggy-backed on this poll. The position itself is
-  // solved entirely on the computer — not a single distance is sent here — so
-  // server load does not grow with the number of receivers or towers. What we
-  // keep is the state of the network, for the GPS Network tab of the
-  // calculator. The tower list only arrives when it changes.
-  //
-  // This is telemetry and must never be fatal: if the migration has not been
-  // applied or D1 hiccups, the cannon still has to receive its commands, so
-  // any failure here is logged and swallowed.
-  if (body.gps && typeof body.gps === 'object') {
+  // The tower registry. Telemetry: this must never be fatal — if the migration
+  // has not been applied or D1 hiccups, the cannon still has to receive its
+  // commands, so any failure here is logged and swallowed.
+  if (gpsReport) {
     try {
-      const report = sanitiseGpsReport(body.gps);
-      await store.recordGpsReport(env, cannon.id, report);
       const towerList = sanitiseTowerList(body.gps.towerList);
       if (towerList && towerList.length) {
-        await store.recordGpsTowers(env, towerList, computerId, report.excluded);
+        await store.recordGpsTowers(env, towerList, computerId, gpsReport.excluded);
       }
     } catch (err) {
-      console.warn('CC poll: GPS report not stored (run migration 0015?)', err);
+      console.warn('CC poll: GPS towers not stored (run migration 0015?)', err);
     }
   }
 

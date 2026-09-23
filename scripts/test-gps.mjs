@@ -41,11 +41,22 @@ const STUBS = `
 -- === ComputerCraft stubs ===
 local NOW = 0
 local COMPUTER_ID = 77
+-- A modem that behaves like CC's: the channel list belongs to the MODEM, open
+-- on an already-open channel reports false, and isOpen is the truth. Tracking
+-- them for real is what lets these tests exercise a channel being closed from
+-- under a running engine — the fault that used to leave a receiver permanently
+-- deaf with every tower in the world looking silent.
+local openChannels = {}
 local fakeModem = {
   isWireless = function() return true end,
-  open = function(ch) return true end,
-  close = function(ch) return true end,
-  closeAll = function() end,
+  open = function(ch)
+    if openChannels[ch] then return false end
+    openChannels[ch] = true
+    return true
+  end,
+  close = function(ch) openChannels[ch] = nil; return true end,
+  closeAll = function() openChannels = {} end,
+  isOpen = function(ch) return openChannels[ch] == true end,
   transmit = function(ch, reply, payload) return true end,
 }
 os.getComputerID = function() return COMPUTER_ID end
@@ -56,6 +67,9 @@ peripheral = {
   getType = function(side) if side == "top" then return "modem" end return nil end,
   wrap = function(side) return fakeModem end,
 }
+-- Test hooks: close a channel behind a running engine, and read its state.
+function closeChannelBehind(ch) openChannels[ch] = nil end
+function isChannelOpen(ch) return openChannels[ch] == true end
 `;
 
 const TESTS = `
@@ -227,6 +241,77 @@ local stats = e3:getStats()
 check("stats counted fixes", stats.fixes >= 1 and stats.pings >= 1, "fixes=" .. stats.fixes .. " pings=" .. stats.pings)
 check("status() renders", type(e3:status()) == "string" and #e3:status() > 0, e3:status())
 
+-- --- the engine re-opens a channel closed underneath it ----------------
+-- A channel belongs to the modem and anything else on the computer can close
+-- it (rednet, another program, a modem being broken and replaced). An engine
+-- that never checks goes permanently deaf: every tower in the world looks
+-- silent, and reloading the towers changes nothing. It must notice and re-open.
+local eSC = newEngine()
+local okSC = feed(eSC, H4, { 137, 70, 88 })
+check("sanity: solves before the channel is closed", okSC and eSC:get() ~= nil, tostring(eSC.reason))
+closeChannelBehind(eSC.channel)
+check("channel really is closed behind the engine", not isChannelOpen(eSC.channel),
+  "ch " .. tostring(eSC.channel))
+eSC:update()
+check("engine re-opens its own reply channel", isChannelOpen(eSC.channel), "ch " .. tostring(eSC.channel))
+local okSC2 = feed(eSC, H4, { 200, 70, 120 })
+local scX, scY, scZ = eSC:get()
+check("engine still solves after the channel was re-opened",
+  okSC2 and scX ~= nil and at(scX, scY, scZ) == "200,70,120",
+  okSC2 and at(scX, scY, scZ) or tostring(eSC.reason))
+eSC:openChannel(4120)
+closeChannelBehind(4120)
+eSC:update()
+check("engine re-opens an extra channel the program opened", isChannelOpen(4120), "4120")
+
+-- --- a slow tower still counts -----------------------------------------
+-- A tower on a loaded chunk can answer after the soft window. Treating that as
+-- silence is how a healthy tower gets permanently dropped by a receiver that is
+-- simply further behind, so collection carries on until the hard window.
+local eSlow = newEngine()
+eSlow:request()
+local function feedOne(e, h, t)
+  local d = math.sqrt((h[1] - t[1]) ^ 2 + (h[2] - t[2]) ^ 2 + (h[3] - t[3]) ^ 2)
+  e:onMessage(e.side, e.channel, { h[1], h[2], h[3] }, d)
+end
+for i = 1, 3 do feedOne(eSlow, H4[i], { 137, 70, 88 }) end
+NOW = NOW + 0.7
+local pendingBefore = eSlow.pending ~= nil
+eSlow:update()
+check("3 of 4 towers does not solve at the soft window",
+  pendingBefore and eSlow.pending ~= nil and eSlow:get() == nil, tostring(eSlow.reason))
+feedOne(eSlow, H4[4], { 137, 70, 88 })
+NOW = NOW + 0.35
+eSlow:update()
+local slowX, slowY, slowZ = eSlow:get()
+check("the late tower is counted and the fix lands exactly",
+  slowX ~= nil and at(slowX, slowY, slowZ) == "137,70,88",
+  (slowX and at(slowX, slowY, slowZ) or "no fix") .. " / " .. tostring(eSlow.reason))
+
+-- --- the common case does not wait out the whole window --------------
+-- A fix is taken as soon as the reply set is as complete as the last good one.
+local eFast = newEngine()
+eFast:request()
+for i = 1, #H4 do feedOne(eFast, H4[i], { 137, 70, 88 }) end
+NOW = NOW + 0.05
+eFast:update()
+local fastX, fastY, fastZ = eFast:get()
+check("a complete reply set solves well inside the soft window",
+  fastX ~= nil and at(fastX, fastY, fastZ) == "137,70,88", tostring(eFast.reason))
+
+-- --- a tower that goes quiet leaves the registry -----------------------
+-- The local registry is what the website is told about, so a ghost left in it
+-- reads as "still heard" while the network is a tower or two short, and keeps
+-- being blamed for fixes it is no longer part of.
+local eTTL = newEngine()
+feed(eTTL, H4, { 137, 70, 88 })
+check("registry holds the towers that answered", #eTTL:towerList() == 4, #eTTL:towerList() .. " towers")
+check("live towers carry their age", (eTTL:towerList()[1] or {}).age ~= nil, "age")
+NOW = NOW + (eTTL.cfg.towerTtl + 1)
+check("pruneTowers drops towers that have gone quiet", eTTL:pruneTowers() == 4, "pruned")
+check("registry is empty once its towers have gone quiet", #eTTL:towerList() == 0,
+  #eTTL:towerList() .. " towers")
+
 -- --- stale + age bookkeeping ---
 local sa = e3:get()
 NOW = NOW + 10
@@ -293,6 +378,10 @@ peripheral = {
     return {
       isWireless = function() return true end,
       open = function(ch) opened[#opened + 1] = ch end,
+      isOpen = function(ch)
+        for i = 1, #opened do if opened[i] == ch then return true end end
+        return false
+      end,
       close = function() end,
       closeAll = function() end,
       transmit = function(ch, reply, payload)
@@ -401,8 +490,42 @@ local fakeTextutils = {
 
 local screen = {}
 
+-- The tower's modem, with real CC semantics: the channel list belongs to the
+-- MODEM, open on an already-open channel reports false, and isOpen is the
+-- truth. That is what lets a test close a channel out from under a running
+-- tower exactly as another program on the computer would.
+local towerChannels = {}
+
+local function newModem()
+  return {
+    isWireless = function() return true end,
+    open = function(ch)
+      if towerChannels[ch] then return false end
+      towerChannels[ch] = true
+      return true
+    end,
+    close = function(ch) towerChannels[ch] = nil; return true end,
+    closeAll = function() towerChannels = {} end,
+    isOpen = function(ch) return towerChannels[ch] == true end,
+    transmit = function() end,
+  }
+end
+
 -- Boot the tower once against a scripted event list.
+--
+-- Ordinary CC events are pulled in order. Two pseudo-events let a test act on
+-- the world BETWEEN two ticks of a running tower:
+--
+--   { "close_channel", ch }  — something else closes a channel on the modem
+--   { "boom" }               — the loop throws, to prove the tower survives it
+--
+-- A run ends by running out of events. The tower's own recovery path then tries
+-- to sleep, and sleep raises the same "exhausted" error, so the program
+-- unwinds with the harness's pcall reporting it — which is what makes the
+-- tower's outer recovery loop observable from here, instead of the harness
+-- hanging on a tower that never gives up.
 local function boot(events)
+  towerChannels = {}
   local env = setmetatable({}, { __index = _G })
   env.fs = fakeFs
   env.textutils = fakeTextutils
@@ -414,22 +537,31 @@ local function boot(events)
   env.term = {
     clear = function() end, setCursorPos = function() end,
     setTextColor = function() end, setBackgroundColor = function() end,
+    getSize = function() return 51, 19 end,
   }
+  env.sleep = function(s)
+    if #events == 0 then error("event script exhausted", 0) end
+  end
   env.peripheral = {
     getNames = function() return { "bottom" } end,
     getType = function() return "modem" end,
-    wrap = function()
-      return { isWireless = function() return true end, open = function() end,
-               close = function() end, transmit = function() end }
-    end,
+    wrap = function() return newModem() end,
   }
   env.os = {
     clock = function() return 100 end,
     startTimer = function() return 1 end,
     pullEvent = function()
-      local e = table.remove(events, 1)
-      if not e then error("event script exhausted", 0) end
-      return table.unpack(e)
+      while true do
+        local e = table.remove(events, 1)
+        if not e then error("event script exhausted", 0) end
+        if e[1] == "close_channel" then
+          towerChannels[e[2]] = nil
+        elseif e[1] == "boom" then
+          error("simulated failure", 0)
+        else
+          return table.unpack(e)
+        end
+      end
     end,
   }
 
@@ -458,7 +590,7 @@ screen = {}
 local ok2, err2 = boot({ PING, PING, PING, { "timer", 1 } })
 tcheck("tower reboots", ok2 == false and tostring(err2):find("exhausted") ~= nil, tostring(err2))
 local served = screenLine("Served:") or ""
-tcheck("counts are per-boot and cumulative", served:find("3 this boot", 1, true) ~= nil
+tcheck("counts are per-boot and cumulative", served:find("3 ping(s) this boot", 1, true) ~= nil
   and served:find("5 total", 1, true) ~= nil, served)
 local uptime = screenLine("Uptime:") or ""
 tcheck("the reboot is visible as a boot number", uptime:find("boot #2", 1, true) ~= nil, uptime)
@@ -472,6 +604,48 @@ tcheck("a corrupt state file cannot stop a boot", ok3 == false and tostring(err3
   tostring(err3))
 tcheck("a corrupt state file restarts cleanly", files["gpstower_state.txt"] == "0,1",
   tostring(files["gpstower_state.txt"]))
+
+-- A channel closed underneath the tower must be re-opened on the next tick.
+-- This is the permanent-silence fault: the screen looks healthy, the tower
+-- serves nothing, and it never comes back on its own.
+screen = {}
+local ok4, err4 = boot({ PING, { "close_channel", 65534 }, { "timer", 1 }, PING, { "timer", 1 } })
+tcheck("a closed channel does not end the tower",
+  ok4 == false and tostring(err4):find("exhausted") ~= nil, tostring(err4))
+tcheck("the tower re-opened the channel it lost", towerChannels[65534] == true, tostring(towerChannels[65534]))
+tcheck("both pings, either side of the closure, were served",
+  (screenLine("Served:") or ""):find("2 ping(s) this boot", 1, true) ~= nil, tostring(screenLine("Served:")))
+tcheck("the re-open is counted on screen",
+  (screenLine("Recovery:") or ""):find("1 re-open(s)", 1, true) ~= nil, tostring(screenLine("Recovery:")))
+tcheck("the re-open is logged on screen",
+  (screenLine("Log:") or ""):find("Re-opened", 1, true) ~= nil, tostring(screenLine("Log:")))
+
+-- A tower standing on the block of the computer it is answering measures ZERO.
+-- A truthiness test on the distance would have exactly that tower refuse to
+-- answer for ever.
+screen = {}
+boot({ { "modem_message", "bottom", 65534, 52077, "PING", 0 }, { "timer", 1 } })
+tcheck("a zero-distance ping is still served",
+  (screenLine("Served:") or ""):find("1 ping(s) this boot", 1, true) ~= nil, tostring(screenLine("Served:")))
+
+-- An unexpected error must cost a second and a re-attach, never the tower.
+screen = {}
+local ok5, err5 = boot({ PING, { "boom" }, PING, { "timer", 1 } })
+tcheck("an error is survived rather than ending the tower",
+  ok5 == false and tostring(err5):find("exhausted") ~= nil, tostring(err5))
+tcheck("the tower served on both sides of the error",
+  (screenLine("Served:") or ""):find("2 ping(s) this boot", 1, true) ~= nil, tostring(screenLine("Served:")))
+tcheck("the error is counted on screen",
+  (screenLine("Recovery:") or ""):find("1 error(s) survived", 1, true) ~= nil, tostring(screenLine("Recovery:")))
+
+-- Traffic on the GPS channel that is not a position ping is counted, never
+-- answered: the channel is shared, and a foreign program on it is worth seeing.
+screen = {}
+boot({ { "modem_message", "bottom", 65534, 52077, "HELLO", 12 }, { "timer", 1 } })
+tcheck("foreign traffic is counted, not answered",
+  (screenLine("Served:") or ""):find("0 ping(s) this boot", 1, true) ~= nil
+    and (screenLine("Ignored:") or ""):find("other message(s)", 1, true) ~= nil,
+  tostring(screenLine("Served:")) .. " / " .. tostring(screenLine("Ignored:")))
 
 return table.concat(tlines, "\\n") .. "\\n\\n" .. tpass .. " passed, " .. tfail .. " failed"
 `;

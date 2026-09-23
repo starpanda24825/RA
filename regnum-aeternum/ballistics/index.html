@@ -577,6 +577,7 @@
 }
 .cannon-badge.online { color: var(--teal-bright); border-color: rgba(46,142,150,0.4); }
 .cannon-badge.offline { color: var(--parchment-faint); }
+.cannon-badge.warn { color: var(--gold-bright); border-color: var(--gold-dim); }
 .cannon-badge.sublevel { color: var(--gold-bright); border-color: var(--gold-dim); }
 .cannon-card__meta {
   font-family: var(--font-mono);
@@ -856,9 +857,16 @@
       <div class="field-group" style="grid-column:1/-1;">
         <label>GPS Tower Network</label>
         <p class="field-hint">
-          Each tower a cannon has heard from, at the block its modem sits on. Positions are worked out
-          entirely on the in-game computers — no distance ever reaches this website — so this list grows
-          without adding any load here.
+          Each tower a cannon has heard from <b>recently</b>, at the block its modem sits on. Positions are
+          worked out entirely on the in-game computers — no distance ever reaches this website — so this
+          list grows without adding any load here.
+          <br/><br/>
+          <b>Live</b> means the computers are still hearing this tower; <b>Quiet</b> means they are not, and
+          a tower that stays quiet drops off this list on its own rather than lingering as something that
+          used to exist. <b>Left out</b> is the only warning, and it appears only when a tower has been left
+          out of several fixes inside the last ten minutes — then clears itself once that stops. Being left
+          out of one fix, long ago, is not a fault: it happens from ordinary geometry, or one slow reply,
+          and is kept here as history only.
           <br/><br/>
           <b>Four or more towers are needed, and at least one must sit well off the height of the others.</b>
           A tower set that is flat cannot determine height at all, because your mirror image fits the
@@ -3331,25 +3339,59 @@
       : '<div class="registry-empty">No GPS reports yet. Only cannons running the GPS Network library report their network health here.</div>';
   }
 
+  // A tower is LIVE while the computers are still reporting it, and they only
+  // report the towers they have heard from within the last few seconds — so this
+  // says something about the tower, not about the page. The list itself is
+  // refreshed at least once a minute, which is where the slack comes from.
+  const GPS_TOWER_LIVE_MS = 150000;      // 2.5 min
+  const GPS_EXCLUDE_WINDOW_MS = 15 * 60000;
+
+  // Compact "how long ago", for anything that is measured in tens of minutes
+  // rather than seconds.
+  function agoText(ms) {
+    if (ms == null) return 'never';
+    const s = Math.max(0, Math.round(ms / 1000));
+    if (s < 90) return s + 's ago';
+    const m = Math.round(s / 60);
+    if (m < 90) return m + 'm ago';
+    const h = Math.round(m / 60);
+    return h < 48 ? h + 'h ago' : Math.round(h / 24) + 'd ago';
+  }
+
   function towerCard(t) {
     const ageMs = t.lastSeenAt ? Date.now() - new Date(t.lastSeenAt).getTime() : null;
-    const fresh = ageMs != null && ageMs < 120000;
-    const heard = fresh
-      ? '<span class="cannon-badge online">Heard</span>'
+    const live = ageMs != null && ageMs < GPS_TOWER_LIVE_MS;
+    const heard = live
+      ? '<span class="cannon-badge online">Live</span>'
       : '<span class="cannon-badge offline">Quiet</span>';
-    const suspect = t.excluded > 0
-      ? '<span class="cannon-badge offline" title="Left out of fixes because its measurements did not fit the rest of the network — check this tower has not been moved.">Suspect</span>'
+
+    // Deliberately NOT a lifetime count, and deliberately able to clear itself.
+    // A tower is left out of a fix when its measurements do not fit the rest of
+    // the network FROM WHERE THAT RECEIVER IS STANDING, which happens for
+    // ordinary reasons — a bad angle, one slow reply in thousands, a single bad
+    // measurement. Flagging a tower for ever on the strength of one such moment
+    // means every tower the network has ever mis-fit wears a red badge, and the
+    // badge stops meaning anything. So: repeatedly, recently, or not at all.
+    const recentOut = Number(t.excludedRecent) || 0;
+    const outAgeMs = t.excludedAt ? Date.now() - new Date(t.excludedAt).getTime() : null;
+    const warn = (recentOut >= 2 && outAgeMs != null && outAgeMs < GPS_EXCLUDE_WINDOW_MS)
+      ? '<span class="cannon-badge warn" title="Left out of ' + recentOut
+        + ' fixes in the last ten minutes because its measurements did not fit the rest of the network. Check this tower has not been moved, and that no other tower reports the same block.">Left out \u00d7'
+        + recentOut + '</span>'
+      : '';
+    const lifetime = t.excluded > 0
+      ? ' · left out ' + t.excluded + ' time' + (t.excluded === 1 ? '' : 's') + ' in total'
       : '';
     return '<div class="cannon-card">' +
       '<div class="cannon-card__head">' +
         '<span class="cannon-card__name" style="cursor:default;">Tower ' + escHtml(t.key) + '</span>' +
-        heard + suspect +
+        heard + warn +
       '</div>' +
       '<div class="cannon-card__meta">' +
         'Modem at X ' + t.x + ' · Y ' + t.y + ' · Z ' + t.z + '<br/>' +
-        'Reported ' + t.sightings + ' time' + (t.sightings === 1 ? '' : 's') +
-        (t.excluded ? ' · excluded ' + t.excluded + ' time' + (t.excluded === 1 ? '' : 's') : '') +
-        '<br/>Last heard ' + (t.lastSeenAt ? new Date(t.lastSeenAt).toLocaleString() : 'never') +
+        'Reported ' + t.sightings + ' time' + (t.sightings === 1 ? '' : 's') + lifetime +
+        '<br/>Last heard ' + (t.lastSeenAt
+          ? new Date(t.lastSeenAt).toLocaleString() + ' (' + agoText(ageMs) + ')' : 'never') +
       '</div>' +
     '</div>';
   }

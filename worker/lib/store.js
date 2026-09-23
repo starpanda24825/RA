@@ -1210,8 +1210,16 @@ export async function refreshCannonFromComputer(env, id, { name, x, y, z, length
 }
 
 // Heartbeat for any cannon (pending or active): refresh last_seen + aim state,
-// plus the reload mechanism the cannon reports on every poll.
-export async function heartbeatCannon(env, id, { yaw, pitch, reloadType, reloadTime } = {}) {
+// plus the two things the cannon reports on every poll but that are not worth a
+// query of their own — its reload mechanism (0020) and its GPS network health
+// snapshot (0015).
+//
+// Both are appended to the heartbeat's single UPDATE rather than being written
+// separately, which is what keeps a cannon's write volume flat as the network
+// grows: one statement per poll, with or without these. Each group is dropped,
+// newest first, if its migration is outstanding — a missing column must never
+// cost the heartbeat itself.
+export async function heartbeatCannon(env, id, { yaw, pitch, reloadType, reloadTime, gpsReport } = {}) {
   const now = nowIso();
   const base = ['last_seen_at = ?', 'last_yaw = ?', 'last_pitch = ?', 'updated_at = ?'];
   const values = [now, Number(yaw) || 0, Number(pitch) || 0, now];
@@ -1220,12 +1228,19 @@ export async function heartbeatCannon(env, id, { yaw, pitch, reloadType, reloadT
   ).bind(...values.concat(extra.binds, Number(id))).run();
 
   const profile = reloadProfileColumns(reloadType, reloadTime);
+  const gps = gpsReportColumns(gpsReport);
+  const full = { sets: [...profile.sets, ...gps.sets], binds: [...profile.binds, ...gps.binds] };
+
   try {
-    await write(profile);
+    await write(full);
   } catch (err) {
-    // 0020 not applied: the heartbeat still has to happen.
-    if (!profile.sets.length) throw err;
-    await write({ sets: [], binds: [] });
+    if (!full.sets.length) throw err;
+    try {
+      await write(profile);
+    } catch (inner) {
+      if (!profile.sets.length) throw inner;
+      await write({ sets: [], binds: [] });
+    }
   }
   return findCannonById(env, id);
 }
@@ -1965,25 +1980,38 @@ export async function listFirePlanHistory(env, limit) {
 
 // ---------- ballistics: GPS network ----------
 
-// Latest GPS health snapshot from a cannon. A display blob rather than a
-// column per field: we never query or aggregate on it, and it is rewritten
-// once a second, so it stays a single UPDATE.
-export async function recordGpsReport(env, cannonId, report) {
-  await env.DB.prepare(
-    'UPDATE ballistics_cannons SET gps_report = ?, updated_at = ? WHERE id = ?'
-  ).bind(report ? JSON.stringify(report) : null, nowIso(), Number(cannonId)).run();
+// The latest GPS health snapshot from a cannon, as extra columns on a write
+// that is already happening.
+//
+// It is rewritten every poll, so giving it a statement of its own would double
+// a cannon's writes for a status line — which is exactly what the GPS side of
+// this system is careful not to do. `gps_report` is simply appended to the
+// caller's SET list; if migration 0015 is not applied the caller retries
+// without it rather than losing the heartbeat.
+function gpsReportColumns(report) {
+  if (!report || typeof report !== 'object') return { sets: [], binds: [] };
+  return { sets: ['gps_report = ?'], binds: [JSON.stringify(report)] };
 }
 
-// Upsert the towers a cannon has heard from. Clients only send a tower list
-// when it actually changes (or once a minute as a safety net), so this is
-// touched a handful of times rather than once a second, and the whole list
-// goes out as one batched D1 call.
+// How long an exclusion stays "recent". The website's warning is driven by
+// this window rather than by the lifetime total, because a tower left out of
+// ONE fix — however long ago — is not a fault: geometry, a slow tick or a
+// single bad measurement can all do that, and a badge that never clears is a
+// badge nobody can act on.
+const GPS_EXCLUDE_WINDOW = '+10 minutes';
+
+// Upsert the towers a receiver has heard from RECENTLY. Clients only send the
+// towers they are still hearing (and only when that list changes, or once a
+// minute as a safety net), so this is touched a handful of times rather than
+// once a second: a tower that has gone quiet simply stops appearing, its
+// last_seen_at stops moving, and it ages off the website's list instead of
+// sitting there as a ghost that is forever "heard" and forever blamed.
 export async function recordGpsTowers(env, towers, reportedBy, excludedKeys) {
   if (!Array.isArray(towers) || towers.length === 0) return 0;
   const now = nowIso();
   const excluded = new Set((Array.isArray(excludedKeys) ? excludedKeys : []).map(String));
-  const statements = [];
   const seen = new Set();
+  const rows = [];
 
   for (const t of towers.slice(0, 64)) {
     const x = Math.round(Number(t && t.x));
@@ -1993,30 +2021,64 @@ export async function recordGpsTowers(env, towers, reportedBy, excludedKeys) {
     const key = `${x},${y},${z}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    statements.push(
-      env.DB.prepare(
-        `INSERT INTO ballistics_gps_towers
-           (tower_key, x, y, z, sightings, excluded_count, reported_by,
-            first_seen_at, last_seen_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(tower_key) DO UPDATE SET
-           last_seen_at   = excluded.last_seen_at,
-           sightings      = sightings + 1,
-           excluded_count = excluded_count + excluded.excluded_count,
-           reported_by    = excluded.reported_by,
-           updated_at     = excluded.updated_at`
-      ).bind(key, x, y, z, excluded.has(key) ? 1 : 0, String(reportedBy || '').slice(0, 64),
-             now, now, now, now)
-    );
+    rows.push({ key, x, y, z, excluded: excluded.has(key) ? 1 : 0 });
   }
+  if (!rows.length) return 0;
 
-  if (statements.length) await env.DB.batch(statements);
-  return statements.length;
+  const by = String(reportedBy || '').slice(0, 64);
+  const insert = 'INSERT INTO ballistics_gps_towers '
+    + '(tower_key, x, y, z, sightings, excluded_count, reported_by, '
+    + ' first_seen_at, last_seen_at, created_at, updated_at)'
+    + ' VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)';
+
+  // Two forms of the same upsert: the full one keeps the recent window, and a
+  // reduced one that still records the sighting if 0022 has not been applied.
+  // A cannon's GPS health must never be able to break a poll.
+  const build = (withRecent) => env.DB.prepare(
+    `${insert}
+     ON CONFLICT(tower_key) DO UPDATE SET
+       last_seen_at   = excluded.last_seen_at,
+       sightings      = sightings + 1,
+       excluded_count = excluded_count + excluded.excluded_count,`
+    + (withRecent
+      ? `
+       excluded_at    = CASE WHEN excluded.excluded_count > 0
+                             THEN excluded.last_seen_at ELSE excluded_at END,
+       excluded_recent = CASE
+           WHEN recent_at IS NULL
+             OR julianday(excluded.last_seen_at) > julianday(recent_at, '${GPS_EXCLUDE_WINDOW}')
+           THEN excluded.excluded_count
+           ELSE excluded_recent + excluded.excluded_count END,
+       recent_at = CASE
+           WHEN recent_at IS NULL
+             OR julianday(excluded.last_seen_at) > julianday(recent_at, '${GPS_EXCLUDE_WINDOW}')
+           THEN excluded.last_seen_at ELSE recent_at END,`
+      : '')
+    + `
+       reported_by    = excluded.reported_by,
+       updated_at     = excluded.updated_at`
+  );
+
+  const bind = (stmt, r) => stmt.bind(r.key, r.x, r.y, r.z, r.excluded, by, now, now, now, now);
+  const statements = (withRecent) => rows.map((r) => bind(build(withRecent), r));
+
+  try {
+    await env.DB.batch(statements(true));
+  } catch (err) {
+    console.warn('GPS towers: recent-window columns unavailable (run migration 0022?)', err);
+    await env.DB.batch(statements(false));
+  }
+  return rows.length;
 }
 
+// Towers that have been heard recently. Anything silent for a month is left
+// out: those rows are history, not part of the network, and keeping them on
+// the page only makes a working network look broken.
 export async function listGpsTowers(env) {
   const { results } = await env.DB.prepare(
-    'SELECT * FROM ballistics_gps_towers ORDER BY y DESC, x ASC'
+    `SELECT * FROM ballistics_gps_towers
+      WHERE last_seen_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 days')
+      ORDER BY last_seen_at DESC, y DESC, x ASC`
   ).all();
   return results;
 }
