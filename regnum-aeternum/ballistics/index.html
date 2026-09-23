@@ -460,6 +460,38 @@
 .bombard-status { font-family: var(--font-mono); font-size: 10px; color: var(--parchment-dim); margin-top: 8px; white-space: pre-line; }
 .bombard-status.err { color: #e3a3a3; }
 
+/* ---------- Live map: per-gun reload rings ---------- */
+/* A ring sits at each gun of the firing order. It is updated in place from the
+   map tick, so it must not be re-created per frame — only its arc, colour and
+   label change. */
+.bombard-reload { position: relative; width: 26px; height: 26px; pointer-events: none; }
+.bombard-reload svg { display: block; }
+.bombard-reload__track { fill: none; stroke: rgba(237,230,214,0.22); stroke-width: 2.5; }
+.bombard-reload__bar { fill: none; stroke-width: 2.5; }
+.bombard-reload__text {
+  position: absolute; left: 50%; top: 100%; transform: translateX(-50%);
+  font-family: var(--font-mono); font-size: 9px; line-height: 1.1;
+  color: var(--gold-bright); white-space: nowrap; text-shadow: 0 1px 2px rgba(0,0,0,0.9);
+}
+
+/* The key for those rings, which only means anything while an order is firing. */
+.reload-legend {
+  display: none; flex-direction: column; gap: 4px;
+  position: absolute; top: 12px; left: 12px; z-index: 500;
+  font-family: var(--font-mono); font-size: 9.5px; color: var(--parchment-faint);
+  background: rgba(18,17,19,0.78); backdrop-filter: blur(6px);
+  border: 1px solid var(--slate-line); border-radius: 8px; padding: 7px 9px;
+}
+.reload-legend.on { display: flex; }
+.reload-legend__row { display: flex; align-items: center; gap: 6px; }
+.reload-legend__dot { width: 9px; height: 9px; border-radius: 50%; flex: none; box-sizing: border-box; }
+.reload-legend__dot--reloading {
+  border: 2px solid var(--gold-bright);
+  border-right-color: transparent; border-bottom-color: transparent;
+}
+.reload-legend__dot--loaded { border: 2px solid var(--teal-bright); }
+.reload-legend__dot--empty { border: 2px dashed var(--slate-soft); }
+
 .cannon-card {
   background: var(--ink-elevated);
   border: 1px solid var(--slate-line);
@@ -598,6 +630,11 @@
       <button class="map-btn danger" id="btn-clear">Clear</button>
       <span class="map-bar__divider" aria-hidden="true"></span>
       <button class="map-btn" id="btn-mapsource" title="Configure the BlueMap source">Map Source</button>
+    </div>
+    <div class="reload-legend" id="reload-legend">
+      <div class="reload-legend__row"><span class="reload-legend__dot reload-legend__dot--reloading"></span><span>Reloading — seconds until loaded</span></div>
+      <div class="reload-legend__row"><span class="reload-legend__dot reload-legend__dot--loaded"></span><span>Loaded and ready</span></div>
+      <div class="reload-legend__row"><span class="reload-legend__dot reload-legend__dot--empty"></span><span>Not loaded — reloads inside the next order</span></div>
     </div>
     <div class="coord-pill" id="cursor-coords">X — Z —</div>
     <button class="source-pill" id="source-status" type="button">Detecting map source…</button>
@@ -1908,6 +1945,21 @@
     } catch (e) { console.warn('Could not load cannon registry.', e); }
   }
 
+  // The gun's reload mechanism, as the cannon itself reports it. Shown here
+  // rather than on the reload ring because the ring is deliberately not
+  // interactive — an interactive marker over a cannon would swallow the dot's
+  // own popup — and this is the place a gun is already inspected.
+  function cannonReloadNote(c) {
+    const kind = c.reload_type === 'arm' ? 'Mechanical arm'
+               : c.reload_type === 'autoloader' ? 'Auto-loader' : null;
+    const secs = c.reload_time == null ? null : Number(c.reload_time).toFixed(2) + 's';
+    if (!kind && !secs) return '';
+    const where = c.reload_type === 'arm' ? 'reloads in place between shots'
+                : c.reload_type === 'autoloader' ? 'reloads between disassemble and assemble'
+                : '';
+    return '<br/>' + (kind || 'Reload') + (secs ? ' · ' + secs : '') + (where ? ' — ' + where : '');
+  }
+
   function cannonDotPopup(c) {
     const online = cannonOnline(c);
     const sub = c.sublevel ? ' · <span style="color:var(--gold-bright);">Sublevel</span>' : '';
@@ -1916,6 +1968,7 @@
       escHtml(c.name || ('Cannon ' + c.id)) + sub + '<br/>' +
       'X ' + c.x + ' · Z ' + c.z + '<br/>' +
       '<span style="color:' + statusColor + ';">' + (online ? 'Online' : 'Offline') + '</span>' +
+      cannonReloadNote(c) +
       '</span>';
   }
 
@@ -2222,12 +2275,15 @@
   let bombardMapLayer    = null;    // trajectories still to be fired, grey dotted
   let bombardActiveLayer = null;    // the trajectory being fired, coloured
   let bombardShellLayer  = null;    // shells in flight
+  let bombardReloadLayer = null;    // the per-gun reload rings
   let bombardMapTimer    = null;
   let bombardMapBusy     = false;
   const bombardShells    = [];      // { key, path, tof, t0, marker }
   const bombardActiveLines = new Map();  // cannonId -> { line, key }
+  const bombardReloadMarks = new Map();  // cannonId -> { marker, el, state, pct }
   let bombardPreview     = { key: null, lines: [], at: 0 };   // per-gun planned trajectories
 
+  const reloadLegendEl   = document.getElementById('reload-legend');
   const bombardUnitsEl   = document.getElementById('bombard-units');
   const bombardTargetsEl = document.getElementById('bombard-targets');
   const bombardMultiEl   = document.getElementById('bombard-multi');
@@ -2259,6 +2315,10 @@
       name: c.name || ('Cannon ' + c.id),
       x: Number(c.x), y: Number(c.y), z: Number(c.z),
       length: Number(c.length) || 4,
+      // The gun's reload mechanism, reported by the cannon itself. The map's
+      // reload ring uses it to explain a gun that is not counting down.
+      reloadType: c.reload_type || null,
+      reloadTime: c.reload_time == null ? null : Number(c.reload_time),
       sublevel: sublevel,
     }));
     return from(cannonsActive, false).concat(from(cannonsManaged, true));
@@ -2439,6 +2499,8 @@
     const reported = Object.values(bombardPlanShots).filter(s => s && s.last);
     if (reported.length && reported.some(s => !s.last.firedAt)) {
       lines.push('Shell timing on the map is estimated — re-run the installer to update the cannon programs.');
+    } else if (reported.length && reported.some(s => s.last.reloadMs == null)) {
+      lines.push('Reload indicators on the map are unavailable — re-run the installer to update the cannon programs.');
     }
     if (plan.mode === 'multi') {
       const left = bombardPlan.targets
@@ -3417,6 +3479,18 @@
   const BOMBARD_ACTIVE_STYLE  = { color: '#ffd166', weight: 2, opacity: 0.95, dashArray: '8 5' };
   const BOMBARD_SHELL_STYLE   = { radius: 3.5, color: '#fff4d6', weight: 2, fillColor: '#ffb703', fillOpacity: 1 };
 
+  // The per-gun reload ring. Colours are the shared palette's gold (working) and
+  // teal (ready) — the same two the registry uses for an online/offline gun —
+  // with slate for a barrel that is not loaded.
+  const BOMBARD_RELOAD_R       = 9.5;
+  const BOMBARD_RELOAD_C       = 2 * Math.PI * BOMBARD_RELOAD_R;
+  const BOMBARD_RELOAD_GOLD    = '#e3bf4c';
+  const BOMBARD_RELOAD_TEAL    = '#45b3bc';
+  const BOMBARD_RELOAD_SLATE   = '#6b7075';
+  // A reload longer than this is not a reload, it is a misconfiguration; the ring
+  // is refused rather than drawn as a countdown that never ends.
+  const BOMBARD_RELOAD_MAX_MS  = 10 * 60 * 1000;
+
   // >>> BOMBARD MAP MATH
   // Where the shell starts: the mount's block pushed out along the barrel's
   // heading. The same offset the aim solver uses, so a drawn line and the shot
@@ -3490,6 +3564,8 @@
     if (!bombardMapLayer)    bombardMapLayer    = L.layerGroup().addTo(map);
     if (!bombardActiveLayer) bombardActiveLayer = L.layerGroup().addTo(map);
     if (!bombardShellLayer)  bombardShellLayer  = L.layerGroup().addTo(map);
+    if (!bombardReloadLayer) bombardReloadLayer = L.layerGroup().addTo(map);
+    if (reloadLegendEl) reloadLegendEl.classList.add('on');
     if (bombardMapTimer) return;
     bombardMapTimer = setInterval(bombardMapTick, BOMBARD_MAP_TICK_MS);
     bombardMapTick();
@@ -3503,7 +3579,11 @@
     bombardShells.length = 0;
     for (const entry of bombardActiveLines.values()) entry.line.remove();
     bombardActiveLines.clear();
+    for (const mark of bombardReloadMarks.values()) mark.marker.remove();
+    bombardReloadMarks.clear();
     if (bombardMapLayer) bombardMapLayer.clearLayers();
+    if (bombardReloadLayer) bombardReloadLayer.clearLayers();
+    if (reloadLegendEl) reloadLegendEl.classList.remove('on');
     bombardPreview = { key: null, lines: [], at: 0 };
   }
 
@@ -3667,6 +3747,129 @@
     }
   }
 
+  // ── The per-gun reload indicator ─────────────────────────────────────────
+  // A ring at each gun of the order: filling while the cannon reloads, closed
+  // and teal once it is loaded, dashed slate while there is nothing in the tube.
+  //
+  // The progress is the cannon's OWN, never a guess. A cannon reports, with the
+  // instant it fired, how long after that instant it will be loaded again — a
+  // number it works out itself (see reloadWindowMs in the cannon program),
+  // because only it knows its mechanism, its reload time and whether another
+  // shot follows. Three cases come out of that:
+  //
+  //   reloadMs > 0   a mechanical-arm shot mid-run: the arm reloads during the
+  //                  stand-down and the cannon stays assembled, so there is a
+  //                  real window to count down.
+  //   reloadMs = 0   the cannon left itself unloaded — a single shot, an
+  //                  auto-loader, or the last shot of a run. Its reload happens
+  //                  inside the next command, so there is no window to show; a
+  //                  countdown here would be a fiction.
+  //   reloadMs null  a cannon still running the previous version of the program.
+  //                  We are not told, and the map says so rather than inventing
+  //                  a number.
+  function bombardReloadState(info, now) {
+    const last      = (info && info.last) || null;
+    const delivered = (info && info.delivered) || null;
+    if (!last) {
+      // Nothing fired in this order yet: the gun is either working its first
+      // shot (a full disassemble/reload/assemble cycle, whose length only the
+      // cannon knows) or it has not been given anything at all.
+      return { state: 'working', started: !!delivered };
+    }
+    const win = last.reloadMs;
+    const t0  = Date.parse(last.firedAt || last.doneAt || '');
+    if (Number.isFinite(win) && win > 0 && win <= BOMBARD_RELOAD_MAX_MS && Number.isFinite(t0)) {
+      const until = t0 + win;
+      if (now < until) return { state: 'reloading', until: until, win: win };
+      return { state: 'loaded' };
+    }
+    return { state: win == null ? 'unknown' : 'empty' };
+  }
+
+  // The ring, as SVG in a div so the arc is a dash of exactly the right length:
+  // the visible dash is `progress × circumference` and the gap is the whole
+  // circumference, and rotating the circle a quarter turn starts it at the top.
+  function bombardReloadDash(pct, state) {
+    if (state !== 'reloading' && state !== 'loaded') return '2 4';
+    return (BOMBARD_RELOAD_C * (pct / 100)).toFixed(2) + ' ' + BOMBARD_RELOAD_C.toFixed(2);
+  }
+
+  function bombardReloadColour(state) {
+    if (state === 'reloading') return BOMBARD_RELOAD_GOLD;
+    if (state === 'loaded')    return BOMBARD_RELOAD_TEAL;
+    return BOMBARD_RELOAD_SLATE;
+  }
+
+  function bombardReloadHtml(state, pct) {
+    return '<div class="bombard-reload">' +
+      '<svg width="26" height="26" viewBox="0 0 26 26">' +
+        '<circle class="bombard-reload__track" cx="13" cy="13" r="' + BOMBARD_RELOAD_R + '"/>' +
+        '<circle class="bombard-reload__bar" cx="13" cy="13" r="' + BOMBARD_RELOAD_R + '" ' +
+          'stroke="' + bombardReloadColour(state) + '" ' +
+          'stroke-dasharray="' + bombardReloadDash(pct, state) + '" ' +
+          'transform="rotate(-90 13 13)"/>' +
+      '</svg>' +
+      '<span class="bombard-reload__text"></span>' +
+    '</div>';
+  }
+
+  function bombardReloadIcon(state, pct) {
+    return L.divIcon({
+      className: '', html: bombardReloadHtml(state, pct),
+      iconSize: [26, 26], iconAnchor: [13, 13],
+    });
+  }
+
+  function bombardDrawReload(positions, plan, now) {
+    const wanted = new Set();
+
+    for (const g of plan.guns) {
+      const gun = positions.get(g.cannonId);
+      if (!gun) continue;
+      wanted.add(g.cannonId);
+
+      const st  = bombardReloadState(bombardPlanShots[String(g.cannonId)], now);
+      // The arc only moves while reloading, and only whole percent, so a 12s
+      // reload repaints ~100 times rather than once per tick.
+      const pct = st.state === 'reloading'
+        ? Math.max(0, Math.min(100, Math.round(100 * (now - (st.until - st.win)) / st.win)))
+        : (st.state === 'loaded' ? 100 : 0);
+      const text = st.state === 'reloading'
+        ? Math.max(0, (st.until - now) / 1000).toFixed(1) + 's'
+        : '';
+      const latlng = mcToLL(gun.x, gun.z);
+
+      let mark = bombardReloadMarks.get(g.cannonId);
+      if (!mark) {
+        mark = { marker: L.marker(latlng, { icon: bombardReloadIcon(st.state, pct), interactive: false }).addTo(bombardReloadLayer) };
+        bombardReloadMarks.set(g.cannonId, mark);
+      } else {
+        mark.marker.setLatLng(latlng);
+      }
+
+      // The icon's own DOM is updated in place rather than re-created, which is
+      // what keeps a repaint per percent cheap.
+      const el = mark.marker.getElement();
+      if (!el) continue;
+      const bar  = el.querySelector('.bombard-reload__bar');
+      const lbl  = el.querySelector('.bombard-reload__text');
+      if (!bar || !lbl) continue;
+      if (mark.pct !== pct || mark.state !== st.state) {
+        bar.setAttribute('stroke', bombardReloadColour(st.state));
+        bar.setAttribute('stroke-dasharray', bombardReloadDash(pct, st.state));
+        mark.pct = pct;
+        mark.state = st.state;
+      }
+      if (mark.text !== text) { lbl.textContent = text; mark.text = text; }
+    }
+
+    for (const [id, mark] of Array.from(bombardReloadMarks.entries())) {
+      if (wanted.has(id)) continue;
+      mark.marker.remove();
+      bombardReloadMarks.delete(id);
+    }
+  }
+
   function bombardMapTick() {
     if (!bombardPlan || bombardMapBusy) return;
     bombardMapBusy = true;
@@ -3685,6 +3888,7 @@
         bombardRebuildPreview(positions, signature, now);
       }
       bombardDrawActive(positions, plan, now);
+      bombardDrawReload(positions, plan, now);
     } catch (e) {
       console.warn('Firing order map draw failed.', e);
     } finally {

@@ -1209,11 +1209,24 @@ export async function refreshCannonFromComputer(env, id, { name, x, y, z, length
   return findCannonById(env, id);
 }
 
-// Heartbeat for any cannon (pending or active): refresh last_seen + aim state.
-export async function heartbeatCannon(env, id, { yaw, pitch }) {
-  await env.DB.prepare(
-    `UPDATE ballistics_cannons SET last_seen_at = ?, last_yaw = ?, last_pitch = ?, updated_at = ? WHERE id = ?`
-  ).bind(nowIso(), Number(yaw) || 0, Number(pitch) || 0, nowIso(), Number(id)).run();
+// Heartbeat for any cannon (pending or active): refresh last_seen + aim state,
+// plus the reload mechanism the cannon reports on every poll.
+export async function heartbeatCannon(env, id, { yaw, pitch, reloadType, reloadTime } = {}) {
+  const now = nowIso();
+  const base = ['last_seen_at = ?', 'last_yaw = ?', 'last_pitch = ?', 'updated_at = ?'];
+  const values = [now, Number(yaw) || 0, Number(pitch) || 0, now];
+  const write = async (extra) => env.DB.prepare(
+    `UPDATE ballistics_cannons SET ${base.concat(extra.sets).join(', ')} WHERE id = ?`
+  ).bind(...values.concat(extra.binds, Number(id))).run();
+
+  const profile = reloadProfileColumns(reloadType, reloadTime);
+  try {
+    await write(profile);
+  } catch (err) {
+    // 0020 not applied: the heartbeat still has to happen.
+    if (!profile.sets.length) throw err;
+    await write({ sets: [], binds: [] });
+  }
   return findCannonById(env, id);
 }
 
@@ -1304,27 +1317,67 @@ export async function dispatchCannonFire(env, id, { yaw, pitch }) {
 // sequence" and the firing happens several seconds into it — so this is stamped
 // on a later poll of the same sequence, and only once. It is a display value:
 // an implausible clock is ignored rather than trusted.
-export async function recordShotFiredAt(env, cannonId, sequence, firedAt) {
+//
+// `reloadMs` rides along with it — the cannon's own answer to "how long after
+// that instant will I be loaded again", or 0 when it left itself unloaded — and
+// is stamped in the same statement so a shot can never end up with a fire time
+// and a reload window that came from different reports.
+//
+// 0 and "never reported" are deliberately different values: 0 is a cannon saying
+// it stayed unloaded, and null is a cannon that did not say anything (an older
+// installer), which the map reports as unknown rather than as unloaded.
+export async function recordShotFiredAt(env, cannonId, sequence, firedAt, reloadMs) {
   const ms = Number(firedAt);
   if (!Number.isFinite(ms) || ms <= 0) return;
   // Within two minutes of our own clock, or it is not a time we can use.
   if (Math.abs(Date.now() - ms) > 120000) return;
+  const reload = reloadMs == null ? NaN : Number(reloadMs);
   try {
     await env.DB.prepare(
-      `UPDATE ballistics_fire_queue SET fired_at = ?
+      `UPDATE ballistics_fire_queue SET fired_at = ?, reload_ms = ?
         WHERE cannon_id = ? AND sequence = ? AND fired_at IS NULL`
-    ).bind(new Date(ms).toISOString(), Number(cannonId), Number(sequence)).run();
+    ).bind(new Date(ms).toISOString(),
+           Number.isFinite(reload) ? Math.max(0, Math.round(reload)) : null,
+           Number(cannonId), Number(sequence)).run();
   } catch (err) {
-    console.warn('Could not record the fire time (run migration 0019?)', err);
+    // 0020 not applied: record the fire time alone (the map still draws its
+    // shells), or 0019 not applied either and there is nothing to record.
+    try {
+      await env.DB.prepare(
+        `UPDATE ballistics_fire_queue SET fired_at = ?
+          WHERE cannon_id = ? AND sequence = ? AND fired_at IS NULL`
+      ).bind(new Date(ms).toISOString(), Number(cannonId), Number(sequence)).run();
+    } catch (inner) {
+      console.warn('Could not record the fire time (run migration 0019?)', inner);
+    }
   }
 }
 
-export async function ackCannonCommand(env, id, sequence, firedAt) {
+// A cannon's reload mechanism, as extra columns on a write that is happening
+// anyway. It is reported on every poll, so giving it a statement of its own
+// would double a cannon's writes for a display label — and the GPS side of this
+// system is careful about exactly that. `reload_type`/`reload_time` are simply
+// appended to the caller's SET list, and if 0020 is not applied the columns do
+// not exist, so the caller retries without them rather than losing the write.
+//
+// Returns the extra SET fragments and bind values, or empty arrays when there is
+// no profile to store.
+function reloadProfileColumns(reloadType, reloadTime) {
+  const sets = [];
+  const binds = [];
+  const kind = reloadType === 'arm' || reloadType === 'autoloader' ? reloadType : null;
+  const time = Number(reloadTime);
+  if (kind) { sets.push('reload_type = ?'); binds.push(kind); }
+  if (Number.isFinite(time) && time >= 0) { sets.push('reload_time = ?'); binds.push(time); }
+  return { sets, binds };
+}
+
+export async function ackCannonCommand(env, id, sequence, firedAt, reloadMs) {
   const seq = Number(sequence) || 0;
   const before = await findCannonById(env, id);
   if (!before) return null;
 
-  await recordShotFiredAt(env, id, seq, firedAt);
+  await recordShotFiredAt(env, id, seq, firedAt, reloadMs);
 
   if (seq <= Number(before.acked_sequence || 0)) return before;
 
@@ -1586,20 +1639,20 @@ export async function listDeliveredShotsForVehicle(env, vehicleId) {
 // bounded read however long the order runs.
 //
 // `firedAt` is absent until migration 0019 is applied; the map falls back to the
-// ack time and reports the timing as estimated.
+// ack time and reports the timing as estimated. `reloadMs` arrives with it (0020)
+// and drives the per-gun reload ring — the rows come back with whatever columns
+// exist rather than failing, so an unapplied migration just means no ring.
 export async function listPlanCurrentShots(env, planId) {
   const out = {};
   const id = Number(planId);
-  const withFiredAt = `SELECT q.cannon_id, q.sequence, q.yaw, q.pitch, q.target_key, q.fired_at, q.done_at
-                        FROM ballistics_fire_queue q
-                        JOIN (SELECT cannon_id, MAX(id) AS id FROM ballistics_fire_queue
-                               WHERE plan_id = ? AND state = 'done' GROUP BY cannon_id) m
-                          ON m.id = q.id`;
-  const withoutFiredAt = `SELECT q.cannon_id, q.sequence, q.yaw, q.pitch, q.target_key, NULL AS fired_at, q.done_at
-                            FROM ballistics_fire_queue q
-                            JOIN (SELECT cannon_id, MAX(id) AS id FROM ballistics_fire_queue
-                                   WHERE plan_id = ? AND state = 'done' GROUP BY cannon_id) m
-                              ON m.id = q.id`;
+  const lastOfGun = `FROM ballistics_fire_queue q
+                       JOIN (SELECT cannon_id, MAX(id) AS id FROM ballistics_fire_queue
+                              WHERE plan_id = ? AND state = 'done' GROUP BY cannon_id) m
+                         ON m.id = q.id`;
+  const baseCols = 'q.cannon_id, q.sequence, q.yaw, q.pitch, q.target_key, q.done_at';
+  const withReload = `SELECT ${baseCols}, q.fired_at, q.reload_ms ${lastOfGun}`;
+  const withFiredAt = `SELECT ${baseCols}, q.fired_at, NULL AS reload_ms ${lastOfGun}`;
+  const withoutFiredAt = `SELECT ${baseCols}, NULL AS fired_at, NULL AS reload_ms ${lastOfGun}`;
 
   const bucket = (cannonId) => {
     const key = String(cannonId);
@@ -1623,9 +1676,13 @@ export async function listPlanCurrentShots(env, planId) {
 
     let last = null;
     try {
-      last = await env.DB.prepare(withFiredAt).bind(id).all();
+      last = await env.DB.prepare(withReload).bind(id).all();
     } catch (err) {
-      last = await env.DB.prepare(withoutFiredAt).bind(id).all();
+      try {
+        last = await env.DB.prepare(withFiredAt).bind(id).all();
+      } catch (inner) {
+        last = await env.DB.prepare(withoutFiredAt).bind(id).all();
+      }
     }
     for (const row of (last && last.results) || []) {
       bucket(row.cannon_id).last = {
@@ -1635,6 +1692,8 @@ export async function listPlanCurrentShots(env, planId) {
         targetKey: row.target_key == null ? null : String(row.target_key),
         firedAt: row.fired_at || null,
         doneAt: row.done_at || null,
+        // 0 means the cannon left itself unloaded, null that it never said.
+        reloadMs: row.reload_ms == null ? null : Number(row.reload_ms),
       };
     }
   } catch (err) {
@@ -2072,21 +2131,29 @@ export async function assignCannonToVehicle(env, cannonId, vehicleId) {
 // Position + aim report for a cannon whose vehicle computer is reporting on its
 // behalf. A sublevel cannon that has no GPS fix yet reports the 0 fallback, so
 // gpsOk gates the coordinates exactly as it does on the cannon's own poll.
-export async function updateCannonTelemetry(env, id, { x, y, z, gpsOk, yaw, pitch }) {
+//
+// The gun's reload mechanism rides along when the vehicle forwards one (the
+// cannon reports it, the vehicle passes it through), appended to this same write
+// for the same reason it is appended to the heartbeat.
+export async function updateCannonTelemetry(env, id, { x, y, z, gpsOk, yaw, pitch, reloadType, reloadTime } = {}) {
   const now = nowIso();
-  if (gpsOk) {
-    await env.DB.prepare(
-      `UPDATE ballistics_cannons
-          SET x = ?, y = ?, z = ?, last_yaw = ?, last_pitch = ?, last_seen_at = ?, updated_at = ?
-        WHERE id = ?`
-    ).bind(Number(x) || 0, Number(y) || 0, Number(z) || 0,
-           Number(yaw) || 0, Number(pitch) || 0, now, now, Number(id)).run();
-  } else {
-    await env.DB.prepare(
-      `UPDATE ballistics_cannons
-          SET last_yaw = ?, last_pitch = ?, last_seen_at = ?, updated_at = ?
-        WHERE id = ?`
-    ).bind(Number(yaw) || 0, Number(pitch) || 0, now, now, Number(id)).run();
+  const base = gpsOk
+    ? ['x = ?', 'y = ?', 'z = ?', 'last_yaw = ?', 'last_pitch = ?', 'last_seen_at = ?', 'updated_at = ?']
+    : ['last_yaw = ?', 'last_pitch = ?', 'last_seen_at = ?', 'updated_at = ?'];
+  const values = gpsOk
+    ? [Number(x) || 0, Number(y) || 0, Number(z) || 0, Number(yaw) || 0, Number(pitch) || 0, now, now]
+    : [Number(yaw) || 0, Number(pitch) || 0, now, now];
+  const write = async (extra) => env.DB.prepare(
+    `UPDATE ballistics_cannons SET ${base.concat(extra.sets).join(', ')} WHERE id = ?`
+  ).bind(...values.concat(extra.binds, Number(id))).run();
+
+  const profile = reloadProfileColumns(reloadType, reloadTime);
+  try {
+    await write(profile);
+  } catch (err) {
+    // 0020 not applied: the report still has to land.
+    if (!profile.sets.length) throw err;
+    await write({ sets: [], binds: [] });
   }
   return findCannonById(env, id);
 }

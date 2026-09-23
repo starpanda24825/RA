@@ -65,6 +65,13 @@
 --           time and the cannon stays assembled between shots, while an
 --           auto-loader reloads by disassembling and always runs the full
 --           cycle. `more` says another shot follows at once.
+--           Every shot is reported to the website with the instant it
+--           actually left the barrel, so the live map can time the shell
+--           against the real thing instead of against when the website heard
+--           about it — and with how long this cannon needs before it is loaded
+--           again, which is what the map's per-gun reload indicator counts
+--           down. A gun left unloaded reports 0 instead: its reload belongs to
+--           the next command, not to the shot just fired.
 --        b) A concurrent GPS engine keeps a validated fix flowing, and the
 --           main loop pushes the freshest coordinates to the website
 --           roughly every second — along with the tower count, DOP
@@ -268,6 +275,29 @@ local function reloadSummary()
     label = (cfg.reloadType == "arm") and "Mechanical arm" or "Auto-Loader"
   end
   return string.format("%s — %s, %.2fs", label, where, cfg.reloadTime)
+end
+
+-- How long after FIRING this cannon will be loaded again, in milliseconds — or 0
+-- when it left itself unloaded and will do the reload inside the NEXT command
+-- instead.
+--
+-- Only an arm shot in a multi-shot run reloads on its own: the cannon stays
+-- assembled with a shell in it, so after the post-fire stand-down the arm simply
+-- reloads (`more` is what decides that, see runCommand). Every other case — a
+-- single shot, an auto-loader, the last shot of a run — ends with the cannon
+-- disassembled, and its reload belongs to whatever command comes next. There is
+-- therefore no reload to count down at all, and saying 0 is the honest answer.
+--
+-- This is reported to the website alongside the fire instant so the live map can
+-- draw a gun's reload progress from the cannon's OWN timings. Working it out here
+-- rather than there means the two can never drift apart.
+local function reloadWindowMs(burst, more)
+  if not (burst and more and cfg.reloadType == "arm") then return 0 end
+  -- triggerReload() holds the redstone line high for the pulse length first, so
+  -- that delay is part of the wait when a trigger is wired up.
+  local pulse = 0
+  if cfg.reloadRedstoneSide and cfg.reloadRedstoneSide ~= "" then pulse = cfg.reloadPulse end
+  return math.floor((SEQ_AFTER_FIRE + pulse + cfg.reloadTime) * 1000)
 end
 
 -- First-boot interactive setup.
@@ -712,6 +742,12 @@ local function vehicleReport(hasMount, x, y, z, gpsOk, yaw, pitch, sequence)
     -- Only for the sequence being acknowledged, so the vehicle never forwards a
     -- stale fire time as if it belonged to the shot just fired.
     firedAt = (lastFired and lastFired.sequence == sequence) and lastFired.at or nil,
+    -- ... and the reload window that starts from it, which the vehicle forwards
+    -- to the website so a managed gun's ring is drawn from the cannon's own
+    -- timings rather than guessed at by the vehicle.
+    reloadMs = (lastFired and lastFired.sequence == sequence) and lastFired.reloadMs or nil,
+    reloadType = cfg.reloadType,
+    reloadTime = cfg.reloadTime,
     mount = hasMount == true,
   })
   return pcall(function() engine.modem.transmit(VEHICLE_CHANNEL, VEHICLE_CHANNEL, payload) end)
@@ -964,7 +1000,14 @@ local function runCommand(mount, cmd)
   -- 6. Fire
   local fired = doFire(mount)
   if fired then
-    lastFired = { sequence = cmd.sequence, at = nowEpochMs() }
+    -- The instant the shell left the barrel, and how long this cannon will need
+    -- before it is loaded again. Both are sent to the website, and the pair is
+    -- what lets the live map tie a reload indicator to the real gun.
+    lastFired = {
+      sequence = cmd.sequence,
+      at = nowEpochMs(),
+      reloadMs = reloadWindowMs(burst, more),
+    }
     print("Fired! (yaw " .. string.format("%.1f", aimYaw) .. ", pitch " .. string.format("%.1f", aimPitch) .. ")")
   else
     print("Fire failed — is the cannon loaded and assembled?")
@@ -1062,6 +1105,11 @@ local function mainLoop()
       name = cfg.name,
       length = cfg.length,
       facing = cfg.facing,
+      -- The reload mechanism, reported continuously rather than per shot: it
+      -- explains a gun that is NOT counting down, because an auto-loader reloads
+      -- inside the next order instead of after firing.
+      reloadType = cfg.reloadType,
+      reloadTime = cfg.reloadTime,
       sublevel = true,
       message = cfg.message,
       yaw = curYaw,
@@ -1070,9 +1118,11 @@ local function mainLoop()
       gps = gpsReport(gpsMeta, shipSkew),
     }
     -- Only the command currently being acked carries a fire time, so the
-    -- website never sees a stale one.
+    -- website never sees a stale one. `reloadMs` travels with it: a shot's
+    -- reload window is meaningless without the instant it starts from.
     if lastFired and lastFired.sequence == lastSequence then
       body.firedAt = lastFired.at
+      body.reloadMs = lastFired.reloadMs
     end
 
     local resp = httpPost(POLL_PATH, body)

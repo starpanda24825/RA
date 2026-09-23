@@ -83,7 +83,9 @@ function sanitiseTowerList(list) {
 // POST /api/ballistics/cc/poll
 // Body: {
 //   computerId, name, x, y, z, length, facing, sublevel, message,
-//   yaw, pitch, sequence (last executed command sequence)
+//   yaw, pitch, sequence (last executed command sequence),
+//   reloadType ('arm' | 'autoloader'), reloadTime,
+//   firedAt (epoch ms of the shot just fired), reloadMs (loaded again after it)
 // }
 //
 // `name` is the name the cannon gave itself at first boot. It is honoured while
@@ -113,6 +115,11 @@ export async function ccPoll(request, env) {
   const facing  = num(body.facing, 0);
   const sublevel = body.sublevel ? 1 : 0;
   const message = String(body.message || '').slice(0, 200);
+  // The cannon's reload mechanism, reported on every poll so the map can say
+  // which kind of reload a gun has and why it is or is not counting down.
+  const reloadType = body.reloadType === 'arm' || body.reloadType === 'autoloader'
+    ? String(body.reloadType) : null;
+  const reloadTime = body.reloadTime == null ? null : num(body.reloadTime, null);
 
   let cannon = await store.findCannonByComputerId(env, computerId);
   if (!cannon) {
@@ -137,8 +144,16 @@ export async function ccPoll(request, env) {
     });
   }
 
-  // Report the current aim state (heartbeat) regardless of status.
-  cannon = await store.heartbeatCannon(env, cannon.id, { yaw: num(body.yaw, 0), pitch: num(body.pitch, 0) });
+  // Report the current aim state (heartbeat) regardless of status. The reload
+  // mechanism the cannon reports rides along on this same write rather than
+  // costing a second one, and only when it actually reported one — a program
+  // that says nothing leaves whatever is stored alone.
+  cannon = await store.heartbeatCannon(env, cannon.id, {
+    yaw: num(body.yaw, 0),
+    pitch: num(body.pitch, 0),
+    reloadType: reloadType || undefined,
+    reloadTime: reloadTime == null ? undefined : reloadTime,
+  });
 
   // GPS network health, piggy-backed on this poll. The position itself is
   // solved entirely on the computer — not a single distance is sent here — so
@@ -168,9 +183,10 @@ export async function ccPoll(request, env) {
   //
   // `firedAt` rides along on a LATER poll of the same sequence — the ack claims
   // the command, the firing happens seconds into it — and is what the live map
-  // times the shell against, so it is worth carrying up here.
+  // times the shell against, so it is worth carrying up here. `reloadMs` is the
+  // cannon's own answer to when it will be loaded again, and arrives with it.
   const ack = Math.round(num(body.sequence, 0));
-  if (ack > 0) cannon = (await store.ackCannonCommand(env, cannon.id, ack, body.firedAt)) || cannon;
+  if (ack > 0) cannon = (await store.ackCannonCommand(env, cannon.id, ack, body.firedAt, body.reloadMs)) || cannon;
 
   // Does a Sublevel Vehicle Computer own this cannon? Only an ACCEPTED vehicle
   // may take a cannon over: a pending one leaves its cannons running
@@ -222,7 +238,8 @@ export async function ccPoll(request, env) {
 // POST /api/ballistics/cc/vehicle/poll
 // Body: {
 //   computerId, shipYaw, message,
-//   cannons: [ { id, sequence, x, y, z, gpsOk, yaw, pitch } ]
+//   cannons: [ { id, sequence, x, y, z, gpsOk, yaw, pitch,
+//                firedAt, reloadMs, reloadType, reloadTime } ]
 // }
 //
 // The Sublevel Vehicle Computer is the single brain of a sublevel ship. It
@@ -278,6 +295,9 @@ export async function ccVehiclePoll(request, env) {
       const cannon = byId.get(id);
       if (!cannon) continue;
       try {
+        // The gun's reload profile is forwarded by the vehicle on its behalf — a
+        // managed cannon's config lives on the cannon itself — and is appended to
+        // this same report rather than costing a write of its own.
         await store.updateCannonTelemetry(env, id, {
           x: num(report.x, cannon.x),
           y: num(report.y, cannon.y),
@@ -285,9 +305,11 @@ export async function ccVehiclePoll(request, env) {
           gpsOk: report.gpsOk === true,
           yaw: num(report.yaw, 0),
           pitch: num(report.pitch, 0),
+          reloadType: report.reloadType || undefined,
+          reloadTime: report.reloadTime == null ? undefined : num(report.reloadTime, null),
         });
         const ack = Math.round(num(report.sequence, 0));
-        if (ack > 0) await store.ackCannonCommand(env, id, ack, report.firedAt);
+        if (ack > 0) await store.ackCannonCommand(env, id, ack, report.firedAt, report.reloadMs);
       } catch (err) {
         console.warn('CC vehicle poll: cannon report failed for', id, err);
       }

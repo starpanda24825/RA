@@ -368,6 +368,13 @@ local function networkPump()
                 pitch = tonumber(data.pitch) or 0,
                 sequence = tonumber(data.sequence) or 0,
                 firedAt = tonumber(data.firedAt),
+                -- The gun's reload mechanism and the window that opens when it
+                -- fires. The vehicle has no opinion on either — a ship's guns may
+                -- even differ — so both are passed through untouched for the
+                -- website's live map.
+                reloadMs = tonumber(data.reloadMs),
+                reloadType = data.reloadType,
+                reloadTime = tonumber(data.reloadTime),
                 mount = data.mount == true,
                 at = os.clock(),
               }
@@ -519,13 +526,19 @@ local function mainLoop()
             entry.x, entry.y, entry.z, entry.gpsOk = r.x, r.y, r.z, true
           end
           entry.yaw, entry.pitch = r.yaw, r.pitch
-          -- The instant the shell left the barrel. It arrives on a LATER report
-          -- than the ack — the ack claims the command, the firing happens
-          -- seconds into it — so it is carried on every report until the next
-          -- command comes along. Re-sending it costs one number and means a
-          -- dropped poll cannot leave a shot without its fire time; the website
-          -- records the first one it sees and ignores the rest.
+          -- The instant the shell left the barrel, and how long after it the gun
+          -- is loaded again. Both arrive on a LATER report than the ack — the ack
+          -- claims the command, the firing happens seconds into it — so they are
+          -- carried on every report until the next command comes along.
+          -- Re-sending them costs two numbers and means a dropped poll cannot
+          -- leave a shot without its fire time; the website records the first one
+          -- it sees and ignores the rest.
           if r.firedAt then entry.firedAt = r.firedAt end
+          -- 0 is a meaningful value here (the gun left itself unloaded), so this
+          -- must test for nil rather than falsiness.
+          if r.reloadMs ~= nil then entry.reloadMs = r.reloadMs end
+          if r.reloadType ~= nil then entry.reloadType = r.reloadType end
+          if r.reloadTime ~= nil then entry.reloadTime = r.reloadTime end
         end
         cannonReports[#cannonReports + 1] = entry
         forwarded[cid] = { at = fresh and r.at or (seen and seen.at or 0), ack = ackSeq }
