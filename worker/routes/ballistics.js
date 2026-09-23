@@ -354,6 +354,194 @@ export async function fireVehicle(request, env, id) {
 }
 
 // ════════════════════════════════════════════
+//  Bombardment modes
+//    Normal       — one shot per selected gun at one target.
+//    Constant     — one target, guns cycle fire/reload until stopped.
+//    Multi-Target — a queue of targets over N cycles, split across the guns.
+//
+//    A plan is opened once, and its shots are appended as the operator's page
+//    works them out — it is the only place the ballistics solver lives. The
+//    worker's job is to hold the queue and hand each gun its next shot the
+//    moment the previous one is acked (see promoteQueuedShot in the store),
+//    which is what keeps a multi-gun run synchronous.
+// ════════════════════════════════════════════
+
+const FIRE_MODES = ['normal', 'constant', 'multi'];
+const FIRE_PLAN_STATES = ['running', 'paused', 'stopped'];
+
+function parseJsonArray(text) {
+  try {
+    const value = JSON.parse(text || '[]');
+    return Array.isArray(value) ? value : [];
+  } catch { return []; }
+}
+
+// The stored row is what a page needs to rebuild its scheduler, with the two
+// JSON columns handed back as arrays rather than strings.
+function planView(plan) {
+  return {
+    id:         Number(plan.id),
+    mode:       plan.mode,
+    state:      plan.state,
+    cycles:     Number(plan.cycles),
+    targets:    parseJsonArray(plan.targets),
+    guns:       parseJsonArray(plan.guns),
+    crew:       plan.crew || null,
+    created_at: plan.created_at,
+  };
+}
+
+// Only accepted cannons may be given a plan's shots, and the vehicle a gun
+// belongs to is read from the cannon itself rather than trusted from the
+// request — a ship's gun must never be fired on behalf of a vehicle it is not
+// actually on.
+async function resolvePlanGuns(env, guns) {
+  const out = [];
+  const seen = new Set();
+  for (const entry of (Array.isArray(guns) ? guns : []).slice(0, 64)) {
+    const id = Math.round(Number(entry && entry.cannonId));
+    if (!id || seen.has(id)) continue;
+    const cannon = await store.findCannonById(env, id);
+    if (!cannon || cannon.status !== 'active') {
+      return { error: 'Cannon ' + id + ' is not an accepted cannon.' };
+    }
+    seen.add(id);
+    out.push({
+      cannonId:  id,
+      vehicleId: cannon.vehicle_id == null ? null : Number(cannon.vehicle_id),
+      name:      cannon.name || ('Cannon ' + cannon.id),
+    });
+  }
+  if (!out.length) return { error: 'No cannons were selected.' };
+  return { guns: out };
+}
+
+// POST /api/ballistics/fire-plans — open a firing order.
+// Body: { mode, cycles, targets: [{ key, x, y, z, label }], guns: [{ cannonId }] }
+export async function createFirePlan(request, env) {
+  const auth = await requireBallistics(request, env);
+  if (auth.error) return auth.error;
+
+  let body;
+  try { body = await request.json(); }
+  catch { return json({ error: 'Invalid request body.' }, { status: 400 }); }
+
+  const mode = FIRE_MODES.includes(String(body.mode)) ? String(body.mode) : null;
+  if (!mode) return json({ error: 'mode must be normal, constant or multi.' }, { status: 400 });
+
+  const resolved = await resolvePlanGuns(env, body.guns);
+  if (resolved.error) return json({ error: resolved.error }, { status: 400 });
+
+  // Targets are kept so a reloaded page can carry on with the same order. They
+  // are never used to aim: every shot arrives with its own yaw and pitch.
+  const targets = [];
+  for (const t of (Array.isArray(body.targets) ? body.targets : []).slice(0, 200)) {
+    const x = Number(t && t.x);
+    const z = Number(t && t.z);
+    if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
+    const y = Number.isFinite(Number(t && t.y)) ? Number(t.y) : 64;
+    const key = String((t && t.key) || (x + ',' + y + ',' + z)).slice(0, 48);
+    targets.push({ key, x, y, z, label: String((t && t.label) || key).slice(0, 60) });
+  }
+  if (!targets.length) return json({ error: 'A firing order needs at least one target.' }, { status: 400 });
+
+  try {
+    const plan = await store.insertFirePlan(env, {
+      mode,
+      cycles: mode === 'multi' ? Math.max(1, Math.min(999, Math.round(Number(body.cycles) || 1))) : 1,
+      targets,
+      guns: resolved.guns,
+      crew: auth.user && auth.user.username,
+    });
+    return json({ ok: true, plan: planView(plan) });
+  } catch (err) {
+    console.warn('Could not open fire plan (run migration 0018?)', err);
+    return json({ error: 'Could not open the firing order — is migration 0018 applied?' }, { status: 500 });
+  }
+}
+
+// GET /api/ballistics/fire-plans — the orders still live, so a page that was
+// reloaded mid-barrage can pick its order back up instead of losing it.
+export async function listFirePlans(request, env) {
+  const auth = await requireBallistics(request, env);
+  if (auth.error) return auth.error;
+  let rows = [];
+  try {
+    rows = await store.listActiveFirePlans(env);
+  } catch (err) {
+    console.warn('Could not list fire plans (run migration 0018?)', err);
+  }
+  return json({ plans: (rows || []).map(planView) });
+}
+
+// GET /api/ballistics/fire-plans/:id — the order plus how far each gun and each
+// target has got, which is what the page uses to keep the guns fed.
+export async function getFirePlan(request, env, id) {
+  const auth = await requireBallistics(request, env);
+  if (auth.error) return auth.error;
+  const plan = await store.findFirePlanById(env, id);
+  if (!plan) return json({ error: 'Firing order not found.' }, { status: 404 });
+  const progress = await store.firePlanProgress(env, plan.id);
+  return json({ plan: planView(plan), progress });
+}
+
+// POST /api/ballistics/fire-plans/:id/shots — append shots and fire any the
+// guns can take right now.
+export async function appendFirePlanShots(request, env, id) {
+  const auth = await requireBallistics(request, env);
+  if (auth.error) return auth.error;
+
+  const plan = await store.findFirePlanById(env, id);
+  if (!plan) return json({ error: 'Firing order not found.' }, { status: 404 });
+  if (plan.state !== 'running') {
+    return json({ error: 'This firing order is ' + plan.state + '.' }, { status: 409 });
+  }
+
+  let body;
+  try { body = await request.json(); }
+  catch { return json({ error: 'Invalid request body.' }, { status: 400 }); }
+
+  const allowed = new Set(parseJsonArray(plan.guns).map((g) => Number(g.cannonId)));
+  const shots = [];
+  for (const s of (Array.isArray(body.shots) ? body.shots : []).slice(0, 128)) {
+    const cannonId = Math.round(Number(s && s.cannonId));
+    if (!allowed.has(cannonId)) {
+      return json({ error: 'Cannon ' + cannonId + ' is not part of this firing order.' }, { status: 400 });
+    }
+    const yaw = Number(s && s.yaw);
+    const pitch = Number(s && s.pitch);
+    if (!Number.isFinite(yaw) || !Number.isFinite(pitch)) {
+      return json({ error: 'Cannon ' + cannonId + ': yaw and pitch must be numbers.' }, { status: 400 });
+    }
+    shots.push({ cannonId, yaw, pitch, targetKey: s && s.targetKey });
+  }
+  if (!shots.length) return json({ ok: true, queued: 0 });
+
+  const ids = await store.appendPlanShots(env, plan.id, shots);
+  return json({ ok: true, queued: ids.length });
+}
+
+// POST /api/ballistics/fire-plans/:id/state — { state: running | paused | stopped }
+// Pausing holds the rest of the queue where it is; stopping throws it away and
+// withdraws the shot each gun is holding but has not fired yet.
+export async function setFirePlanState(request, env, id) {
+  const auth = await requireBallistics(request, env);
+  if (auth.error) return auth.error;
+
+  let body;
+  try { body = await request.json(); }
+  catch { return json({ error: 'Invalid request body.' }, { status: 400 }); }
+
+  const state = FIRE_PLAN_STATES.includes(String(body.state)) ? String(body.state) : null;
+  if (!state) return json({ error: 'state must be running, paused or stopped.' }, { status: 400 });
+
+  const plan = await store.setFirePlanState(env, id, state);
+  if (!plan) return json({ error: 'Firing order not found.' }, { status: 404 });
+  const progress = await store.firePlanProgress(env, plan.id);
+  return json({ ok: true, plan: planView(plan), progress });
+}
+
+// ════════════════════════════════════════════
 //  Reload presets
 //    Named reload mechanisms saved here so a Sublevel Cannon Computer can pull
 //    the list at setup and pick one, instead of every operator typing timings

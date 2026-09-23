@@ -59,6 +59,12 @@
 --        a) Polls for fire commands (yaw + pitch). On a command it
 --           runs the same sequence as static cannons:
 --              disassemble → assemble → aim → fire → disassemble
+--           A command carrying `burst` is one shot of a multi-shot run
+--           (Ballistic Calculator → Constant or Multi-Target mode). There the
+--           cycle is not repeated: a mechanical arm only needs its reload
+--           time and the cannon stays assembled between shots, while an
+--           auto-loader reloads by disassembling and always runs the full
+--           cycle. `more` says another shot follows at once.
 --        b) A concurrent GPS engine keeps a validated fix flowing, and the
 --           main loop pushes the freshest coordinates to the website
 --           roughly every second — along with the tower count, DOP
@@ -631,6 +637,10 @@ local function networkPump()
               yaw = tonumber(data.yaw) or 0,
               pitch = tonumber(data.pitch) or 0,
               fire = data.fire ~= false,
+              -- Multi-shot run flags, passed through by the vehicle.
+              burst = data.burst == true,
+              more = data.more == true,
+              target = data.target,
               fromVehicle = true,     -- already ship-relative: do NOT correct again
             }
             vehicleShipYaw = tonumber(data.shipYaw)
@@ -841,29 +851,53 @@ local function triggerReload()
   end
 end
 
+-- A multi-shot run — Ballistic Calculator → Constant or Multi-Target mode —
+-- does NOT repeat the whole disassemble → assemble cycle between shots. A
+-- mechanical arm only needs its known reload time: the cannon is still
+-- assembled with a shell in it from the shot before, so nothing has to be taken
+-- apart. An auto-loader reloads BY disassembling, so it always runs the full
+-- cycle, which is the one difference between the two mechanisms.
+--
+-- `cmd.burst` marks a shot as part of such a run and `cmd.more` says another
+-- shot follows at once, which is what decides whether this one ends with the
+-- cannon assembled. `armed` is the computer's own memory of that state, so a
+-- command that arrives after the run has been idle still loads properly.
+local armed = false   -- assembled, loaded, ready to aim — no cycle needed
+
 local function runCommand(mount, cmd)
   print("Command #" .. tostring(cmd.sequence) .. ": aiming…")
 
-  -- 1. Disassemble. An auto-loader reloads here, between disassemble and
-  -- assemble.
-  pcall(function() mount.disassemble() end)
-  if cfg.reloadType == "autoloader" then
-    triggerReload()
-    sleep(cfg.reloadTime)
+  local burst = cmd.burst == true
+  local more  = cmd.more == true
+  -- The arm reloaded while we were back at the poll, so this shot is aim and
+  -- fire only. Every shot of a run but the first lands here — including the
+  -- last one, which is no less "another shot of the sequence" for being last:
+  -- `more` only decides whether the cannon is left loaded afterwards.
+  local continued = burst and armed and cfg.reloadType == "arm"
+
+  if not continued then
+    -- 1. Disassemble. An auto-loader reloads here, between disassemble and
+    -- assemble.
+    pcall(function() mount.disassemble() end)
+    if cfg.reloadType == "autoloader" then
+      triggerReload()
+      sleep(cfg.reloadTime)
+    end
+
+    -- 2. Assemble
+    pcall(function() mount.assemble() end)
+    sleep(SEQ_ASSEMBLE)
+
+    -- A mechanical arm reloads after the cannon is assembled.
+    if cfg.reloadType == "arm" then
+      triggerReload()
+      sleep(cfg.reloadTime)
+    end
+
+    -- 3. Delay before aiming
+    sleep(SEQ_BEFORE_AIM)
+    armed = true
   end
-
-  -- 2. Assemble
-  pcall(function() mount.assemble() end)
-  sleep(SEQ_ASSEMBLE)
-
-  -- A mechanical arm reloads after the cannon is assembled.
-  if cfg.reloadType == "arm" then
-    triggerReload()
-    sleep(cfg.reloadTime)
-  end
-
-  -- 3. Delay before aiming
-  sleep(SEQ_BEFORE_AIM)
 
   -- 4. Aim. The website sends an absolute world yaw. On a sublevel ship the
   -- mount's yaw is measured in the ship's rotating frame, so the barrel's
@@ -909,8 +943,18 @@ local function runCommand(mount, cmd)
   end
   sleep(SEQ_AFTER_FIRE)
 
-  -- 7. Disassemble
-  pcall(function() mount.disassemble() end)
+  -- 7. Stand down — unless another shot of this run follows immediately, in
+  -- which case the arm reloads now and the cannon is left assembled and loaded,
+  -- ready to aim straight at the next target. An auto-loader has to come apart
+  -- to reload, so it is always left disassembled.
+  if burst and more and cfg.reloadType == "arm" then
+    triggerReload()
+    sleep(cfg.reloadTime)
+    armed = true
+  else
+    pcall(function() mount.disassemble() end)
+    armed = false
+  end
 end
 
 -- ------------------------------------------------------------

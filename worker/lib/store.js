@@ -1294,10 +1294,280 @@ export async function dispatchCannonFire(env, id, { yaw, pitch }) {
   return findCannonById(env, id);
 }
 
+// A cannon reports the last sequence it executed on every poll, so the same ack
+// arrives over and over. It is only worth doing anything when the ack is new:
+// close the plan shot that sequence was handed out as, then hand the gun its
+// NEXT shot within this same request, so a burst has no idle poll between
+// shots. Returns the refreshed cannon (with any newly promoted command on it).
 export async function ackCannonCommand(env, id, sequence) {
+  const seq = Number(sequence) || 0;
+  const before = await findCannonById(env, id);
+  if (!before) return null;
+  if (seq <= Number(before.acked_sequence || 0)) return before;
+
   await env.DB.prepare(
     `UPDATE ballistics_cannons SET acked_sequence = MAX(acked_sequence, ?), updated_at = ? WHERE id = ?`
-  ).bind(Number(sequence), nowIso(), Number(id)).run();
+  ).bind(seq, nowIso(), Number(id)).run();
+
+  try {
+    await env.DB.prepare(
+      `UPDATE ballistics_fire_queue SET state = 'done', done_at = ?
+        WHERE cannon_id = ? AND sequence = ? AND state = 'delivered'`
+    ).bind(nowIso(), Number(id), seq).run();
+  } catch (err) {
+    console.warn('Ack: fire queue unavailable (run migration 0018?)', err);
+    return findCannonById(env, id);
+  }
+  return promoteQueuedShot(env, id);
+}
+
+// How recently a cannon must have checked in for a queued shot to be handed to
+// it. Matches the page's own "online" window, so a gun the operator can see as
+// offline never fires a shot that was aimed before it went quiet.
+const PROMOTE_FRESH_MS = 30000;
+
+function planGunIds(gunsJson) {
+  try {
+    const guns = JSON.parse(gunsJson || '[]');
+    return Array.isArray(guns) ? guns.map((g) => Number(g && g.cannonId)).filter(Boolean) : [];
+  } catch { return []; }
+}
+
+// ---------- ballistics: fire plans (bombardment modes) ----------
+
+// A plan is one ordered firing order — Normal, Constant or Multi-Target — and
+// its queue is the individual shots it is made of. The queue lives server-side
+// rather than in the cannon's single command slot because a cannon only acks a
+// sequence after it has fired it, so the next shot must be ready the instant
+// that ack lands. That keeps a multi-gun sequence synchronous without the
+// operator's page having to take part between shots, and it keeps a plan
+// draining if the page is closed.
+//
+// Shots are appended by the operator's page (which is the only place the
+// ballistics solver lives) and handed out one at a time by promoteQueuedShot.
+
+export async function insertFirePlan(env, { mode, cycles, targets, guns, crew }) {
+  const now = nowIso();
+  const result = await env.DB.prepare(
+    `INSERT INTO ballistics_fire_plans (mode, state, cycles, targets, guns, crew, created_at, updated_at)
+     VALUES (?, 'running', ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    mode, Math.max(1, Math.min(999, Math.round(Number(cycles) || 1))),
+    JSON.stringify(targets || []), JSON.stringify(guns || []),
+    crew == null ? null : String(crew).slice(0, 80), now, now
+  ).run();
+  return findFirePlanById(env, result.meta.last_row_id);
+}
+
+export async function findFirePlanById(env, id) {
+  return env.DB.prepare('SELECT * FROM ballistics_fire_plans WHERE id = ?').bind(Number(id)).first();
+}
+
+// Plans that are still live, newest first — how a page that was reloaded
+// mid-barrage finds the order it was running.
+export async function listActiveFirePlans(env) {
+  const { results } = await env.DB.prepare(
+    "SELECT * FROM ballistics_fire_plans WHERE state IN ('running', 'paused') ORDER BY id DESC LIMIT 20"
+  ).all();
+  return results;
+}
+
+// Queue a batch of shots, then hand one to every gun that is idle right now.
+// The sweep at the end is what makes a fresh plan start immediately instead of
+// waiting for the gun's next poll to notice its queue is no longer empty.
+export async function appendPlanShots(env, planId, shots) {
+  const now = nowIso();
+  const ids = [];
+  for (const shot of shots) {
+    const result = await env.DB.prepare(
+      `INSERT INTO ballistics_fire_queue
+         (plan_id, cannon_id, yaw, pitch, target_key, state, created_at)
+       VALUES (?, ?, ?, ?, ?, 'pending', ?)`
+    ).bind(
+      Number(planId), Number(shot.cannonId), Number(shot.yaw), Number(shot.pitch),
+      shot.targetKey == null ? null : String(shot.targetKey).slice(0, 48), now
+    ).run();
+    ids.push(result.meta.last_row_id);
+  }
+  for (const cannonId of new Set(shots.map((s) => Number(s.cannonId)))) {
+    await promoteQueuedShot(env, cannonId);
+  }
+  return ids;
+}
+
+// Hand a cannon the next shot of its queue, if it is idle and the plan is
+// running. `burst` and `more` are decided here rather than by the caller:
+//  • burst  — a shot in a multi-shot run (Constant / Multi-Target). A cannon in
+//             one of those modes must not repeat its full disassemble/assemble
+//             cycle between shots when a mechanical arm only needs its reload.
+//  • more   — another shot for this gun is already queued, so the cannon is left
+//             assembled at the end of this one. Derived from the queue itself,
+//             which is the only authoritative answer at hand-out time.
+export async function promoteQueuedShot(env, cannonId) {
+  const cannon = await findCannonById(env, cannonId);
+  if (!cannon || cannon.status !== 'active') return cannon;
+  // Still firing the shot it already has.
+  if (Number(cannon.acked_sequence) < Number(cannon.command_sequence)) return cannon;
+  // And only hand a shot to a gun that is actually there. A stale aim fired on
+  // reconnect is worse than a missed one — a moving ship's coordinates have
+  // moved on — so a cannon that has not checked in recently is left waiting
+  // until its next poll.
+  const seen = Date.parse(cannon.last_seen_at || '');
+  if (!Number.isFinite(seen) || Date.now() - seen > PROMOTE_FRESH_MS) return cannon;
+
+  let row, next;
+  try {
+    row = await env.DB.prepare(
+      `SELECT q.id, q.plan_id, q.yaw, q.pitch, p.mode
+         FROM ballistics_fire_queue q
+         JOIN ballistics_fire_plans p ON p.id = q.plan_id
+        WHERE q.cannon_id = ? AND q.state = 'pending' AND p.state = 'running'
+        ORDER BY q.id ASC LIMIT 1`
+    ).bind(Number(cannonId)).first();
+    if (!row) return cannon;
+    next = await env.DB.prepare(
+      `SELECT COUNT(*) AS c FROM ballistics_fire_queue
+        WHERE cannon_id = ? AND plan_id = ? AND state = 'pending' AND id > ?`
+    ).bind(Number(cannonId), row.plan_id, row.id).first();
+  } catch (err) {
+    console.warn('Fire queue unavailable (run migration 0018?)', err);
+    return cannon;
+  }
+
+  const more = (next && Number(next.c) > 0) ? 1 : 0;
+  const burst = row.mode === 'normal' ? 0 : 1;
+  const seq = (Number(cannon.command_sequence) || 0) + 1;
+  const now = nowIso();
+
+  const claimed = await env.DB.prepare(
+    `UPDATE ballistics_fire_queue
+        SET state = 'delivered', burst = ?, more = ?, sequence = ?, delivered_at = ?
+      WHERE id = ? AND state = 'pending'`
+  ).bind(burst, more, seq, now, row.id).run();
+  // Someone else claimed it between the SELECT and the UPDATE — they will have
+  // written the command, so leave this poll alone rather than double-assign.
+  if (claimed.meta && Number(claimed.meta.changes) === 0) return findCannonById(env, cannonId);
+
+  await env.DB.prepare(
+    `UPDATE ballistics_cannons
+        SET command_sequence = ?, command_yaw = ?, command_pitch = ?, command_fire = 1,
+            command_at = ?, updated_at = ?
+      WHERE id = ?`
+  ).bind(seq, Number(row.yaw), Number(row.pitch), now, now, Number(cannonId)).run();
+  return findCannonById(env, cannonId);
+}
+
+// Pause holds the rest of the queue where it is; the plan state alone stops
+// promoteQueuedShot handing any of it out, and the shot a gun is already
+// holding still finishes.
+//
+// Stop is the hard one: a shot that has been handed to a gun but not yet acked
+// is withdrawn from the cannon as well, so a tube that is offline this minute
+// does not fire the moment it reconnects.
+export async function setFirePlanState(env, id, state) {
+  const now = nowIso();
+  const plan = await findFirePlanById(env, id);
+  if (!plan) return null;
+  await env.DB.prepare('UPDATE ballistics_fire_plans SET state = ?, updated_at = ? WHERE id = ?')
+    .bind(state, now, Number(id)).run();
+
+  // Resuming sweeps the queue: any shot that was appended while the order was
+  // paused is still waiting, and an idle gun would otherwise not be offered one
+  // until it acked something new — which it never will.
+  if (state === 'running') {
+    for (const cannonId of planGunIds(plan.guns)) await promoteQueuedShot(env, cannonId);
+    return findFirePlanById(env, id);
+  }
+
+  if (state === 'stopped' || state === 'done') {
+    const { results } = await env.DB.prepare(
+      "SELECT id, cannon_id, sequence FROM ballistics_fire_queue WHERE plan_id = ? AND state = 'delivered'"
+    ).bind(Number(id)).all();
+    await env.DB.prepare(
+      "UPDATE ballistics_fire_queue SET state = 'cancelled' WHERE plan_id = ? AND state = 'pending'"
+    ).bind(Number(id)).run();
+
+    for (const row of results || []) {
+      const c = await findCannonById(env, row.cannon_id);
+      if (!c) continue;
+      if (Number(c.command_sequence) !== Number(row.sequence)) continue;
+      if (Number(c.acked_sequence) >= Number(row.sequence)) continue;  // already fired it
+      await env.DB.prepare(
+        `UPDATE ballistics_cannons
+            SET command_sequence = acked_sequence, command_fire = 0, updated_at = ?
+          WHERE id = ?`
+      ).bind(now, Number(c.id)).run();
+      await env.DB.prepare(
+        `UPDATE ballistics_fire_queue SET state = 'cancelled' WHERE id = ?`
+      ).bind(Number(row.id)).run();
+    }
+  }
+  return findFirePlanById(env, id);
+}
+
+// The shot a cannon is currently holding, so the CC bridge can tell the cannon
+// whether it belongs to a multi-shot run (and whether another shot follows)
+// without those plan fields having to live on the cannon row itself.
+export async function findDeliveredShot(env, cannonId, sequence) {
+  try {
+    return await env.DB.prepare(
+      `SELECT burst, more, target_key FROM ballistics_fire_queue
+        WHERE cannon_id = ? AND sequence = ? AND state = 'delivered'`
+    ).bind(Number(cannonId), Number(sequence)).first();
+  } catch (err) {
+    return null;   // 0018 not applied yet: no plan shots exist
+  }
+}
+
+// Same, for every gun of one vehicle in a single query.
+export async function listDeliveredShotsForVehicle(env, vehicleId) {
+  const out = {};
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT q.cannon_id, q.burst, q.more, q.target_key
+         FROM ballistics_fire_queue q
+         JOIN ballistics_cannons c ON c.id = q.cannon_id
+        WHERE c.vehicle_id = ? AND q.state = 'delivered'`
+    ).bind(Number(vehicleId)).all();
+    for (const row of results || []) out[Number(row.cannon_id)] = row;
+  } catch (err) {
+    // 0018 not applied yet: ships simply fire whole cycles as before.
+  }
+  return out;
+}
+
+// What the operator's page needs to keep the guns fed and to show progress:
+// per gun how much is still waiting, and per target how many shots it has
+// already been given. A cancelled shot does not count towards a target, so a
+// stopped run reports the truth about what was actually fired.
+export async function firePlanProgress(env, planId) {
+  const guns = {};
+  const targets = {};
+  let rows = [];
+  try {
+    const res = await env.DB.prepare(
+      `SELECT cannon_id, state, target_key, COUNT(*) AS n
+         FROM ballistics_fire_queue WHERE plan_id = ?
+        GROUP BY cannon_id, state, target_key`
+    ).bind(Number(planId)).all();
+    rows = res.results || [];
+  } catch (err) {
+    console.warn('Fire queue unavailable (run migration 0018?)', err);
+    return { guns, targets };
+  }
+  for (const row of rows) {
+    const id = String(row.cannon_id);
+    const n = Number(row.n) || 0;
+    guns[id] = guns[id] || { pending: 0, delivered: 0, done: 0 };
+    if (row.state === 'pending') guns[id].pending += n;
+    else if (row.state === 'delivered') guns[id].delivered += n;
+    else if (row.state === 'done') guns[id].done += n;
+    if (row.state !== 'cancelled' && row.target_key != null) {
+      const key = String(row.target_key);
+      targets[key] = (targets[key] || 0) + n;
+    }
+  }
+  return { guns, targets };
 }
 
 // ---------- ballistics: GPS network ----------

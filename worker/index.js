@@ -417,6 +417,18 @@ export default {
         if (m && method === 'PUT') return await ballistics.updateCannon(request, env, m[1]);
         if (m && method === 'DELETE') return await ballistics.deleteCannon(request, env, m[1]);
 
+        if (pathname === '/api/ballistics/fire-plans' && method === 'GET') return await ballistics.listFirePlans(request, env);
+        if (pathname === '/api/ballistics/fire-plans' && method === 'POST') return await ballistics.createFirePlan(request, env);
+
+        m = pathname.match(/^\/api\/ballistics\/fire-plans\/(\d+)$/);
+        if (m && method === 'GET') return await ballistics.getFirePlan(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/ballistics\/fire-plans\/(\d+)\/shots$/);
+        if (m && method === 'POST') return await ballistics.appendFirePlanShots(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/ballistics\/fire-plans\/(\d+)\/state$/);
+        if (m && method === 'POST') return await ballistics.setFirePlanState(request, env, m[1]);
+
         m = pathname.match(/^\/api\/ballistics\/vehicles\/(\d+)\/accept$/);
         if (m && method === 'POST') return await ballistics.acceptVehicle(request, env, m[1]);
 

@@ -162,9 +162,11 @@ export async function ccPoll(request, env) {
     }
   }
 
-  // Acknowledge the last command the computer says it executed.
+  // Acknowledge the last command the computer says it executed. A new ack also
+  // hands this cannon the next shot of its plan within the same request, so the
+  // refreshed row is the one that decides whether there is a command to deliver.
   const ack = Math.round(num(body.sequence, 0));
-  if (ack > 0) await store.ackCannonCommand(env, cannon.id, ack);
+  if (ack > 0) cannon = (await store.ackCannonCommand(env, cannon.id, ack)) || cannon;
 
   // Does a Sublevel Vehicle Computer own this cannon? Only an ACCEPTED vehicle
   // may take a cannon over: a pending one leaves its cannons running
@@ -188,11 +190,19 @@ export async function ccPoll(request, env) {
   if (!vehicle && cannon.status === 'active' &&
       Number(cannon.command_sequence) > 0 &&
       Number(cannon.acked_sequence) < Number(cannon.command_sequence)) {
+    // A plan shot carries two extra flags so a multi-shot run does not repeat
+    // the whole disassemble/assemble cycle between shots (see the cannon
+    // program). A plain single-shot fire has no queue row and therefore
+    // neither flag, which is exactly the old behaviour.
+    const shot = await store.findDeliveredShot(env, cannon.id, cannon.command_sequence);
     command = {
       sequence: Number(cannon.command_sequence),
       yaw:      Number(cannon.command_yaw),
       pitch:    Number(cannon.command_pitch),
       fire:     !!cannon.command_fire,
+      burst:    !!(shot && Number(shot.burst) === 1),
+      more:     !!(shot && Number(shot.more) === 1),
+      target:   shot && shot.target_key ? String(shot.target_key) : null,
     };
   }
 
@@ -254,7 +264,7 @@ export async function ccVehiclePoll(request, env) {
     return ccJson(false, 'Vehicle registry unavailable — apply migration 0016.');
   }
 
-  const cannons = await store.listCannonsByVehicle(env, vehicle.id);
+  let cannons = await store.listCannonsByVehicle(env, vehicle.id);
   const byId = new Map((cannons || []).map((c) => [Number(c.id), c]));
 
   // Reports + acks for this vehicle's own cannons only.
@@ -280,6 +290,13 @@ export async function ccVehiclePoll(request, env) {
     }
   }
 
+  // Re-read the guns after those acks: an ack promotes a gun's next shot in
+  // this same request, and the assignment below has to see that command rather
+  // than the one the gun has just finished.
+  const fresh = await store.listCannonsByVehicle(env, vehicle.id);
+  if (fresh && fresh.length) cannons = fresh;
+  const delivered = await store.listDeliveredShotsForVehicle(env, vehicle.id);
+
   // A pending vehicle gets nothing to aim: it is only told its own status.
   const payload = (cannons || []).map((c) => {
     const entry = {
@@ -296,11 +313,17 @@ export async function ccVehiclePoll(request, env) {
     if (vehicle.status === 'active' && c.status === 'active' &&
         Number(c.command_sequence) > 0 &&
         Number(c.acked_sequence) < Number(c.command_sequence)) {
+      const shot = delivered[Number(c.id)];
       entry.command = {
         sequence: Number(c.command_sequence),
         yaw:      Number(c.command_yaw),
         pitch:    Number(c.command_pitch),
         fire:     !!c.command_fire,
+        // See ccPoll: a plan shot may skip the disassemble/assemble cycle and
+        // leave the gun assembled for the shot that follows it.
+        burst:    !!(shot && Number(shot.burst) === 1),
+        more:     !!(shot && Number(shot.more) === 1),
+        target:   shot && shot.target_key ? String(shot.target_key) : null,
       };
     }
     return entry;

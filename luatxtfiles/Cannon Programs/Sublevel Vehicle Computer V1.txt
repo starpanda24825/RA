@@ -444,6 +444,14 @@ local function assignAim(cannonId, cmd, shipYaw)
     yaw = mountYaw,
     pitch = cmd.pitch or 0,
     fire = cmd.fire ~= false,
+    -- Passed straight through from the plan: `burst` marks a shot of a
+    -- multi-shot run (Constant / Multi-Target mode) and `more` says another
+    -- shot follows at once, which is what lets a mechanical-arm cannon skip
+    -- the disassemble/assemble cycle between shots. The vehicle has no opinion
+    -- on either — only the cannon knows which reload mechanism it has.
+    burst = cmd.burst == true,
+    more = cmd.more == true,
+    target = cmd.target,
     shipRelative = relative,
     shipYaw = shipYaw,
   })
@@ -583,7 +591,9 @@ local function mainLoop()
             local canAim = (shipYaw ~= nil) or not cfg.shipRelativeYaw or not cfg.blockFireWithoutHeading
             if canAim then
               if assignAim(cid, { sequence = seq, yaw = tonumber(cmd.yaw) or 0,
-                                  pitch = tonumber(cmd.pitch) or 0, fire = cmd.fire ~= false }, shipYaw) then
+                                  pitch = tonumber(cmd.pitch) or 0, fire = cmd.fire ~= false,
+                                  burst = cmd.burst == true, more = cmd.more == true,
+                                  target = cmd.target }, shipYaw) then
                 assignedNow = assignedNow + 1
               end
             else

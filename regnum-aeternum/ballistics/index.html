@@ -441,6 +441,25 @@
 
 /* ---------- Cannon registry ---------- */
 .registry-list { display: flex; flex-direction: column; gap: 10px; }
+
+/* Bombardment: the firing-mode switch and the unit / target pickers. */
+.bombard-modes { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.bombard-modes .map-btn.active { background: var(--gold); border-color: var(--gold-bright); color: var(--ink); }
+.bombard-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; max-height: 220px; overflow-y: auto; }
+.bombard-row {
+  display: flex; align-items: center; gap: 9px;
+  background: var(--ink-elevated); border: 1px solid var(--slate-line);
+  border-radius: 8px; padding: 7px 10px; cursor: pointer;
+  font-family: var(--font-mono); font-size: 11px; color: var(--parchment-dim);
+}
+.bombard-row--gun { margin-left: 16px; }
+.bombard-row input[type="checkbox"] { accent-color: var(--crimson-bright); flex: none; }
+.bombard-row__name { flex: 1; color: var(--parchment); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bombard-row__note { color: var(--slate-soft); font-size: 10px; white-space: nowrap; }
+.bombard-empty { font-family: var(--font-mono); font-size: 10px; color: var(--slate-soft); padding: 4px 0; }
+.bombard-status { font-family: var(--font-mono); font-size: 10px; color: var(--parchment-dim); margin-top: 8px; white-space: pre-line; }
+.bombard-status.err { color: #e3a3a3; }
+
 .cannon-card {
   background: var(--ink-elevated);
   border: 1px solid var(--slate-line);
@@ -652,6 +671,43 @@
           <input class="bc-input" id="tz" type="number" placeholder="Z"/>
         </div>
         <div class="field-hint">Click "Target" then click the map, or type coordinates directly</div>
+      </div>
+
+      <div class="field-group">
+        <label>Bombardment</label>
+        <div class="field-hint">
+          Tick every cannon and ship that should take part, then pick how they fire:
+          each shot is worked out from the gun's own mount against its live position,
+          and guns that cannot reach a target take no part in it.
+        </div>
+        <div class="bombard-modes" id="bombard-modes">
+          <button class="map-btn" data-bombard-mode="normal" type="button">Normal</button>
+          <button class="map-btn" data-bombard-mode="constant" type="button">Constant</button>
+          <button class="map-btn" data-bombard-mode="multi" type="button">Multi-Target</button>
+        </div>
+        <div class="field-hint" id="bombard-mode-note"></div>
+        <div class="bombard-list" id="bombard-units"></div>
+
+        <label style="margin-top:10px;">Shot</label>
+        <select class="bc-select" id="bombard-trajectory">
+          <option value="optimal" selected>Optimal — shortest time of flight</option>
+          <option value="direct">Direct — point-blank</option>
+        </select>
+
+        <div id="bombard-multi" style="display:none;">
+          <label style="margin-top:12px;">Target Queue</label>
+          <div class="bombard-list" id="bombard-targets"></div>
+          <button class="map-btn" id="bombard-add-target" type="button" style="margin-top:8px;">Add target from X / Y / Z above</button>
+          <label style="margin-top:10px;">Cycles (min 1)</label>
+          <input class="bc-input" id="bombard-cycles" type="number" min="1" max="999" value="1"/>
+        </div>
+
+        <div class="registry-actions" style="margin-top:10px;">
+          <button class="calc-btn" id="bombard-start" type="button">Fire</button>
+          <button class="map-btn" id="bombard-pause" type="button" disabled>Pause</button>
+          <button class="map-btn danger" id="bombard-stop" type="button" disabled>Stop</button>
+        </div>
+        <div class="bombard-status" id="bombard-status"></div>
       </div>
 
       <div class="field-group">
@@ -1814,6 +1870,7 @@
       renderCannonDots();
       populateCannonDropdown();
       refreshSelectedCannonCoords();
+      renderBombardUnits();
       if (!light) renderRegistry();
     } catch (e) { console.warn('Could not load cannon registry.', e); }
   }
@@ -2109,6 +2166,533 @@
     updateFireControl();
   }
 
+  // ════════════════════════════════════════════════════════════
+  // 8c. BOMBARDMENT — Normal / Constant / Multi-Target
+  // ════════════════════════════════════════════════════════════
+  // A firing order is opened on the server and this page keeps it fed. The page
+  // is the only place the ballistics solver lives, so it works out each shot —
+  // against the gun's LIVE position, which is what matters on a moving ship —
+  // and appends it. The server hands a shot out the instant the gun acks the
+  // previous one, so this loop never has to keep pace with the firing itself:
+  // it only has to stay a shot or two ahead.
+  const BOMBARD_LOOKAHEAD  = 2;    // shots kept queued for each gun
+  const BOMBARD_MAX_TARGETS = 50;  // a queue bigger than this is not a barrage
+  let bombardMode    = 'normal';
+  let bombardSel     = new Set();  // 'c<id>' cannon · 'v<id>' ship · 'g<id>' ship gun
+  let bombardTargets = [];         // Multi-Target queue
+  let bombardPlan    = null;       // the local scheduler for the server's plan
+  let bombardTimer   = null;
+  let bombardBusy    = false;
+
+  const bombardUnitsEl   = document.getElementById('bombard-units');
+  const bombardTargetsEl = document.getElementById('bombard-targets');
+  const bombardMultiEl   = document.getElementById('bombard-multi');
+  const bombardModeNote  = document.getElementById('bombard-mode-note');
+  const bombardCyclesEl  = document.getElementById('bombard-cycles');
+  const bombardTrajEl    = document.getElementById('bombard-trajectory');
+  const bombardStartBtn  = document.getElementById('bombard-start');
+  const bombardPauseBtn  = document.getElementById('bombard-pause');
+  const bombardStopBtn   = document.getElementById('bombard-stop');
+  const bombardStatusEl  = document.getElementById('bombard-status');
+
+  const BOMBARD_MODE_NOTES = {
+    normal:   'Normal — every selected gun that can reach the target fires one shot at it.',
+    constant: 'Constant — the guns fire, reload and fire at one target until you press Stop. A shot in this run skips the disassemble/assemble cycle when the cannon has a mechanical arm: it only needs its reload time.',
+    multi:    'Multi-Target — the queue is split between the guns, and a gun that finishes takes the busiest target still outstanding. Each target is fired at once per cycle.',
+  };
+
+  function bombardSetStatus(text, isErr) {
+    bombardStatusEl.textContent = text || '';
+    bombardStatusEl.classList.toggle('err', !!isErr);
+  }
+
+  // Every gun a plan could use, whichever unit it was picked through. A ship's
+  // guns come from the vehicle registry (they are off the cannon registry).
+  function bombardGunList() {
+    const from = (list, sublevel) => list.map(c => ({
+      cannonId: Number(c.id),
+      vehicleId: c.vehicle_id == null ? null : Number(c.vehicle_id),
+      name: c.name || ('Cannon ' + c.id),
+      x: Number(c.x), y: Number(c.y), z: Number(c.z),
+      length: Number(c.length) || 4,
+      sublevel: sublevel,
+    }));
+    return from(cannonsActive, false).concat(from(cannonsManaged, true));
+  }
+
+  function bombardGunById(cannonId) {
+    const id = Number(cannonId);
+    return bombardGunList().find(g => g.cannonId === id) || null;
+  }
+
+  function bombardGunOnline(cannonId) {
+    const id = Number(cannonId);
+    const c = cannonsActive.find(x => Number(x.id) === id) || cannonsManaged.find(x => Number(x.id) === id);
+    return c ? cannonOnline(c) : false;
+  }
+
+  // What is actually ticked, as guns. In Normal and Constant mode a ship is one
+  // firing unit — every gun on it fires at the ship's target. In Multi-Target
+  // mode each gun is aimed on its own, so a broadside can hit several targets.
+  function bombardSelectedGuns() {
+    const multi = bombardMode === 'multi';
+    return bombardGunList().filter(g => {
+      if (g.vehicleId == null) return bombardSel.has('c' + g.cannonId);
+      return multi ? bombardSel.has('g' + g.cannonId) : bombardSel.has('v' + g.vehicleId);
+    });
+  }
+
+  function bombardRowHtml(token, name, note, isGun) {
+    return '<label class="bombard-row' + (isGun ? ' bombard-row--gun' : '') + '">' +
+      '<input type="checkbox" data-bombard-unit="' + token + '"' + (bombardSel.has(token) ? ' checked' : '') + '/>' +
+      '<span class="bombard-row__name">' + name + '</span>' +
+      '<span class="bombard-row__note">' + note + '</span>' +
+    '</label>';
+  }
+
+  function renderBombardUnits() {
+    const multi = bombardMode === 'multi';
+    const rows = [];
+    for (const c of cannonsActive) {
+      rows.push(bombardRowHtml('c' + c.id, escHtml(c.name || ('Cannon ' + c.id)),
+        (c.sublevel ? 'sublevel · ' : 'static · ') + (cannonOnline(c) ? 'online' : 'offline'), false));
+    }
+    for (const v of vehiclesActive) {
+      const guns = v.cannons || [];
+      const label = escHtml(v.name || ('Vehicle ' + v.id));
+      rows.push(bombardRowHtml('v' + v.id, label,
+        guns.length + ' gun' + (guns.length === 1 ? '' : 's') + (multi ? ' · pick guns below' : ''), false));
+      if (!multi) continue;
+      for (const g of guns) {
+        rows.push(bombardRowHtml('g' + g.id, escHtml(g.name || ('Cannon ' + g.id)), 'on ' + label, true));
+      }
+    }
+    bombardUnitsEl.innerHTML = rows.length ? rows.join('')
+      : '<div class="bombard-empty">No accepted cannons or ships yet — accept a pending request in the registries first.</div>';
+  }
+
+  function bombardTargetLabel(t) {
+    return 'X ' + t.x + ' · Y ' + t.y + ' · Z ' + t.z;
+  }
+
+  function renderBombardTargets() {
+    bombardTargetsEl.innerHTML = bombardTargets.length
+      ? bombardTargets.map(t => '<div class="bombard-row">' +
+          '<span class="bombard-row__name">' + escHtml(t.label || bombardTargetLabel(t)) + '</span>' +
+          '<button class="map-btn danger" data-bombard-target-del="' + escHtml(t.key) + '" type="button">Remove</button>' +
+        '</div>').join('')
+      : '<div class="bombard-empty">No targets queued yet. Enter X / Y / Z above and add them, one per target.</div>';
+  }
+
+  function bombardTargetFromInputs() {
+    const x = parseFloat(document.getElementById('tx').value);
+    const z = parseFloat(document.getElementById('tz').value);
+    const y = parseFloat(document.getElementById('ty').value);
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+    const ty = Number.isFinite(y) ? y : 64;
+    return { key: x + ',' + ty + ',' + z, x: x, y: ty, z: z, label: 'X ' + x + ' · Y ' + ty + ' · Z ' + z };
+  }
+
+  function setBombardMode(mode) {
+    if (mode === bombardMode) return;
+    // The selection follows the mode: a ship picked as a unit becomes all of its
+    // guns when Multi-Target needs guns, and comes back together again when it
+    // does not.
+    const all = bombardGunList();
+    const next = new Set();
+    for (const token of bombardSel) {
+      const head = token.charAt(0);
+      const id = Number(token.slice(1));
+      if (head === 'c') { next.add(token); continue; }
+      if (mode === 'multi') {
+        if (head === 'v') {
+          const v = vehiclesActive.find(x => Number(x.id) === id);
+          for (const g of ((v && v.cannons) || [])) next.add('g' + g.id);
+        } else {
+          next.add(token);
+        }
+      } else if (head === 'g') {
+        const gun = all.find(g => g.cannonId === id);
+        if (gun && gun.vehicleId != null) next.add('v' + gun.vehicleId);
+      } else {
+        next.add(token);
+      }
+    }
+    bombardSel = next;
+    bombardMode = mode;
+    document.querySelectorAll('[data-bombard-mode]').forEach(btn =>
+      btn.classList.toggle('active', btn.dataset.bombardMode === mode));
+    bombardMultiEl.style.display = (mode === 'multi') ? '' : 'none';
+    bombardModeNote.textContent = BOMBARD_MODE_NOTES[mode];
+    bombardStartBtn.textContent = (mode === 'constant') ? 'Start Barrage' : 'Fire';
+    renderBombardUnits();
+    renderBombardTargets();
+    updateBombardButtons();
+  }
+
+  // One gun's aim at one target, solved from the gun's own mount — the same
+  // arithmetic the single-target fire buttons use, so a barrage is no more
+  // approximate than a single shot.
+  function bombardSolution(gun, target, mode, drag, charges) {
+    const yaw = computeYaw(gun.x, gun.z, target.x, target.z);
+    const yawR = yaw * Math.PI / 180;
+    const len = Number(gun.length) || 4;
+    const bx = gun.x - len * Math.sin(yawR);
+    const bz = gun.z + len * Math.cos(yawR);
+    const s = (mode === 'direct')
+      ? directHitSolution(bx, gun.y, bz, target.x, target.y, target.z, yaw, charges, drag)
+      : findOptimalSolution(bx, gun.y, bz, target.x, target.y, target.z, yaw, charges, drag);
+    return s ? { yaw: yaw, pitch: s.pitch } : null;
+  }
+
+  // The next shot for one gun, decided entirely by the mode:
+  //   normal   — one shot each, so a gun that has had its turn is finished.
+  //   constant — the same aim, over and over, until the order is stopped.
+  //   multi    — the target with the most passes still outstanding that this gun
+  //              can actually reach, nearest first on a tie. That is what keeps
+  //              two guns off the same target while there is work to spread, and
+  //              lets a gun that has finished take the load off a busy one.
+  function nextBombardShot(gun) {
+    const p = bombardPlan;
+    if (!p) return null;
+    const target = p.targets[0];
+    if (p.mode !== 'multi') {
+      if (p.mode === 'normal' && (p.given[gun.cannonId] || 0) >= 1) return null;
+      const sol = bombardSolution(gun, target, p.trajectory, p.drag, p.charges);
+      return sol ? { cannonId: gun.cannonId, yaw: sol.yaw, pitch: sol.pitch, targetKey: target.key } : null;
+    }
+    let best = null, bestLeft = 0, bestDist = Infinity;
+    for (const t of p.targets) {
+      const left = p.cycles - (p.targetsAssigned[t.key] || 0);
+      if (left <= 0) continue;
+      const sol = bombardSolution(gun, t, p.trajectory, p.drag, p.charges);
+      if (!sol) continue;                       // out of this gun's range
+      const dist = Math.sqrt((t.x - gun.x) * (t.x - gun.x) + (t.z - gun.z) * (t.z - gun.z));
+      if (left > bestLeft || (left === bestLeft && dist < bestDist)) {
+        best = { cannonId: gun.cannonId, yaw: sol.yaw, pitch: sol.pitch, targetKey: t.key };
+        bestLeft = left;
+        bestDist = dist;
+      }
+    }
+    return best;
+  }
+
+  function bombardPlanSummary(plan, progress) {
+    const shotsFired = Object.values(progress.guns || {}).reduce((n, g) => n + Number(g.done || 0), 0);
+    const inFlight   = Object.values(progress.guns || {}).reduce((n, g) => n + Number(g.pending || 0) + Number(g.delivered || 0), 0);
+    const lines = [
+      'Order #' + plan.id + ' · ' + plan.mode + ' · ' + bombardPlan.guns.length + ' gun' +
+        (bombardPlan.guns.length === 1 ? '' : 's') + ' · ' + plan.targets.length + ' target' +
+        (plan.targets.length === 1 ? '' : 's') +
+        (plan.mode === 'multi' ? ' · ' + plan.cycles + ' cycle' + (plan.cycles === 1 ? '' : 's') : ''),
+      'Fired ' + shotsFired + ' · queued ' + inFlight + ' · ' + bombardPlan.charges + ' charges, ' + bombardPlan.trajectory + ' trajectory',
+    ];
+    if (plan.mode === 'multi') {
+      const left = bombardPlan.targets
+        .map(t => ({ t: t, n: Math.max(0, plan.cycles - (bombardPlan.targetsAssigned[t.key] || 0)) }))
+        .filter(x => x.n > 0)
+        .map(x => (x.t.label || bombardTargetLabel(x.t)) + ' ×' + x.n);
+      lines.push(left.length ? 'Left: ' + left.join(' · ') : 'Every target has been fired at.');
+    }
+    return lines.join('\n');
+  }
+
+  // One scheduler pass: ask the server how far the order has got, then top up
+  // every gun that is short of its look-ahead. Offline guns are skipped — shots
+  // queued at a computer nobody is reading would just pile up.
+  async function bombardTick() {
+    if (!bombardPlan || bombardBusy) return;
+    bombardBusy = true;
+    try {
+      const r = await fetch('/api/ballistics/fire-plans/' + bombardPlan.id);
+      if (!r.ok) { bombardSetStatus('Could not read firing order #' + bombardPlan.id + '.', true); return; }
+      const data = await r.json();
+      const plan = data.plan;
+      const progress = data.progress || { guns: {}, targets: {} };
+
+      // Seed the local counters from the server the first time, so a page that
+      // was reloaded mid-barrage carries on rather than starting the count again.
+      if (!bombardPlan.seeded) {
+        bombardPlan.seeded = true;
+        for (const [id, g] of Object.entries(progress.guns || {})) {
+          bombardPlan.given[id] = Number(g.pending || 0) + Number(g.delivered || 0) + Number(g.done || 0);
+        }
+        bombardPlan.targetsAssigned = Object.assign({}, progress.targets || {});
+      }
+
+      if (plan.state === 'stopped' || plan.state === 'done') {
+        endBombardment(plan.state === 'stopped' ? 'Firing order stopped.' : 'Firing order complete — every shot has been fired.');
+        return;
+      }
+      if (plan.state === 'paused') {
+        bombardPlan.paused = true;
+        bombardSetStatus(bombardPlanSummary(plan, progress) + '\nPAUSED — press Resume to carry on, Stop to end it.');
+        updateBombardButtons();
+        return;
+      }
+      bombardPlan.paused = false;
+
+      const shots = [];
+      for (const gun of bombardPlan.guns) {
+        if (!bombardGunOnline(gun.cannonId)) continue;
+        const have = progress.guns[String(gun.cannonId)] || {};
+        let queued = Number(have.pending || 0) + Number(have.delivered || 0);
+        while (queued < BOMBARD_LOOKAHEAD) {
+          const shot = nextBombardShot(gun);
+          if (!shot) { bombardPlan.idle[gun.cannonId] = true; break; }
+          shots.push(shot);
+          queued += 1;
+          bombardPlan.given[gun.cannonId] = (bombardPlan.given[gun.cannonId] || 0) + 1;
+          if (shot.targetKey) {
+            bombardPlan.targetsAssigned[shot.targetKey] = (bombardPlan.targetsAssigned[shot.targetKey] || 0) + 1;
+          }
+        }
+      }
+
+      if (shots.length) {
+        const post = await fetch('/api/ballistics/fire-plans/' + bombardPlan.id + '/shots', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ shots: shots }),
+        });
+        if (!post.ok) {
+          const d = await post.json().catch(() => ({}));
+          bombardSetStatus(d.error || 'Could not queue the next shots.', true);
+          return;
+        }
+      }
+
+      // Finished? A finite order is over when nothing is left to hand out and
+      // nothing is still in the air. Constant runs until the Stop button.
+      const busy = Object.values(progress.guns || {}).some(g => Number(g.pending || 0) + Number(g.delivered || 0) > 0);
+      const leftToFeed = bombardPlan.mode === 'normal'
+        ? bombardPlan.guns.some(g => !bombardPlan.idle[g.cannonId] && (bombardPlan.given[g.cannonId] || 0) < 1)
+        : bombardPlan.targets.some(t => (bombardPlan.targetsAssigned[t.key] || 0) < bombardPlan.cycles);
+      const stalled = !shots.length && !busy && leftToFeed;
+
+      bombardSetStatus(bombardPlanSummary(plan, progress) +
+        (stalled ? '\nWaiting: what is left is out of reach of every selected gun — press Stop to end it.' : ''));
+
+      if (bombardPlan.mode !== 'constant' && !shots.length && !busy && !leftToFeed) {
+        await fetch('/api/ballistics/fire-plans/' + bombardPlan.id + '/state', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ state: 'done' }),
+        }).catch(() => {});
+        endBombardment('Firing order complete — every shot has been fired.');
+      }
+    } catch (e) {
+      bombardSetStatus('Lost contact with the server — the guns keep firing what is already queued.', true);
+    } finally {
+      bombardBusy = false;
+      updateBombardButtons();
+    }
+  }
+
+  function startBombardTimer() {
+    if (bombardTimer) return;
+    bombardTimer = setInterval(bombardTick, 1000);
+    bombardTick();
+  }
+
+  function endBombardment(message) {
+    if (bombardTimer) { clearInterval(bombardTimer); bombardTimer = null; }
+    bombardPlan = null;
+    bombardSetStatus(message || '');
+    updateBombardButtons();
+  }
+
+  function updateBombardButtons() {
+    const active = !!bombardPlan;
+    bombardStartBtn.disabled = active;
+    bombardPauseBtn.disabled = !active;
+    bombardStopBtn.disabled = !active;
+    bombardPauseBtn.textContent = (active && bombardPlan.paused) ? 'Resume' : 'Pause';
+  }
+
+  // Open a firing order. The shot parameters (shell drag and powder charges) are
+  // frozen here, so moving the slider mid-barrage cannot silently re-aim the
+  // shots that are about to follow.
+  async function startBombardment() {
+    if (bombardPlan) return;
+    const guns = bombardSelectedGuns();
+    if (!guns.length) { bombardSetStatus('Tick at least one cannon or ship first.', true); return; }
+
+    const shellIdx = parseInt(document.getElementById('shell-select').value, 10);
+    const shell = shells[shellIdx] || { drag: 0.99 };
+    const drag = parseFloat(shell.drag) || 0.99;
+    const trajectory = bombardTrajectoryEl.value === 'direct' ? 'direct' : 'optimal';
+    const charges = selectedCharges;
+
+    let targets, cycles = 1;
+    if (bombardMode === 'multi') {
+      if (!bombardTargets.length) { bombardSetStatus('Add at least one target to the queue first.', true); return; }
+      cycles = Math.max(1, Math.round(parseFloat(bombardCyclesEl.value) || 1));
+      // Only targets some gun can actually reach go into the queue.
+      const reachable = [];
+      let dropped = 0;
+      for (const t of bombardTargets) {
+        if (guns.some(g => bombardSolution(g, t, trajectory, drag, charges))) reachable.push(t);
+        else dropped += 1;
+      }
+      if (!reachable.length) {
+        bombardSetStatus('No selected gun can reach any of those targets — try more powder charges or a different shell.', true);
+        return;
+      }
+      targets = reachable;
+      if (dropped) bombardSetStatus(dropped + ' target(s) left out: no selected gun can reach them.');
+    } else {
+      const t = bombardTargetFromInputs();
+      if (!t) { bombardSetStatus('Enter the target X / Z first.', true); return; }
+      if (!guns.some(g => bombardSolution(g, t, trajectory, drag, charges))) {
+        bombardSetStatus('No selected gun has a ' + trajectory + ' solution to that target.', true);
+        return;
+      }
+      targets = [t];
+    }
+
+    bombardSetStatus('Opening firing order…');
+    let plan;
+    try {
+      const r = await fetch('/api/ballistics/fire-plans', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: bombardMode,
+          cycles: cycles,
+          targets: targets,
+          guns: guns.map(g => ({ cannonId: g.cannonId })),
+        }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { bombardSetStatus(data.error || 'Could not open the firing order.', true); return; }
+      plan = data.plan;
+    } catch (e) {
+      bombardSetStatus('Could not reach the server.', true);
+      return;
+    }
+
+    bombardPlan = {
+      id: plan.id,
+      mode: plan.mode,
+      cycles: plan.cycles,
+      targets: plan.targets,
+      guns: guns,
+      trajectory: trajectory,
+      drag: drag,
+      charges: charges,
+      given: {},
+      idle: {},
+      targetsAssigned: {},
+      paused: false,
+      seeded: false,
+    };
+    startBombardTimer();
+  }
+
+  // A page that was reloaded mid-barrage picks its order back up: the server
+  // kept the selection, and the guns are still firing whatever was queued, so
+  // the scheduler reattaches instead of leaving them with nothing more to fire.
+  async function resumeBombardment() {
+    if (bombardPlan) return;
+    try {
+      const r = await fetch('/api/ballistics/fire-plans');
+      if (!r.ok) return;
+      const data = await r.json();
+      const plan = (data.plans || [])[0];
+      if (!plan) return;
+      const shellIdx = parseInt(document.getElementById('shell-select').value, 10);
+      const shell = shells[shellIdx] || { drag: 0.99 };
+      bombardMode = plan.mode;
+      document.querySelectorAll('[data-bombard-mode]').forEach(btn =>
+        btn.classList.toggle('active', btn.dataset.bombardMode === plan.mode));
+      bombardMultiEl.style.display = (plan.mode === 'multi') ? '' : 'none';
+      bombardModeNote.textContent = BOMBARD_MODE_NOTES[plan.mode];
+      bombardTargets = (plan.targets || []).slice();
+      bombardSel = new Set((plan.guns || []).map(g =>
+        (g.vehicleId == null) ? ('c' + g.cannonId)
+          : (plan.mode === 'multi' ? ('g' + g.cannonId) : ('v' + g.vehicleId))));
+      renderBombardUnits();
+      renderBombardTargets();
+      bombardPlan = {
+        id: plan.id,
+        mode: plan.mode,
+        cycles: plan.cycles,
+        targets: plan.targets || [],
+        guns: (plan.guns || []).map(g => {
+          const live = bombardGunById(g.cannonId);
+          return live ? Object.assign({}, live, { name: g.name || live.name }) : null;
+        }).filter(Boolean),
+        trajectory: bombardTrajEl.value === 'direct' ? 'direct' : 'optimal',
+        drag: parseFloat(shell.drag) || 0.99,
+        charges: selectedCharges,
+        given: {},
+        idle: {},
+        targetsAssigned: {},
+        paused: false,
+        seeded: false,
+      };
+      bombardSetStatus('Picking firing order #' + plan.id + ' back up — press Stop to end it.');
+      startBombardTimer();
+    } catch (e) { /* nothing to resume */ }
+  }
+
+  bombardUnitsEl.addEventListener('change', (e) => {
+    const box = e.target.closest('[data-bombard-unit]');
+    if (!box) return;
+    const token = box.dataset.bombardUnit;
+    if (box.checked) bombardSel.add(token); else bombardSel.delete(token);
+  });
+  document.querySelectorAll('[data-bombard-mode]').forEach(btn =>
+    btn.addEventListener('click', () => setBombardMode(btn.dataset.bombardMode)));
+  document.getElementById('bombard-add-target').addEventListener('click', () => {
+    const t = bombardTargetFromInputs();
+    if (!t) { bombardSetStatus('Enter the target X / Z first.', true); return; }
+    if (bombardTargets.some(x => x.key === t.key)) { bombardSetStatus('That target is already in the queue.'); return; }
+    if (bombardTargets.length >= BOMBARD_MAX_TARGETS) { bombardSetStatus('The queue is full (' + BOMBARD_MAX_TARGETS + ').', true); return; }
+    bombardTargets.push(t);
+    renderBombardTargets();
+    bombardSetStatus('Target added — ' + bombardTargets.length + ' in the queue.');
+  });
+  bombardTargetsEl.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-bombard-target-del]');
+    if (!btn) return;
+    bombardTargets = bombardTargets.filter(t => t.key !== btn.dataset.bombardTargetDel);
+    renderBombardTargets();
+  });
+  bombardStartBtn.addEventListener('click', startBombardment);
+  bombardPauseBtn.addEventListener('click', async () => {
+    if (!bombardPlan) return;
+    const state = bombardPlan.paused ? 'running' : 'paused';
+    bombardPlan.paused = (state === 'paused');
+    updateBombardButtons();
+    try {
+      await fetch('/api/ballistics/fire-plans/' + bombardPlan.id + '/state', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state: state }),
+      });
+      bombardSetStatus(state === 'paused'
+        ? 'Paused — the guns finish what is already queued, then hold.'
+        : 'Running again.');
+    } catch (e) { bombardSetStatus('Could not reach the server.', true); }
+  });
+  bombardStopBtn.addEventListener('click', async () => {
+    if (!bombardPlan) return;
+    const id = bombardPlan.id;
+    try {
+      await fetch('/api/ballistics/fire-plans/' + id + '/state', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state: 'stopped' }),
+      });
+    } catch (e) { /* the local order is ending either way */ }
+    endBombardment('Firing order #' + id + ' stopped.');
+  });
+  bombardModeNote.textContent = BOMBARD_MODE_NOTES[bombardMode];
+  document.querySelectorAll('[data-bombard-mode]').forEach(btn =>
+    btn.classList.toggle('active', btn.dataset.bombardMode === bombardMode));
+  renderBombardUnits();
+  renderBombardTargets();
+  updateBombardButtons();
+
   function renderRegistry() {
     const activeEl  = document.getElementById('cannon-active-list');
     const pendingEl = document.getElementById('cannon-pending-list');
@@ -2252,6 +2836,9 @@
       const data = await r.json();
       vehiclesActive  = data.active  || [];
       vehiclesPending = data.pending || [];
+      // A ship's guns come from here, not the cannon registry, so the
+      // bombardment picker has to be rebuilt whenever this changes.
+      renderBombardUnits();
       if (!light) { renderVehicles(); renderRegistry(); }
     } catch (e) { console.warn('Could not load vehicle registry.', e); }
   }
@@ -2698,8 +3285,13 @@
     gate.style.display = 'none';
     app.style.display  = 'flex';
     userBadge.textContent = user.username + ' · ' + user.role;
-    loadCannons();
-    loadVehicles();
+    // Load the registries first: a firing order that is still live has to be
+    // reattached to the guns it names, so the scheduler needs them to exist.
+    Promise.resolve()
+      .then(() => loadCannons())
+      .then(() => loadVehicles())
+      .then(() => resumeBombardment())
+      .catch(() => {});
     setTimeout(() => map.invalidateSize(), 50);
   }
 
