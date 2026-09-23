@@ -123,10 +123,13 @@ export async function listVehicles(request, env) {
       x:           Number(c.x),
       y:           Number(c.y),
       z:           Number(c.z),
-      // Firing the vehicle means solving for each gun from its own position,
-      // so the calculator needs each gun's barrel length and resting facing.
+      // Firing the vehicle means solving for each gun from its own mount, so the
+      // calculator needs each gun's barrel length, resting facing and powder
+      // count. `charges` is absent until migration 0021, which the page reads as
+      // "use the default" rather than as zero.
       length:      Number(c.length),
       facing:      Number(c.facing),
+      charges:     c.charges == null ? null : Number(c.charges),
       lastSeenAt:  c.last_seen_at,
     });
   }
@@ -244,8 +247,14 @@ export async function updateCannon(request, env, id) {
   if (body.length !== undefined)   fields.length   = Number(body.length);
   if (body.facing !== undefined)   fields.facing   = Number(body.facing);
   if (body.sublevel !== undefined) fields.sublevel = !!body.sublevel;
+  if (body.charges !== undefined)  fields.charges  = Number(body.charges);
 
-  if (!fields.name) return json({ error: 'Cannon name cannot be empty.' }, { status: 400 });
+  // A name that is SENT may not be blank; a request that says nothing about the
+  // name is an edit of something else — moving a charges slider must not be
+  // rejected for failing to repeat the name it was not changing.
+  if (fields.name !== undefined && !fields.name) {
+    return json({ error: 'Cannon name cannot be empty.' }, { status: 400 });
+  }
 
   const cannon = await store.updateCannon(env, id, fields);
   return json(cannon);
@@ -543,7 +552,13 @@ export async function appendFirePlanShots(request, env, id) {
     if (!Number.isFinite(yaw) || !Number.isFinite(pitch)) {
       return json({ error: 'Cannon ' + cannonId + ': yaw and pitch must be numbers.' }, { status: 400 });
     }
-    shots.push({ cannonId, yaw, pitch, targetKey: s && s.targetKey });
+    // The powder count this shot was solved with, kept on the shot: one order
+    // can fire guns loaded differently, and the map replays each flight from it.
+    const charges = Math.round(Number(s && s.charges));
+    shots.push({
+      cannonId, yaw, pitch, targetKey: s && s.targetKey,
+      charges: Number.isFinite(charges) && charges > 0 ? Math.min(99, charges) : undefined,
+    });
   }
   if (!shots.length) return json({ ok: true, queued: 0 });
 

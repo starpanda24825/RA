@@ -250,6 +250,43 @@
   width: 100%;
 }
 
+/* The one picker for cannons and ships. A button that looks exactly like the
+   selects beside it, opening a ticked list — so several guns are chosen the same
+   way one used to be, without a second list folded out underneath the form. */
+.bc-ms { position: relative; }
+.bc-ms__btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+.bc-ms__label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bc-ms__caret {
+  flex: none;
+  width: 0; height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--slate-soft);
+}
+.bc-ms.open .bc-ms__btn { border-color: var(--gold-dim); }
+.bc-ms.open .bc-ms__caret { border-top: none; border-bottom: 5px solid var(--gold-bright); }
+.bc-ms__panel {
+  position: absolute;
+  z-index: 900;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: var(--ink-elevated);
+  border: 1px solid var(--slate-line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.45);
+  max-height: 260px;
+  overflow-y: auto;
+}
+.bc-ms__panel[hidden] { display: none; }
+
 .charges-slider { display: flex; align-items: center; gap: 12px; }
 .charges-range {
   -webkit-appearance: none;
@@ -286,6 +323,22 @@
   color: var(--parchment);
   min-width: 52px;
   text-align: right;
+  white-space: nowrap;
+}
+
+/* A gun's own powder count, on its registry card and on each gun under a ship. */
+.cannon-charges {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+.cannon-charges__label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--slate-soft);
   white-space: nowrap;
 }
 
@@ -625,7 +678,6 @@
     <div id="map"></div>
     <div class="map-bar">
       <span class="map-bar__label">Place:</span>
-      <button class="map-btn" id="btn-cannon" title="Click on map to set cannon position">Cannon</button>
       <button class="map-btn" id="btn-target" title="Click on map to set target position">Target</button>
       <button class="map-btn danger" id="btn-clear">Clear</button>
       <span class="map-bar__divider" aria-hidden="true"></span>
@@ -679,26 +731,22 @@
 
     <div class="panel-inner" id="calc-panel">
 
+      <!-- ONE picker for everything that can fire. The mount, facing, barrel
+           length and powder charge are never typed in: they are the registry's,
+           which is what every solution is solved from. -->
       <div class="field-group">
-        <label>Cannon Mount (X, Y, Z)</label>
-        <div class="coord-row">
-          <input class="bc-input" id="cx" type="number" placeholder="X"/>
-          <input class="bc-input" id="cy" type="number" placeholder="Y" value="64"/>
-          <input class="bc-input" id="cz" type="number" placeholder="Z"/>
+        <label>Cannons &amp; Ships</label>
+        <div class="bc-ms" id="unit-ms">
+          <button class="bc-select bc-ms__btn" id="unit-ms-btn" type="button" aria-haspopup="true" aria-expanded="false">
+            <span class="bc-ms__label" id="unit-ms-label">— None selected —</span>
+            <span class="bc-ms__caret" aria-hidden="true"></span>
+          </button>
+          <div class="bc-ms__panel" id="unit-ms-panel" hidden></div>
         </div>
-        <label style="margin-top:10px;">Cannon Facing (before turning)</label>
-        <select class="bc-select" id="cannon-facing">
-          <option value="180">North (180°)</option>
-          <option value="270">East (270°)</option>
-          <option value="0" selected>South (0°)</option>
-          <option value="90">West (90°)</option>
-        </select>
-        <div class="field-hint">Click "Cannon" then click the map, or type coordinates directly</div>
-        <label style="margin-top:12px;">Registered Cannon</label>
-        <select class="bc-select" id="static-cannon">
-          <option value="">— None (manual entry) —</option>
-        </select>
-        <div class="field-hint">Auto-fills the mount, facing and length from the registry</div>
+        <div class="field-hint">
+          Tick every cannon and ship that should fire — one, or all of them. Each gun is
+          aimed from its own registered mount, facing, barrel length and powder charge.
+        </div>
       </div>
 
       <div class="field-group">
@@ -714,9 +762,8 @@
       <div class="field-group">
         <label>Bombardment</label>
         <div class="field-hint">
-          Tick every cannon and ship that should take part, then pick how they fire:
-          each shot is worked out from the gun's own mount against its live position,
-          and guns that cannot reach a target take no part in it.
+          Pick how the ticked guns fire: each shot is worked out from the gun's own mount
+          against its live position, and guns that cannot reach a target take no part in it.
         </div>
         <div class="bombard-modes" id="bombard-modes">
           <button class="map-btn" data-bombard-mode="normal" type="button">Normal</button>
@@ -724,7 +771,6 @@
           <button class="map-btn" data-bombard-mode="multi" type="button">Multi-Target</button>
         </div>
         <div class="field-hint" id="bombard-mode-note"></div>
-        <div class="bombard-list" id="bombard-units"></div>
 
         <label style="margin-top:10px;">Shot</label>
         <select class="bc-select" id="bombard-trajectory">
@@ -751,16 +797,7 @@
       <div class="field-group">
         <label>Shell Type</label>
         <select class="bc-select" id="shell-select"></select>
-        <label style="margin-top:10px;">Cannon Length (blocks)</label>
-        <input class="bc-input" id="cannon-len" type="number" value="4" min="1" max="32"/>
-      </div>
-
-      <div class="field-group">
-        <label>Powder Charges</label>
-        <div class="charges-slider">
-          <input class="charges-range" id="charges-slider" type="range" min="1" max="8" step="1" value="3" aria-label="Powder charges"/>
-          <span class="charges-value" id="charges-value">3</span>
-        </div>
+        <div class="field-hint">Powder charges are set per cannon in the Cannon Registry.</div>
         <button class="calc-btn" id="calc-btn" disabled>Calculate Trajectory</button>
       </div>
 
@@ -1104,15 +1141,14 @@
     defaultZoom: -2, useProxy: true
   };
   let shells          = [];
-  let maxCharges       = 8;
-  let selectedCharges  = 3;
-  let placeMode        = null;        // 'cannon' | 'target' | null
+  let maxCharges       = 8;           // the ceiling a registry charges slider offers
+  let defaultCharges   = 3;           // a gun that has no count of its own on record
+  let placeMode        = null;        // 'target' | null
   let cannonMarker     = null;
   let targetMarker     = null;
   let trajLayer        = null;        // layer group holding both trajectory lines
   let lastOptimal      = null;        // { pitch, path, tof, alternative }
   let lastDirect       = null;        // { pitch, path, tof, undershoot }
-  let lastYaw          = null;        // shared target heading for both solutions
   let lastBy           = 64;
   let lastTy           = 64;
 
@@ -1550,52 +1586,40 @@
     sel.innerHTML = shells.map((s, i) =>
       `<option value="${i}">${s.name} — ${s.fullName} (${s.fuze})</option>`
     ).join('');
-
-    const slider = document.getElementById('charges-slider');
-    const valueEl = document.getElementById('charges-value');
-    slider.max = String(maxCharges);
-    slider.value = String(Math.min(selectedCharges, maxCharges));
-    valueEl.textContent = slider.value + ' / ' + maxCharges;
-    slider.addEventListener('input', () => {
-      selectedCharges = parseInt(slider.value, 10);
-      valueEl.textContent = selectedCharges + ' / ' + maxCharges;
-    });
   }
   renderShellsUI();
 
   // ════════════════════════════════════════════════════════════
   // 5. MARKER PLACEMENT
   // ════════════════════════════════════════════════════════════
-  const btnCannon = document.getElementById('btn-cannon');
   const btnTarget = document.getElementById('btn-target');
   const btnClear  = document.getElementById('btn-clear');
 
   function setMode(m) {
     placeMode = m;
-    btnCannon.classList.toggle('active', m === 'cannon');
     btnTarget.classList.toggle('active', m === 'target');
     map.getContainer().style.cursor = m ? 'crosshair' : '';
   }
-  btnCannon.addEventListener('click', () => setMode(placeMode === 'cannon' ? null : 'cannon'));
   btnTarget.addEventListener('click', () => setMode(placeMode === 'target' ? null : 'target'));
   btnClear.addEventListener('click', clearAll);
 
   map.on('click', (e) => {
     if (!placeMode) return;
     const mc = llToMc(e.latlng);
-    if (placeMode === 'cannon') { placeCannon(mc.x, mc.z); setMode('target'); }
-    else                        { placeTarget(mc.x, mc.z); setMode(null); }
+    placeTarget(mc.x, mc.z);
+    if (placeMode === 'cannon') setMode('target'); else setMode(null);
   });
 
-  function placeCannon(x, z) {
-    const fx = parseFloat(x), fz = parseFloat(z);
-    if (isNaN(fx) || isNaN(fz)) return;
-    document.getElementById('cx').value = fx;
-    document.getElementById('cz').value = fz;
-    ['cx','cz'].forEach(id => document.getElementById(id).classList.add('set'));
+  // The cannon end of the line, drawn where the REGISTRY says the gun is. It is
+  // no longer placed by hand — the selection decides it — so a marker can never
+  // disagree with the mount the shots are actually solved from.
+  function placeCannon(x, z, name) {
+    const fx = Number(x), fz = Number(z);
+    if (!Number.isFinite(fx) || !Number.isFinite(fz)) return;
     if (cannonMarker) cannonMarker.remove();
     cannonMarker = L.marker(mcToLL(fx, fz), { icon: cannonIcon, zIndexOffset: 200 }).addTo(map)
-      .bindPopup(`<span style="font-family:'IBM Plex Mono',monospace;font-size:12px;">Cannon — X ${fx}  Z ${fz}</span>`);
+      .bindPopup('<span style="font-family:\'IBM Plex Mono\',monospace;font-size:12px;">' +
+        escHtml(name || 'Cannon') + ' — X ' + fx + '  Z ' + fz + '</span>');
     updateCalcBtn();
   }
 
@@ -1611,24 +1635,27 @@
     updateCalcBtn();
   }
 
-  document.getElementById('cx').addEventListener('change', () => placeCannon(document.getElementById('cx').value, document.getElementById('cz').value));
-  document.getElementById('cz').addEventListener('change', () => placeCannon(document.getElementById('cx').value, document.getElementById('cz').value));
   document.getElementById('tx').addEventListener('change', () => placeTarget(document.getElementById('tx').value, document.getElementById('tz').value));
   document.getElementById('tz').addEventListener('change', () => placeTarget(document.getElementById('tx').value, document.getElementById('tz').value));
 
+  // Clears what the operator PUT there: the target and the solved results. The
+  // cannon marker stays, because it is not an input any more — it is where the
+  // ticked gun is, and it would only reappear on the next poll anyway.
   function clearAll() {
-    if (cannonMarker)  cannonMarker.remove();  cannonMarker  = null;
     if (targetMarker)  targetMarker.remove();  targetMarker  = null;
     if (trajLayer) trajLayer.remove(); trajLayer = null;
-    ['cx','cz','tx','tz'].forEach(id => { const el = document.getElementById(id); el.value = ''; el.classList.remove('set'); });
+    ['tx','tz'].forEach(id => { const el = document.getElementById(id); el.value = ''; el.classList.remove('set'); });
     document.getElementById('results-wrap').classList.remove('visible');
-    lastOptimal = null; lastDirect = null; lastYaw = null;
+    lastOptimal = null; lastDirect = null;
     updateFireControl();
     updateCalcBtn();
   }
 
+  // A calculation needs two things: a target, and at least one ticked gun to
+  // fire at it. The mount, facing, length and charge all come from the registry.
   function updateCalcBtn() {
-    const ready = document.getElementById('cx').value && document.getElementById('cz').value &&
+    const guns = bombardSelectedGuns();
+    const ready = guns.length > 0 &&
                   document.getElementById('tx').value && document.getElementById('tz').value;
     document.getElementById('calc-btn').disabled = !ready;
   }
@@ -1638,19 +1665,26 @@
   // ════════════════════════════════════════════════════════════
   document.getElementById('calc-btn').addEventListener('click', runCalc);
 
+  // The single-target calculation. Everything about the gun is the registry's:
+  // its mount, barrel length, resting facing and powder charge. The operator
+  // supplies a target and a shell, and nothing else.
   function runCalc() {
-    const cx = parseFloat(document.getElementById('cx').value);
-    const cy = parseFloat(document.getElementById('cy').value) || 64;
-    const cz = parseFloat(document.getElementById('cz').value);
+    const guns = bombardSelectedGuns();
+    if (!guns.length) { document.getElementById('results-wrap').classList.remove('visible'); return; }
+    const gun  = guns[0];                  // the gun the arc is drawn for
+    const cx   = Number(gun.x);
+    const cy   = Number(gun.y);
+    const cz   = Number(gun.z);
+    const barrelLen = Number(gun.length) || 4;
+    const charges   = gunCharges(gun);
     const tx = parseFloat(document.getElementById('tx').value);
     const ty = parseFloat(document.getElementById('ty').value) || 64;
     const tz = parseFloat(document.getElementById('tz').value);
-    const barrelLen = parseFloat(document.getElementById('cannon-len').value) || 4;
     const shellIdx  = parseInt(document.getElementById('shell-select').value, 10);
     const shell     = shells[shellIdx] || { drag: 0.99, name: '?' };
     const drag      = parseFloat(shell.drag) || 0.99;
 
-    if (isNaN(cx) || isNaN(cz) || isNaN(tx) || isNaN(tz)) return;
+    if (!Number.isFinite(cx) || !Number.isFinite(cz) || isNaN(tx) || isNaN(tz)) return;
 
     const yaw  = computeYaw(cx, cz, tx, tz);
     const yawR = yaw * Math.PI / 180;
@@ -1664,8 +1698,9 @@
     const cardinal = (heading < 45 || heading >= 315) ? 'S' : (heading < 135) ? 'W' : (heading < 225) ? 'N' : 'E';
 
     // The cannon starts at a fixed yaw set by how it was assembled
-    // (N=180, E=270, S=0, W=90). Report how far it must turn from there.
-    const baseYaw = parseInt(document.getElementById('cannon-facing').value, 10) || 0;
+    // (N=180, E=270, S=0, W=90) — the registry's facing for this gun. Report how
+    // far it must turn from there.
+    const baseYaw = Number(gun.facing) || 0;
     let turn = yaw - baseYaw;
     turn = ((turn % 360) + 360) % 360;   // → [0, 360)
     if (turn > 180) turn -= 360;         // → (-180, 180]
@@ -1675,8 +1710,8 @@
       : turnAbs.toFixed(1) + '° ' + (turn > 0 ? 'clockwise' : 'counter-clockwise');
 
     // Always solve both trajectories so the officer can pick between them.
-    const optimal = findOptimalSolution(bx, by, bz, tx, ty, tz, yaw, selectedCharges, drag);
-    const direct  = directHitSolution(bx, by, bz, tx, ty, tz, yaw, selectedCharges, drag);
+    const optimal = findOptimalSolution(bx, by, bz, tx, ty, tz, yaw, charges, drag);
+    const direct  = directHitSolution(bx, by, bz, tx, ty, tz, yaw, charges, drag);
 
     if (trajLayer) trajLayer.remove();
     trajLayer = L.layerGroup().addTo(map);
@@ -1695,7 +1730,7 @@
     if (optimal) L.polyline(trackLL, { color: '#b3273a', weight: 2, opacity: 0.85 }).addTo(trajLayer);
     if (direct)  L.polyline(trackLL,  { color: '#c9a227', weight: 2, opacity: 0.85, dashArray: '6 3' }).addTo(trajLayer);
 
-    const v0 = selectedCharges * VEL_PER_CHARGE;
+    const v0 = charges * VEL_PER_CHARGE;
 
     function statBlock(label, value, mod) {
       return `<div class="result-stat${mod ? ' result-stat--' + mod : ''}">
@@ -1761,24 +1796,26 @@
       note: (direct && direct.undershoot) ? `<div class="result-note">${direct.undershoot}</div>` : '',
     });
 
-    const selCannon = selectedCannonId ? cannonsActive.find(x => String(x.id) === selectedCannonId) : null;
-    const selVehicle = selectedVehicleId
-      ? vehiclesActive.find(x => String(x.id) === selectedVehicleId)
-      : null;
-    const leadGun = (selVehicle && (selVehicle.cannons || [])[0]) || null;
-    const leadGunName = leadGun ? (leadGun.name || ('Cannon ' + leadGun.id)) : 'its first gun';
-    const shipYawStat = (selCannon && selCannon.sublevel)
-      ? (selCannon.ship_yaw != null
-          ? statBlock('Ship Heading', Number(selCannon.ship_yaw).toFixed(1) + '° (' + yawCardinal(selCannon.ship_yaw) + ')', '')
+    // WHO fires. The whole ticked set fires; the arc above is the first gun's,
+    // and there is a note saying so when that is not the whole story.
+    const leadName = gun.name || ('Cannon ' + gun.cannonId);
+    const chargeList = guns.map(gunCharges);
+    const chargeStat = [...new Set(chargeList)].length === 1
+      ? String(chargeList[0])
+      : chargeList.slice(0, 6).join(' · ') + (chargeList.length > 6 ? ' …' : '');
+    // A ship's heading is the VEHICLE's, from its two GPS beacons; a standalone
+    // sublevel gun reports its own.
+    const leadVehicle = gun.vehicleId == null ? null
+      : vehiclesActive.find(v => Number(v.id) === gun.vehicleId) || null;
+    const shipYaw = leadVehicle ? leadVehicle.ship_yaw : gun.shipYaw;
+    const shipYawStat = (leadVehicle || gun.sublevel)
+      ? (shipYaw != null
+          ? statBlock('Ship Heading', Number(shipYaw).toFixed(1) + '° (' + yawCardinal(shipYaw) + ')', '')
           : statBlock('Ship Heading', 'No stern GPS', 'warn'))
       : '';
 
     const sharedStats =
-      (selVehicle
-        ? statBlock('Firing', (selVehicle.cannons || []).length + ' gun' +
-            ((selVehicle.cannons || []).length === 1 ? '' : 's') + ' on ' +
-            escHtml(selVehicle.name || ('Vehicle ' + selVehicle.id)), 'highlight')
-        : '') +
+      statBlock('Firing', guns.length === 1 ? leadName : guns.length + ' guns', 'highlight') +
       statBlock('Cannon Turn', turnStr, 'highlight') +
       statBlock('Target Heading', yaw.toFixed(1) + '° (' + cardinal + ')', '') +
       shipYawStat +
@@ -1788,18 +1825,18 @@
       statBlock('Shell', shell.name, '') +
       statBlock('Fuze', shell.fuze || '—', '') +
       statBlock('Drag / tick', drag, '') +
-      statBlock('Charges', selectedCharges, '');
+      statBlock(guns.length === 1 ? 'Charges' : 'Charges per gun', chargeStat, '');
 
     document.getElementById('result-stats').innerHTML =
-      (selVehicle
-        ? '<div class="result-note">Ship firing — every gun on ' + escHtml(selVehicle.name || ('Vehicle ' + selVehicle.id)) +
-          ' is aimed from its own mount when you fire. The turn and arc above are for its lead gun, ' +
-          escHtml(leadGunName) + '.</div>'
+      (guns.length > 1
+        ? '<div class="result-note">' + guns.length + ' guns will fire at this target — each is aimed from its own mount,' +
+          ' barrel length and powder charge. The turn and arc above are for ' + escHtml(leadName) +
+          ', the first gun ticked.</div>'
         : '') +
       optimalCard + directCard +
       '<div class="shared-stats"><div class="shared-stats__title">Shared Shot Parameters</div><div class="result-grid">' + sharedStats + '</div></div>';
 
-    lastOptimal = optimal; lastDirect = direct; lastYaw = yaw; lastBy = by; lastTy = ty;
+    lastOptimal = optimal; lastDirect = direct; lastBy = by; lastTy = ty;
     document.getElementById('results-wrap').classList.add('visible');
     wireFireButtons();
     updateFireControl();
@@ -1916,10 +1953,6 @@
   let gpsTowers        = [];
   let reloadPresets    = [];
   let editingPresetId  = null;
-  let selectedCannonId = null;        // '' = manual entry
-  let selectedVehicleId = null;       // '' = no ship selected
-
-  const staticCannonSel = document.getElementById('static-cannon');
   const fireStatus      = document.getElementById('fire-status');
 
   function escHtml(s) {
@@ -1938,9 +1971,8 @@
       cannonsManaged = data.managed || [];
       cannonsPending = data.pending || [];
       renderCannonDots();
-      populateCannonDropdown();
-      refreshSelectedCannonCoords();
       renderBombardUnits();
+      refreshSelectedGunMarker();
       if (!light) renderRegistry();
     } catch (e) { console.warn('Could not load cannon registry.', e); }
   }
@@ -2000,24 +2032,40 @@
     }
   }
 
-  function populateCannonDropdown() {
-    const prev = staticCannonSel.value;
-    // A vehicle is a firing unit in its own right: its guns are not listed
-    // individually any more, because their heading is the ship's and they are
-    // fired as one. Selecting the vehicle fires every gun it owns.
-    const vehicleOpts = vehiclesActive.map(v => {
-      const guns = (v.cannons || []).length;
-      return '<option value="v' + v.id + '">' + escHtml(v.name || ('Vehicle ' + v.id)) +
-        ' — ' + guns + ' gun' + (guns === 1 ? '' : 's') + '</option>';
-    }).join('');
-    const cannonOpts = cannonsActive.map(c =>
-      '<option value="' + c.id + '">' + escHtml(c.name || ('Cannon ' + c.id)) + (c.sublevel ? ' (sublevel)' : '') + '</option>'
-    ).join('');
-    staticCannonSel.innerHTML = '<option value="">— None (manual entry) —</option>' +
-      (vehicleOpts ? '<optgroup label="Vehicles — fires every gun on the ship">' + vehicleOpts + '</optgroup>' : '') +
-      (cannonOpts ? '<optgroup label="Cannons">' + cannonOpts + '</optgroup>' : '');
-    if (prev && (vehiclesActive.some(v => 'v' + v.id === prev) ||
-                 cannonsActive.some(c => String(c.id) === prev))) staticCannonSel.value = prev;
+  // The ticked units, named exactly as the picker lists them. Used for the
+  // dropdown's own label and for saying who is about to fire. In Multi-Target
+  // mode each ship's guns are ticked on their own, so they are named on their own
+  // — that is the mode in which a broadside can hit several targets at once.
+  function bombardSelectedUnits() {
+    const multi = bombardMode === 'multi';
+    const out = [];
+    for (const c of cannonsActive) {
+      if (bombardSel.has('c' + c.id)) out.push(c.name || ('Cannon ' + c.id));
+    }
+    for (const v of vehiclesActive) {
+      const guns = v.cannons || [];
+      const vName = v.name || ('Vehicle ' + v.id);
+      if (multi) {
+        for (const g of guns) {
+          if (bombardSel.has('g' + g.id)) out.push((g.name || ('Cannon ' + g.id)) + ' on ' + vName);
+        }
+      } else if (bombardSel.has('v' + v.id)) {
+        out.push(vName + ' (' + guns.length + ' gun' + (guns.length === 1 ? '' : 's') + ')');
+      }
+    }
+    return out;
+  }
+
+  function updateUnitLabel() {
+    const units = bombardSelectedUnits();
+    unitLabelEl.textContent = !units.length ? '— None selected —'
+      : (units.length === 1 ? units[0] : units.length + ' selected — ' + units.join(', '));
+  }
+
+  function setUnitPicker(open) {
+    unitPickerEl.classList.toggle('open', open);
+    unitPanelEl.hidden = !open;
+    unitBtnEl.setAttribute('aria-expanded', open ? 'true' : 'false');
   }
 
   function cannonOnline(c) {
@@ -2025,99 +2073,58 @@
     return (Date.now() - new Date(c.last_seen_at).getTime()) < 30000;
   }
 
-  function applyCannonToForm(c) {
-    if (!c) return;
-    document.getElementById('cx').value = c.x;
-    document.getElementById('cy').value = c.y;
-    document.getElementById('cz').value = c.z;
-    ['cx','cz'].forEach(id => document.getElementById(id).classList.add('set'));
-    const facing = String((Math.round(Number(c.facing) || 0) % 360 + 360) % 360);
-    const sel = document.getElementById('cannon-facing');
-    if (!Array.from(sel.options).some(o => o.value === facing)) {
-      const opt = document.createElement('option');
-      opt.value = facing;
-      opt.textContent = facing + '° (registered)';
-      sel.appendChild(opt);
+  // Firing a gun uses ITS powder count, never the page's. A gun with no count on
+  // record (a row from before migration 0021) falls back to the default the old
+  // page-wide slider started at, so nothing fires with an undefined charge.
+  function gunCharges(g) {
+    const n = Math.round(Number(g && g.charges));
+    if (Number.isFinite(n) && n > 0) return Math.min(99, n);
+    return defaultCharges;
+  }
+
+  // The gun the single-target arc is drawn for: the first ticked one. The whole
+  // selection fires — this is only the gun whose trajectory is previewed, and
+  // the results say so.
+  function leadSelectedGun() {
+    return bombardSelectedGuns()[0] || null;
+  }
+
+  // Keep the cannon end of the line on the gun that is actually selected. A
+  // sublevel gun moves, so this runs on every poll: the marker follows it rather
+  // than sitting where the ship was when it was picked.
+  function refreshSelectedGunMarker() {
+    const gun = leadSelectedGun();
+    if (!gun) return;
+    if (cannonMarker) {
+      const here = cannonMarker.getLatLng();
+      const want = mcToLL(Number(gun.x) || 0, Number(gun.z) || 0);
+      if (here.lat === want.lat && here.lng === want.lng) return;
     }
-    sel.value = facing;
-    document.getElementById('cannon-len').value = c.length;
-    placeCannon(c.x, c.z);
+    placeCannon(gun.x, gun.z, gun.name);
+  }
+
+  // The ticked set changed. The label and the cannon marker follow it, and the
+  // numbers on screen are re-solved so the panel describes the guns that are
+  // about to fire rather than the ones that were ticked a moment ago.
+  function unitsChanged() {
+    updateUnitLabel();
+    refreshSelectedGunMarker();
     updateCalcBtn();
-  }
-
-  // Selecting a ship fills the form from its LEAD gun — its first assigned
-  // cannon — so there is a real arc on the map to read. Firing is a separate
-  // matter: each gun is solved from its own mount (see sendVehicleFire).
-  function applyVehicleToForm(v) {
-    const g = (v.cannons || [])[0];
-    if (!g) return;
-    applyCannonToForm({ x: g.x, y: g.y, z: g.z, facing: g.facing, length: g.length });
-  }
-
-  // While a sublevel (mobile) cannon is selected, follow its GPS position:
-  // every poll refreshes the cannon coords in the form so a trajectory is
-  // always computed against the cannon's latest position, not the one it had
-  // when it was first picked. Static cannons and manual entry are left alone.
-  function refreshSelectedCannonCoords() {
-    // A selected ship follows its lead gun, exactly as a selected sublevel
-    // cannon follows itself.
-    if (selectedVehicleId) {
-      const v = vehiclesActive.find(x => String(x.id) === selectedVehicleId);
-      const g = v && (v.cannons || [])[0];
-      if (!g) return;
-      const vx = document.getElementById('cx');
-      const vy = document.getElementById('cy');
-      const vz = document.getElementById('cz');
-      if (String(vx.value) === String(g.x) && String(vy.value) === String(g.y) &&
-          String(vz.value) === String(g.z)) return;
-      vx.value = g.x; vy.value = g.y; vz.value = g.z;
-      placeCannon(g.x, g.z);
-      return;
+    if (document.getElementById('results-wrap').classList.contains('visible') &&
+        document.getElementById('tx').value && document.getElementById('tz').value) {
+      runCalc();
+    } else {
+      updateFireControl();
     }
-    if (!selectedCannonId) return;
-    const c = cannonsActive.find(x => String(x.id) === selectedCannonId);
-    if (!c || !c.sublevel) return;
-    const cx = document.getElementById('cx');
-    const cy = document.getElementById('cy');
-    const cz = document.getElementById('cz');
-    if (String(cx.value) === String(c.x) &&
-        String(cy.value) === String(c.y) &&
-        String(cz.value) === String(c.z)) return;
-    cy.value = c.y;
-    placeCannon(c.x, c.z);
   }
 
-  staticCannonSel.addEventListener('change', () => {
-    const value = staticCannonSel.value || '';
-    selectedCannonId  = null;
-    selectedVehicleId = null;
-    if (value.charAt(0) === 'v') {
-      // A ship: fire the whole broadside at one target.
-      selectedVehicleId = value.slice(1);
-      const v = vehiclesActive.find(x => String(x.id) === selectedVehicleId);
-      if (v) applyVehicleToForm(v);
-    } else if (value) {
-      selectedCannonId = value;
-      const c = cannonsActive.find(x => String(x.id) === value);
-      if (c) applyCannonToForm(c);
-    }
-    updateFireControl();
-  });
-
-  // What the fire buttons will actually fire: one cannon, or every gun on a
-  // ship. null when nothing is selected.
+  // What the fire buttons will actually fire: every gun in the ticked set. A
+  // ship contributes all of its guns, so "one ship" and "three cannons" are the
+  // same thing here — a list of guns. null when nothing is ticked.
   function fireTarget() {
-    if (selectedVehicleId) {
-      const v = vehiclesActive.find(x => String(x.id) === selectedVehicleId);
-      const guns = v ? (v.cannons || []).length : 0;
-      if (!v || guns === 0) return null;
-      return { guns: guns, name: v.name || ('Vehicle ' + v.id) };
-    }
-    if (selectedCannonId) {
-      const c = cannonsActive.find(x => String(x.id) === selectedCannonId);
-      return { guns: 0, name: c ? (c.name || ('Cannon ' + c.id)) : 'cannon' };
-    }
-    return null;
+    const guns = bombardSelectedGuns();
+    if (!guns.length) return null;
+    return { guns: guns.length, names: bombardSelectedUnits() };
   }
 
   function fireButtonLabel(mode, sol, target) {
@@ -2127,7 +2134,7 @@
       return {
         label: who + ' — ' + (isDirect ? 'Direct' : 'Optimal') + ' · ' + sol.pitch.toFixed(2) + '°',
         disabled: !target,
-        title: target ? '' : 'Select a registered cannon, or a ship to fire all its guns',
+        title: target ? '' : 'Tick a cannon or a ship in the dropdown above',
       };
     }
     return {
@@ -2151,102 +2158,89 @@
   function wireFireButtons() {
     document.querySelectorAll('[data-fire-mode]').forEach(btn => {
       btn.addEventListener('click', () => {
-        const mode = btn.dataset.fireMode;
-        const sol = mode === 'direct' ? lastDirect : lastOptimal;
-        sendFire(sol, mode === 'direct' ? 'Direct' : 'Optimal', btn);
+        sendSelectionFire(btn.dataset.fireMode === 'direct' ? 'Direct' : 'Optimal', btn);
       });
     });
   }
 
-  // Firing a ship: one target, every gun solved from its own mount — its own
-  // position, barrel length and resting facing — and queued together. The
-  // vehicle computer subtracts the live ship heading from each as it assigns
-  // them, which is what keeps the broadside on target while the ship turns.
-  async function sendVehicleFire(sol, label, btn) {
-    const v = vehiclesActive.find(x => String(x.id) === selectedVehicleId);
-    if (!v) return;
-    const guns = v.cannons || [];
-    const mode = (btn && btn.dataset.fireMode === 'direct') ? 'direct' : 'optimal';
+  // Fire the ticked guns at the one target in the fields.
+  //
+  // Every gun is re-solved here, from its OWN registry mount, barrel length and
+  // powder charge — a broadside sharing one aim would be wrong on every gun but
+  // the one it was solved for. A ship's guns go as one broadside to its vehicle
+  // computer (which subtracts the live ship heading from each, keeping the whole
+  // ship on target while it turns); a standalone cannon is fired on its own.
+  async function sendSelectionFire(label, btn) {
+    const guns = bombardSelectedGuns();
     const tx = parseFloat(document.getElementById('tx').value);
     const ty = parseFloat(document.getElementById('ty').value) || 64;
     const tz = parseFloat(document.getElementById('tz').value);
+    if (!guns.length || isNaN(tx) || isNaN(tz)) {
+      fireStatus.textContent = 'Tick a cannon or a ship in the dropdown, and give the target an X and a Z.';
+      fireStatus.classList.add('err');
+      return;
+    }
+
+    const mode = (btn && btn.dataset.fireMode === 'direct') ? 'direct' : 'optimal';
     const shellIdx = parseInt(document.getElementById('shell-select').value, 10);
     const shell = shells[shellIdx] || { drag: 0.99 };
     const drag = parseFloat(shell.drag) || 0.99;
-    if (isNaN(tx) || isNaN(tz)) return;
+    const target = { x: tx, y: ty, z: tz };
 
-    const shots = [];
+    const solo = [];
+    const broadsides = new Map();     // vehicleId -> its guns' shots
     for (const g of guns) {
-      const yaw = computeYaw(Number(g.x), Number(g.z), tx, tz);
-      const yawR = yaw * Math.PI / 180;
-      const len = Number(g.length) || 4;
-      const bx = Number(g.x) - len * Math.sin(yawR);
-      const bz = Number(g.z) + len * Math.cos(yawR);
-      const s = (mode === 'direct')
-        ? directHitSolution(bx, Number(g.y), bz, tx, ty, tz, yaw, selectedCharges, drag)
-        : findOptimalSolution(bx, Number(g.y), bz, tx, ty, tz, yaw, selectedCharges, drag);
-      // A gun with no solution is left out rather than stopping the broadside:
-      // the rest of the ship still fires, and the count reported says how many did.
-      if (s) shots.push({ cannonId: Number(g.id), yaw: yaw, pitch: s.pitch });
+      const s = bombardSolution(g, target, mode, drag);
+      // A gun with no solution is left out rather than stopping the rest: the
+      // others still fire, and the count reported says how many did.
+      if (!s) continue;
+      const shot = { cannonId: g.cannonId, yaw: s.yaw, pitch: s.pitch };
+      if (g.vehicleId == null) { solo.push(shot); continue; }
+      if (!broadsides.has(g.vehicleId)) broadsides.set(g.vehicleId, []);
+      broadsides.get(g.vehicleId).push(shot);
     }
+    const broadsideShots = [...broadsides.values()].reduce((n, l) => n + l.length, 0);
+    const firing = solo.length + broadsideShots;
+    const silent = guns.length - firing;
 
     fireStatus.classList.remove('err');
-    if (!shots.length) {
-      fireStatus.textContent = 'No gun on this ship has a ' + (mode === 'direct' ? 'direct' : 'optimal') +
-        ' solution to that target — try more powder charges or a different shell.';
+    if (!firing) {
+      fireStatus.textContent = 'No ticked gun has a ' + mode + ' solution to that target — check the powder'
+        + ' charges against each gun in the registry, or pick a closer target.';
       fireStatus.classList.add('err');
       return;
     }
 
     if (btn) btn.disabled = true;
-    fireStatus.textContent = 'Queuing ' + label + ' for ' + shots.length + ' gun' +
-      (shots.length === 1 ? '' : 's') + ' on ' + (v.name || ('Vehicle ' + v.id)) + '…';
+    fireStatus.textContent = 'Queuing ' + label + ' for ' + firing + ' gun' + (firing === 1 ? '' : 's') + '…';
     try {
-      const r = await fetch('/api/ballistics/vehicles/' + v.id + '/fire', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ shots: shots })
-      });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        fireStatus.textContent = data.error || 'Could not send fire command.';
-        fireStatus.classList.add('err');
-      } else {
-        const silent = guns.length - shots.length;
-        fireStatus.textContent = label + ' sent to ' + shots.length + ' gun' +
-          (shots.length === 1 ? '' : 's') + ' on ' + (v.name || ('Vehicle ' + v.id)) +
-          ' — each will disassemble, assemble, aim and fire.' +
-          (silent > 0 ? ' ' + silent + ' gun' + (silent === 1 ? '' : 's') + ' had no solution and stayed silent.' : '');
+      for (const [vehicleId, shots] of broadsides) {
+        const r = await fetch('/api/ballistics/vehicles/' + vehicleId + '/fire', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ shots: shots })
+        });
+        if (!r.ok) {
+          const data = await r.json().catch(() => ({}));
+          throw new Error(data.error || 'Could not send the broadside.');
+        }
       }
-    } catch (e) {
-      fireStatus.textContent = 'Could not reach the server.';
-      fireStatus.classList.add('err');
-    }
-    updateFireControl();
-  }
-
-  async function sendFire(sol, label, btn) {
-    if (selectedVehicleId) return sendVehicleFire(sol, label, btn);
-    if (!selectedCannonId || !sol) return;
-    const c = cannonsActive.find(x => String(x.id) === selectedCannonId);
-    btn.disabled = true;
-    fireStatus.textContent = 'Queuing ' + label + ' fire command for ' + (c ? c.name : 'cannon') + '…';
-    fireStatus.classList.remove('err');
-    try {
-      const r = await fetch('/api/ballistics/cannons/' + selectedCannonId + '/fire', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ yaw: lastYaw, pitch: sol.pitch })
-      });
-      const data = await r.json();
-      if (!r.ok) {
-        fireStatus.textContent = data.error || 'Could not send fire command.';
-        fireStatus.classList.add('err');
-      } else {
-        fireStatus.textContent = label + ' fire command sent — ' + (c ? c.name : 'cannon') + ' will disassemble, assemble, aim and fire.';
+      for (const shot of solo) {
+        const r = await fetch('/api/ballistics/cannons/' + shot.cannonId + '/fire', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ yaw: shot.yaw, pitch: shot.pitch })
+        });
+        if (!r.ok) {
+          const data = await r.json().catch(() => ({}));
+          throw new Error(data.error || 'Could not send the fire command.');
+        }
       }
+      fireStatus.textContent = label + ' fire command sent to ' + firing + ' gun' +
+        (firing === 1 ? '' : 's') + ' — each will disassemble, assemble, aim and fire.' +
+        (silent > 0 ? ' ' + silent + ' gun' + (silent === 1 ? '' : 's') + ' had no solution and stayed silent.' : '');
     } catch (e) {
-      fireStatus.textContent = 'Could not reach the server.';
+      fireStatus.textContent = String((e && e.message) || e);
       fireStatus.classList.add('err');
     }
     updateFireControl();
@@ -2264,7 +2258,11 @@
   const BOMBARD_LOOKAHEAD  = 2;    // shots kept queued for each gun
   const BOMBARD_MAX_TARGETS = 50;  // a queue bigger than this is not a barrage
   let bombardMode    = 'normal';
-  let bombardSel     = new Set();  // 'c<id>' cannon · 'v<id>' ship · 'g<id>' ship gun
+  // What is ticked in the one picker: 'c<id>' cannon · 'v<id>' ship ·
+  // 'g<id>' ship gun. This single set is the page's whole answer to "what
+  // fires": the Calculator aims it at one target, and a firing order is opened
+  // with it, so the two can never disagree about what was selected.
+  let bombardSel     = new Set();
   let bombardTargets = [];         // Multi-Target queue
   let bombardPlan    = null;       // the local scheduler for the server's plan
   let bombardTimer   = null;
@@ -2284,7 +2282,10 @@
   let bombardPreview     = { key: null, lines: [], at: 0 };   // per-gun planned trajectories
 
   const reloadLegendEl   = document.getElementById('reload-legend');
-  const bombardUnitsEl   = document.getElementById('bombard-units');
+  const unitPickerEl     = document.getElementById('unit-ms');
+  const unitBtnEl        = document.getElementById('unit-ms-btn');
+  const unitLabelEl      = document.getElementById('unit-ms-label');
+  const unitPanelEl      = document.getElementById('unit-ms-panel');
   const bombardTargetsEl = document.getElementById('bombard-targets');
   const bombardMultiEl   = document.getElementById('bombard-multi');
   const bombardModeNote  = document.getElementById('bombard-mode-note');
@@ -2309,18 +2310,32 @@
   // Every gun a plan could use, whichever unit it was picked through. A ship's
   // guns come from the vehicle registry (they are off the cannon registry).
   function bombardGunList() {
-    const from = (list, sublevel) => list.map(c => ({
-      cannonId: Number(c.id),
-      vehicleId: c.vehicle_id == null ? null : Number(c.vehicle_id),
-      name: c.name || ('Cannon ' + c.id),
-      x: Number(c.x), y: Number(c.y), z: Number(c.z),
-      length: Number(c.length) || 4,
-      // The gun's reload mechanism, reported by the cannon itself. The map's
-      // reload ring uses it to explain a gun that is not counting down.
-      reloadType: c.reload_type || null,
-      reloadTime: c.reload_time == null ? null : Number(c.reload_time),
-      sublevel: sublevel,
-    }));
+    const vehicleById = new Map(vehiclesActive.map(v => [Number(v.id), v]));
+    const from = (list, sublevel) => list.map(c => {
+      const vehicleId = c.vehicle_id == null ? null : Number(c.vehicle_id);
+      const vehicle   = vehicleId == null ? null : vehicleById.get(vehicleId) || null;
+      return {
+        cannonId: Number(c.id),
+        vehicleId: vehicleId,
+        vehicleName: vehicle ? (vehicle.name || ('Vehicle ' + vehicle.id)) : null,
+        name: c.name || ('Cannon ' + c.id),
+        x: Number(c.x), y: Number(c.y), z: Number(c.z),
+        length: Number(c.length) || 4,
+        // The gun's resting facing and its own powder count. Both are the
+        // registry's, and both go into every solution aimed for this gun —
+        // nothing on the page is typed in by hand any more.
+        facing: Number(c.facing) || 0,
+        charges: c.charges == null ? null : Number(c.charges),
+        // The heading a sublevel gun's aim is measured against: a gun on a
+        // vehicle takes the ship's, a standalone sublevel gun reports its own.
+        shipYaw: vehicle ? vehicle.ship_yaw : c.ship_yaw,
+        // The gun's reload mechanism, reported by the cannon itself. The map's
+        // reload ring uses it to explain a gun that is not counting down.
+        reloadType: c.reload_type || null,
+        reloadTime: c.reload_time == null ? null : Number(c.reload_time),
+        sublevel: Number(c.sublevel) === 1 || sublevel,
+      };
+    });
     return from(cannonsActive, false).concat(from(cannonsManaged, true));
   }
 
@@ -2371,8 +2386,9 @@
         rows.push(bombardRowHtml('g' + g.id, escHtml(g.name || ('Cannon ' + g.id)), 'on ' + label, true));
       }
     }
-    bombardUnitsEl.innerHTML = rows.length ? rows.join('')
+    unitPanelEl.innerHTML = rows.length ? rows.join('')
       : '<div class="bombard-empty">No accepted cannons or ships yet — accept a pending request in the registries first.</div>';
+    updateUnitLabel();
   }
 
   function bombardTargetLabel(t) {
@@ -2432,17 +2448,25 @@
     renderBombardUnits();
     renderBombardTargets();
     updateBombardButtons();
+    // Changing mode changes what a tick MEANS (a ship becomes its guns), so the
+    // buttons that depend on the ticked set are refreshed with it.
+    updateCalcBtn();
+    updateFireControl();
   }
 
   // One gun's aim at one target, solved from the gun's own mount — the same
   // arithmetic the single-target fire buttons use, so a barrage is no more
   // approximate than a single shot.
-  function bombardSolution(gun, target, mode, drag, charges) {
+  // The powder count is the GUN's own, read here rather than passed in: a
+  // barrage can fire guns loaded differently, and threading one number through
+  // every call is exactly how a gun ends up aimed with another gun's charge.
+  function bombardSolution(gun, target, mode, drag) {
     const yaw = computeYaw(gun.x, gun.z, target.x, target.z);
     const yawR = yaw * Math.PI / 180;
     const len = Number(gun.length) || 4;
     const bx = gun.x - len * Math.sin(yawR);
     const bz = gun.z + len * Math.cos(yawR);
+    const charges = gunCharges(gun);
     const s = (mode === 'direct')
       ? directHitSolution(bx, gun.y, bz, target.x, target.y, target.z, yaw, charges, drag)
       : findOptimalSolution(bx, gun.y, bz, target.x, target.y, target.z, yaw, charges, drag);
@@ -2462,23 +2486,45 @@
     const target = p.targets[0];
     if (p.mode !== 'multi') {
       if (p.mode === 'normal' && (p.given[gun.cannonId] || 0) >= 1) return null;
-      const sol = bombardSolution(gun, target, p.trajectory, p.drag, p.charges);
-      return sol ? { cannonId: gun.cannonId, yaw: sol.yaw, pitch: sol.pitch, targetKey: target.key } : null;
+      const sol = bombardSolution(gun, target, p.trajectory, p.drag);
+      return sol ? bombardShot(gun, sol, target.key) : null;
     }
     let best = null, bestLeft = 0, bestDist = Infinity;
     for (const t of p.targets) {
       const left = p.cycles - (p.targetsAssigned[t.key] || 0);
       if (left <= 0) continue;
-      const sol = bombardSolution(gun, t, p.trajectory, p.drag, p.charges);
+      const sol = bombardSolution(gun, t, p.trajectory, p.drag);
       if (!sol) continue;                       // out of this gun's range
       const dist = Math.sqrt((t.x - gun.x) * (t.x - gun.x) + (t.z - gun.z) * (t.z - gun.z));
       if (left > bestLeft || (left === bestLeft && dist < bestDist)) {
-        best = { cannonId: gun.cannonId, yaw: sol.yaw, pitch: sol.pitch, targetKey: t.key };
+        best = bombardShot(gun, sol, t.key);
         bestLeft = left;
         bestDist = dist;
       }
     }
     return best;
+  }
+
+  // One queued shot, carrying the powder count it was SOLVED with. The count
+  // travels with the shot because the map replays each flight from it: one order
+  // can fire guns loaded with different amounts of powder.
+  function bombardShot(gun, sol, targetKey) {
+    return {
+      cannonId: gun.cannonId,
+      yaw: sol.yaw,
+      pitch: sol.pitch,
+      targetKey: targetKey,
+      charges: gunCharges(gun),
+    };
+  }
+
+  // What the guns are loaded with. One number when they agree — the usual case —
+  // and the per-gun list when an order spans guns loaded differently.
+  function bombardChargesNote() {
+    const list = (bombardPlan.guns || []).map(gunCharges);
+    const unique = [...new Set(list)];
+    if (unique.length === 1) return unique[0] + ' charges';
+    return 'charges ' + list.slice(0, 6).join('/') + (list.length > 6 ? '…' : '');
   }
 
   function bombardPlanSummary(plan, progress) {
@@ -2489,7 +2535,7 @@
         (bombardPlan.guns.length === 1 ? '' : 's') + ' · ' + plan.targets.length + ' target' +
         (plan.targets.length === 1 ? '' : 's') +
         (plan.mode === 'multi' ? ' · ' + plan.cycles + ' cycle' + (plan.cycles === 1 ? '' : 's') : ''),
-      'Fired ' + shotsFired + ' · queued ' + inFlight + ' · ' + bombardPlan.charges + ' charges, ' + bombardPlan.trajectory + ' trajectory',
+      'Fired ' + shotsFired + ' · queued ' + inFlight + ' · ' + bombardChargesNote() + ', ' + bombardPlan.trajectory + ' trajectory',
     ];
     // Shell timing on the map is taken from the cannon's own report of the
     // moment it fired. A computer still running the previous version of the
@@ -2629,19 +2675,22 @@
     bombardPauseBtn.textContent = (active && bombardPlan.paused) ? 'Resume' : 'Pause';
   }
 
-  // Open a firing order. The shot parameters (shell drag and powder charges) are
-  // frozen here, so moving the slider mid-barrage cannot silently re-aim the
-  // shots that are about to follow.
+  // Open a firing order. The shot parameters (the shell's drag, and each gun's
+  // own powder charge, which the shots carry individually) are frozen here, so
+  // changing a charge in the registry mid-barrage cannot silently re-aim the
+  // shots that are already worked out.
   async function startBombardment() {
     if (bombardPlan) return;
     const guns = bombardSelectedGuns();
-    if (!guns.length) { bombardSetStatus('Tick at least one cannon or ship first.', true); return; }
+    if (!guns.length) { bombardSetStatus('Tick at least one cannon or ship in the dropdown first.', true); return; }
 
     const shellIdx = parseInt(document.getElementById('shell-select').value, 10);
     const shell = shells[shellIdx] || { drag: 0.99 };
     const drag = parseFloat(shell.drag) || 0.99;
     const trajectory = bombardTrajectoryEl.value === 'direct' ? 'direct' : 'optimal';
-    const charges = selectedCharges;
+    // The order's own count is only a fallback, for a shot queued before
+    // migration 0021 that carries none of its own.
+    const charges = gunCharges(guns[0]);
 
     let targets, cycles = 1;
     if (bombardMode === 'multi') {
@@ -2651,11 +2700,11 @@
       const reachable = [];
       let dropped = 0;
       for (const t of bombardTargets) {
-        if (guns.some(g => bombardSolution(g, t, trajectory, drag, charges))) reachable.push(t);
+        if (guns.some(g => bombardSolution(g, t, trajectory, drag))) reachable.push(t);
         else dropped += 1;
       }
       if (!reachable.length) {
-        bombardSetStatus('No selected gun can reach any of those targets — try more powder charges or a different shell.', true);
+        bombardSetStatus('No ticked gun can reach any of those targets — check the powder charges in the Cannon Registry, or pick a different shell.', true);
         return;
       }
       targets = reachable;
@@ -2663,8 +2712,8 @@
     } else {
       const t = bombardTargetFromInputs();
       if (!t) { bombardSetStatus('Enter the target X / Z first.', true); return; }
-      if (!guns.some(g => bombardSolution(g, t, trajectory, drag, charges))) {
-        bombardSetStatus('No selected gun has a ' + trajectory + ' solution to that target.', true);
+      if (!guns.some(g => bombardSolution(g, t, trajectory, drag))) {
+        bombardSetStatus('No ticked gun has a ' + trajectory + ' solution to that target — check the powder charges in the Cannon Registry.', true);
         return;
       }
       targets = [t];
@@ -2755,7 +2804,7 @@
         drag: Number.isFinite(Number(plan.drag)) && Number(plan.drag) > 0
           ? Number(plan.drag) : (parseFloat(shell.drag) || 0.99),
         charges: Number.isFinite(Number(plan.charges)) && Number(plan.charges) > 0
-          ? Number(plan.charges) : selectedCharges,
+          ? Number(plan.charges) : defaultCharges,
         given: {},
         idle: {},
         targetsAssigned: {},
@@ -2767,12 +2816,21 @@
     } catch (e) { /* nothing to resume */ }
   }
 
-  bombardUnitsEl.addEventListener('change', (e) => {
+  unitPanelEl.addEventListener('change', (e) => {
     const box = e.target.closest('[data-bombard-unit]');
     if (!box) return;
     const token = box.dataset.bombardUnit;
     if (box.checked) bombardSel.add(token); else bombardSel.delete(token);
+    unitsChanged();
   });
+
+  // It opens and closes like the dropdown it replaced, and stays open while
+  // things are ticked — choosing four guns should not mean opening it four times.
+  unitBtnEl.addEventListener('click', () => setUnitPicker(unitPanelEl.hidden));
+  document.addEventListener('click', (e) => {
+    if (!unitPickerEl.contains(e.target)) setUnitPicker(false);
+  });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setUnitPicker(false); });
   document.querySelectorAll('[data-bombard-mode]').forEach(btn =>
     btn.addEventListener('click', () => setBombardMode(btn.dataset.bombardMode)));
   document.getElementById('bombard-add-target').addEventListener('click', () => {
@@ -2867,11 +2925,78 @@
           '<input type="checkbox" data-cannon-sub="' + c.id + '"' + (c.sublevel ? ' checked' : '') + '/> sublevel' +
         '</label>' +
       '</div>' +
+      chargeSliderHtml(c) +
       '<div class="registry-actions">' +
         '<button class="map-btn" data-cannon-save="' + c.id + '">Save</button>' +
         '<button class="map-btn danger" data-cannon-delete="' + c.id + '">Delete</button>' +
       '</div>' +
     '</div>';
+  }
+
+  // A gun's powder count, as a slider that saves itself. It saves on release
+  // rather than on drag: the count only means anything as a whole number, and a
+  // request per pixel would be a request per pixel.
+  function chargeSliderHtml(c) {
+    const n = gunCharges(c);
+    return '<div class="cannon-charges">' +
+      '<span class="cannon-charges__label">Powder charges</span>' +
+      '<input class="charges-range" data-charges="' + c.id + '" type="range" min="1" max="' + maxCharges +
+        '" step="1" value="' + n + '" aria-label="Powder charges for this cannon"/>' +
+      '<span class="charges-value" data-charges-value="' + c.id + '">' + n + ' / ' + maxCharges + '</span>' +
+    '</div>';
+  }
+
+  // Any slider on the page — a cannon in the registry or a gun under a ship. A
+  // cannon is listed in exactly one of the two places, so the id alone finds it.
+  function wireChargeSliders() {
+    document.querySelectorAll('[data-charges]').forEach(sl => {
+      const id = sl.dataset.charges;
+      const valueEl = document.querySelector('[data-charges-value="' + id + '"]');
+      sl.addEventListener('input', () => {
+        if (valueEl) valueEl.textContent = sl.value + ' / ' + maxCharges;
+      });
+      sl.addEventListener('change', () => {
+        // Written here as well as on `input`, so the number beside the slider can
+        // never disagree with it once the drag has ended.
+        if (valueEl) valueEl.textContent = sl.value + ' / ' + maxCharges;
+        saveCannonCharges(id, sl.value);
+      });
+    });
+  }
+
+  // Saving a count is a one-field edit, so it must not have to repeat the name
+  // and position it is not changing (see updateCannon on the worker).
+  async function saveCannonCharges(id, value) {
+    const n = Number(value);
+    try {
+      const r = await fetch('/api/ballistics/cannons/' + id, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ charges: n })
+      });
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        alert(data.error || 'Could not set that gun\'s powder charge.');
+        await loadCannons();
+        return;
+      }
+    } catch (e) {
+      alert('Could not reach the server.');
+      return;
+    }
+    // Keep the copies the solver reads in step, so the next calculation and the
+    // next queued shot use the new count instead of waiting for the poll.
+    applyChargesLocally(id, n);
+  }
+
+  function applyChargesLocally(id, value) {
+    const n = Number(value);
+    for (const row of cannonsActive.concat(cannonsManaged)) {
+      if (String(row.id) === String(id)) row.charges = n;
+    }
+    for (const v of vehiclesActive) {
+      for (const g of (v.cannons || [])) if (String(g.id) === String(id)) g.charges = n;
+    }
   }
 
   function pendingCard(p) {
@@ -2905,6 +3030,7 @@
     document.querySelectorAll('[data-cannon-decline]').forEach(btn => btn.addEventListener('click', () => declineCannon(btn.dataset.cannonDecline)));
     document.querySelectorAll('[data-cannon-delete]').forEach(btn => btn.addEventListener('click', () => removeCannon(btn.dataset.cannonDelete)));
     document.querySelectorAll('[data-cannon-save]').forEach(btn => btn.addEventListener('click', () => saveCannon(btn.dataset.cannonSave)));
+    wireChargeSliders();
   }
 
   async function acceptCannon(id) {
@@ -2923,7 +3049,10 @@
   async function removeCannon(id) {
     if (!confirm('Remove this cannon from the registry?')) return;
     await fetch('/api/ballistics/cannons/' + id, { method: 'DELETE' });
-    if (selectedCannonId === id) { selectedCannonId = null; staticCannonSel.value = ''; }
+    // A deleted gun cannot stay ticked — it would be a selection with nothing
+    // behind it.
+    bombardSel.delete('c' + id);
+    bombardSel.delete('g' + id);
     await loadCannons();
   }
 
@@ -2937,6 +3066,7 @@
       length: Number(document.querySelector('[data-cannon-len="' + id + '"]').value),
       facing: Number(document.querySelector('[data-cannon-facing="' + id + '"]').value),
       sublevel: document.querySelector('[data-cannon-sub="' + id + '"]').checked,
+      charges: Number(document.querySelector('[data-charges="' + id + '"]').value),
     };
     const r = await fetch('/api/ballistics/cannons/' + id, {
       method: 'PUT',
@@ -3002,12 +3132,15 @@
       ? Number(v.ship_yaw).toFixed(1) + '° (' + yawCardinal(v.ship_yaw) + ')'
       : '— (no front/back GPS yet)';
 
+    // Each gun is listed with its OWN powder count: a ship's guns are not
+    // necessarily loaded alike, and the count decides how far each one reaches.
     const gunList = guns.length
       ? guns.map(c =>
           '<div class="cannon-card__meta" style="display:flex;justify-content:space-between;align-items:center;gap:10px;">' +
             '<span>' + escHtml(c.name) + ' <span style="opacity:.6;">(PC ' + escHtml(c.computerId) + ')</span></span>' +
             '<button class="map-btn danger" data-vehicle-unassign="' + v.id + '" data-vehicle-cannon="' + c.id + '">Release</button>' +
-          '</div>')
+          '</div>' +
+          chargeSliderHtml(c))
         .join('')
       : '<div class="cannon-card__meta">No cannons assigned yet.</div>';
 
@@ -3067,6 +3200,9 @@
     document.querySelectorAll('[data-vehicle-decline]').forEach(b => b.addEventListener('click', () => declineVehicle(b.dataset.vehicleDecline)));
     document.querySelectorAll('[data-vehicle-save]').forEach(b => b.addEventListener('click', () => saveVehicle(b.dataset.vehicleSave)));
     document.querySelectorAll('[data-vehicle-delete]').forEach(b => b.addEventListener('click', () => removeVehicle(b.dataset.vehicleDelete)));
+    // A ship's guns carry their own powder counts too, set here rather than on a
+    // page-wide slider.
+    wireChargeSliders();
     document.querySelectorAll('[data-vehicle-assign]').forEach(b => b.addEventListener('click', () => assignVehicleCannon(b.dataset.vehicleAssign)));
     document.querySelectorAll('[data-vehicle-unassign]').forEach(b => b.addEventListener('click', () => releaseVehicleCannon(b.dataset.vehicleUnassign, b.dataset.vehicleCannon)));
   }
@@ -3492,6 +3628,17 @@
   const BOMBARD_RELOAD_MAX_MS  = 10 * 60 * 1000;
 
   // >>> BOMBARD MAP MATH
+  // The powder count a shot was solved with: the shot's OWN, or — for a shot
+  // queued before migration 0021 — the order's own value. Muzzle velocity comes
+  // straight from this, so a wrong answer flies the shell at the wrong speed.
+  function shotCharges(shot, plan) {
+    const own = Number(shot && shot.charges);
+    if (Number.isFinite(own) && own > 0) return own;
+    const order = Number(plan && plan.charges);
+    if (Number.isFinite(order) && order > 0) return order;
+    return null;
+  }
+
   // Where the shell starts: the mount's block pushed out along the barrel's
   // heading. The same offset the aim solver uses, so a drawn line and the shot
   // it describes begin in the same place.
@@ -3593,11 +3740,14 @@
   function bombardPreviewSignature(positions) {
     const p = bombardPlan;
     if (!p) return null;
+    // The gun's powder count is part of this: changing a charge in the registry
+    // changes the aim that is queued next, so the grey dotted set is stale the
+    // moment it changes.
     const guns = p.guns.map(g => {
       const live = positions.get(g.cannonId);
-      return live
+      return (live
         ? g.cannonId + ':' + Math.round(live.x) + ',' + Math.round(live.y) + ',' + Math.round(live.z)
-        : g.cannonId + ':-';
+        : g.cannonId + ':-') + '@' + gunCharges(g);
     }).join(' ');
     const counters = (obj) => Object.keys(obj).sort().map(k => k + '=' + obj[k]).join(' ');
     return [p.mode, p.cycles, p.trajectory, p.charges, p.drag, guns,
@@ -3688,7 +3838,7 @@
         const t0 = Date.parse(last.firedAt || last.doneAt || '');
         const flight = Number.isFinite(t0)
           ? bombardShotFlight(gun, last.yaw, last.pitch,
-              bombardTargetByKey(last.targetKey), plan.charges, plan.drag)
+              bombardTargetByKey(last.targetKey), shotCharges(last, plan), plan.drag)
           : null;
         if (flight && flight.tof != null) {
           const elapsed = (now - t0) / 1000;

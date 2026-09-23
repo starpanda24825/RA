@@ -1272,23 +1272,48 @@ export async function acceptCannon(env, id) {
   return findCannonById(env, id);
 }
 
-// Website-side edit (name / coords / length / facing / sublevel).
+// Website-side edit (name / coords / length / facing / sublevel / charges).
+// `charges` is the gun's own powder count and lands in migration 0021; a cannon
+// whose database predates it keeps every other edit rather than failing whole.
 export async function updateCannon(env, id, fields) {
-  const sets = [];
-  const binds = [];
-  if (fields.name !== undefined)     { sets.push('name = ?');     binds.push(String(fields.name).slice(0, 80)); }
-  if (fields.x !== undefined)        { sets.push('x = ?');        binds.push(Number(fields.x) || 0); }
-  if (fields.y !== undefined)        { sets.push('y = ?');        binds.push(Number(fields.y) || 0); }
-  if (fields.z !== undefined)        { sets.push('z = ?');        binds.push(Number(fields.z) || 0); }
-  if (fields.length !== undefined)   { sets.push('length = ?');   binds.push(Math.max(1, Math.min(64, Math.round(Number(fields.length) || 4)))); }
-  if (fields.facing !== undefined)   { sets.push('facing = ?');   binds.push(Number(fields.facing) || 0); }
-  if (fields.sublevel !== undefined) { sets.push('sublevel = ?'); binds.push(fields.sublevel ? 1 : 0); }
-  if (!sets.length) return findCannonById(env, id);
-  sets.push('updated_at = ?');
-  binds.push(nowIso(), Number(id));
-  await env.DB.prepare(`UPDATE ballistics_cannons SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
+  const run = async (withCharges) => {
+    const sets = [];
+    const binds = [];
+    if (fields.name !== undefined)     { sets.push('name = ?');     binds.push(String(fields.name).slice(0, 80)); }
+    if (fields.x !== undefined)        { sets.push('x = ?');        binds.push(Number(fields.x) || 0); }
+    if (fields.y !== undefined)        { sets.push('y = ?');        binds.push(Number(fields.y) || 0); }
+    if (fields.z !== undefined)        { sets.push('z = ?');        binds.push(Number(fields.z) || 0); }
+    if (fields.length !== undefined)   { sets.push('length = ?');   binds.push(Math.max(1, Math.min(64, Math.round(Number(fields.length) || 4)))); }
+    if (fields.facing !== undefined)   { sets.push('facing = ?');   binds.push(Number(fields.facing) || 0); }
+    if (fields.sublevel !== undefined) { sets.push('sublevel = ?'); binds.push(fields.sublevel ? 1 : 0); }
+    if (withCharges)                   { sets.push('charges = ?');  binds.push(clampCharges(fields.charges)); }
+    if (!sets.length) return;
+    sets.push('updated_at = ?');
+    binds.push(nowIso(), Number(id));
+    await env.DB.prepare(`UPDATE ballistics_cannons SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
+  };
+  if (fields.charges === undefined) { await run(false); return findCannonById(env, id); }
+  try {
+    await run(true);
+  } catch (err) {
+    console.warn('Cannon charges unavailable (run migration 0021?) — keeping the other edits.', err);
+    await run(false);
+  }
   return findCannonById(env, id);
 }
+
+// A powder count is a small positive whole number. 99 is a ceiling, not a
+// suggestion: it exists so a nonsense value cannot become a muzzle velocity of
+// a thousand blocks a tick and hang the solver.
+function clampCharges(value) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) return DEFAULT_CHARGES;
+  return Math.max(1, Math.min(99, n));
+}
+
+// What a gun is fired with when nothing on record says otherwise — the value
+// the old page-wide slider started at.
+export const DEFAULT_CHARGES = 3;
 
 export async function deleteCannon(env, id) {
   await env.DB.prepare('DELETE FROM ballistics_cannons WHERE id = ?').bind(Number(id)).run();
@@ -1460,6 +1485,9 @@ export async function listActiveFirePlans(env) {
   return results;
 }
 
+// The missing-column warning is worth saying once per worker, not once per shot.
+let warnedShotCharges = false;
+
 // Queue a batch of shots, then hand one to every gun that is idle right now.
 // The sweep at the end is what makes a fresh plan start immediately instead of
 // waiting for the gun's next poll to notice its queue is no longer empty.
@@ -1467,14 +1495,39 @@ export async function appendPlanShots(env, planId, shots) {
   const now = nowIso();
   const ids = [];
   for (const shot of shots) {
-    const result = await env.DB.prepare(
-      `INSERT INTO ballistics_fire_queue
-         (plan_id, cannon_id, yaw, pitch, target_key, state, created_at)
-       VALUES (?, ?, ?, ?, ?, 'pending', ?)`
+    // The count the shot was SOLVED with, recorded on the shot itself: one order
+    // can fire guns loaded with different amounts of powder, and the map replays
+    // each flight from this number. A missing column (0021 not applied yet) costs
+    // one retry and then heals: the outcome is never cached, because caching it
+    // would keep leaving the count out of every later shot in that worker's life.
+    const charges = clampCharges(shot.charges);
+    const withCharges = shot.charges !== undefined;
+    const insert = (withCol) => env.DB.prepare(
+      withCol
+        ? `INSERT INTO ballistics_fire_queue
+             (plan_id, cannon_id, yaw, pitch, target_key, charges, state, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`
+        : `INSERT INTO ballistics_fire_queue
+             (plan_id, cannon_id, yaw, pitch, target_key, state, created_at)
+           VALUES (?, ?, ?, ?, ?, 'pending', ?)`
     ).bind(
-      Number(planId), Number(shot.cannonId), Number(shot.yaw), Number(shot.pitch),
-      shot.targetKey == null ? null : String(shot.targetKey).slice(0, 48), now
-    ).run();
+      ...(withCol
+        ? [Number(planId), Number(shot.cannonId), Number(shot.yaw), Number(shot.pitch),
+           shot.targetKey == null ? null : String(shot.targetKey).slice(0, 48), charges, now]
+        : [Number(planId), Number(shot.cannonId), Number(shot.yaw), Number(shot.pitch),
+           shot.targetKey == null ? null : String(shot.targetKey).slice(0, 48), now])
+    );
+    let result;
+    try {
+      result = await insert(withCharges).run();
+    } catch (err) {
+      if (!withCharges) throw err;
+      if (!warnedShotCharges) {
+        warnedShotCharges = true;
+        console.warn('Shot charges unavailable (run migration 0021?) — the order\'s own value stands in.', err);
+      }
+      result = await insert(false).run();
+    }
     ids.push(result.meta.last_row_id);
   }
   // Feeding an order counts as activity on it. This is what the history sweep
@@ -1650,9 +1703,26 @@ export async function listPlanCurrentShots(env, planId) {
                               WHERE plan_id = ? AND state = 'done' GROUP BY cannon_id) m
                          ON m.id = q.id`;
   const baseCols = 'q.cannon_id, q.sequence, q.yaw, q.pitch, q.target_key, q.done_at';
-  const withReload = `SELECT ${baseCols}, q.fired_at, q.reload_ms ${lastOfGun}`;
-  const withFiredAt = `SELECT ${baseCols}, q.fired_at, NULL AS reload_ms ${lastOfGun}`;
-  const withoutFiredAt = `SELECT ${baseCols}, NULL AS fired_at, NULL AS reload_ms ${lastOfGun}`;
+
+  // Each column arrived in its own migration, so the query is tried richest
+  // first and falls back one column at a time. A missing column reads as NULL,
+  // which every consumer already treats as "not reported".
+  const pick = async (variants) => {
+    for (const sql of variants) {
+      try { return await env.DB.prepare(sql).bind(id).all(); }
+      catch (err) { /* try the next, poorer, shape */ }
+    }
+    return null;
+  };
+  const shotCols = ['q.charges', 'NULL AS charges'];
+  const lastCols = [];
+  for (const fired of ['q.fired_at', 'NULL AS fired_at']) {
+    for (const reload of ['q.reload_ms', 'NULL AS reload_ms']) {
+      for (const charges of shotCols) {
+        lastCols.push(`SELECT ${baseCols}, ${fired}, ${reload}, ${charges} ${lastOfGun}`);
+      }
+    }
+  }
 
   const bucket = (cannonId) => {
     const key = String(cannonId);
@@ -1661,29 +1731,23 @@ export async function listPlanCurrentShots(env, planId) {
   };
 
   try {
-    const delivered = await env.DB.prepare(
-      `SELECT cannon_id, sequence, yaw, pitch, target_key
-         FROM ballistics_fire_queue WHERE plan_id = ? AND state = 'delivered'`
-    ).bind(id).all();
-    for (const row of delivered.results || []) {
+    const delivered = await pick([
+      `SELECT cannon_id, sequence, yaw, pitch, target_key, charges
+         FROM ballistics_fire_queue WHERE plan_id = ? AND state = 'delivered'`,
+      `SELECT cannon_id, sequence, yaw, pitch, target_key, NULL AS charges
+         FROM ballistics_fire_queue WHERE plan_id = ? AND state = 'delivered'`,
+    ]);
+    for (const row of (delivered && delivered.results) || []) {
       bucket(row.cannon_id).delivered = {
         sequence: Number(row.sequence),
         yaw: Number(row.yaw),
         pitch: Number(row.pitch),
         targetKey: row.target_key == null ? null : String(row.target_key),
+        charges: row.charges == null ? null : Number(row.charges),
       };
     }
 
-    let last = null;
-    try {
-      last = await env.DB.prepare(withReload).bind(id).all();
-    } catch (err) {
-      try {
-        last = await env.DB.prepare(withFiredAt).bind(id).all();
-      } catch (inner) {
-        last = await env.DB.prepare(withoutFiredAt).bind(id).all();
-      }
-    }
+    const last = await pick(lastCols);
     for (const row of (last && last.results) || []) {
       bucket(row.cannon_id).last = {
         sequence: Number(row.sequence),
@@ -1694,6 +1758,9 @@ export async function listPlanCurrentShots(env, planId) {
         doneAt: row.done_at || null,
         // 0 means the cannon left itself unloaded, null that it never said.
         reloadMs: row.reload_ms == null ? null : Number(row.reload_ms),
+        // The powder count the shot was solved with; null on a shot queued
+        // before 0021, which falls back to the order's own value.
+        charges: row.charges == null ? null : Number(row.charges),
       };
     }
   } catch (err) {
