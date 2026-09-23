@@ -1299,10 +1299,33 @@ export async function dispatchCannonFire(env, id, { yaw, pitch }) {
 // close the plan shot that sequence was handed out as, then hand the gun its
 // NEXT shot within this same request, so a burst has no idle poll between
 // shots. Returns the refreshed cannon (with any newly promoted command on it).
-export async function ackCannonCommand(env, id, sequence) {
+// `firedAt` is the instant the cannon says it actually fired, in epoch ms. It
+// arrives on the poll AFTER the ack, because the ack means "I have claimed this
+// sequence" and the firing happens several seconds into it — so this is stamped
+// on a later poll of the same sequence, and only once. It is a display value:
+// an implausible clock is ignored rather than trusted.
+export async function recordShotFiredAt(env, cannonId, sequence, firedAt) {
+  const ms = Number(firedAt);
+  if (!Number.isFinite(ms) || ms <= 0) return;
+  // Within two minutes of our own clock, or it is not a time we can use.
+  if (Math.abs(Date.now() - ms) > 120000) return;
+  try {
+    await env.DB.prepare(
+      `UPDATE ballistics_fire_queue SET fired_at = ?
+        WHERE cannon_id = ? AND sequence = ? AND fired_at IS NULL`
+    ).bind(new Date(ms).toISOString(), Number(cannonId), Number(sequence)).run();
+  } catch (err) {
+    console.warn('Could not record the fire time (run migration 0019?)', err);
+  }
+}
+
+export async function ackCannonCommand(env, id, sequence, firedAt) {
   const seq = Number(sequence) || 0;
   const before = await findCannonById(env, id);
   if (!before) return null;
+
+  await recordShotFiredAt(env, id, seq, firedAt);
+
   if (seq <= Number(before.acked_sequence || 0)) return before;
 
   await env.DB.prepare(
@@ -1346,15 +1369,27 @@ function planGunIds(gunsJson) {
 // Shots are appended by the operator's page (which is the only place the
 // ballistics solver lives) and handed out one at a time by promoteQueuedShot.
 
-export async function insertFirePlan(env, { mode, cycles, targets, guns, crew }) {
+export async function insertFirePlan(env, { mode, cycles, targets, guns, crew, drag, charges, trajectory }) {
   const now = nowIso();
   const result = await env.DB.prepare(
-    `INSERT INTO ballistics_fire_plans (mode, state, cycles, targets, guns, crew, created_at, updated_at)
-     VALUES (?, 'running', ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO ballistics_fire_plans
+       (mode, state, cycles, targets, guns, crew, drag, charges, trajectory, created_at, updated_at)
+     VALUES (?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     mode, Math.max(1, Math.min(999, Math.round(Number(cycles) || 1))),
     JSON.stringify(targets || []), JSON.stringify(guns || []),
-    crew == null ? null : String(crew).slice(0, 80), now, now
+    crew == null ? null : String(crew).slice(0, 80),
+    // The launch parameters the shots were worked out with. Stored so the map
+    // can replay the flight — its shape and its duration — from the plan alone,
+    // and so a second officer's sliders cannot misrepresent what was fired.
+    //
+    // Guarded against null before the conversion: Number(null) is 0, which is a
+    // number, so an absent value would otherwise be stored as a real zero — and
+    // a drag of zero is a shell that stops dead at the muzzle.
+    drag == null ? null : (Number.isFinite(Number(drag)) ? Number(drag) : null),
+    charges == null ? null : (Number.isFinite(Number(charges)) ? Math.round(Number(charges)) : null),
+    trajectory == null ? null : String(trajectory).slice(0, 16),
+    now, now
   ).run();
   return findFirePlanById(env, result.meta.last_row_id);
 }
@@ -1389,6 +1424,12 @@ export async function appendPlanShots(env, planId, shots) {
     ).run();
     ids.push(result.meta.last_row_id);
   }
+  // Feeding an order counts as activity on it. This is what the history sweep
+  // reads to tell a live barrage apart from one whose operator closed the page:
+  // shots arriving keep the plan fresh even while every shot is in flight.
+  await env.DB.prepare('UPDATE ballistics_fire_plans SET updated_at = ? WHERE id = ?')
+    .bind(now, Number(planId)).run();
+
   for (const cannonId of new Set(shots.map((s) => Number(s.cannonId)))) {
     await promoteQueuedShot(env, cannonId);
   }
@@ -1536,6 +1577,72 @@ export async function listDeliveredShotsForVehicle(env, vehicleId) {
   return out;
 }
 
+// The shot each gun of a plan is on, and the one it fired most recently — what
+// the live map draws.
+//
+// Only two rows per gun, never the whole queue: a barrage can be thousands of
+// shots long and the map only ever cares about the shot in hand and the shell
+// still in the air. Both are the newest rows for that gun, so this stays a small
+// bounded read however long the order runs.
+//
+// `firedAt` is absent until migration 0019 is applied; the map falls back to the
+// ack time and reports the timing as estimated.
+export async function listPlanCurrentShots(env, planId) {
+  const out = {};
+  const id = Number(planId);
+  const withFiredAt = `SELECT q.cannon_id, q.sequence, q.yaw, q.pitch, q.target_key, q.fired_at, q.done_at
+                        FROM ballistics_fire_queue q
+                        JOIN (SELECT cannon_id, MAX(id) AS id FROM ballistics_fire_queue
+                               WHERE plan_id = ? AND state = 'done' GROUP BY cannon_id) m
+                          ON m.id = q.id`;
+  const withoutFiredAt = `SELECT q.cannon_id, q.sequence, q.yaw, q.pitch, q.target_key, NULL AS fired_at, q.done_at
+                            FROM ballistics_fire_queue q
+                            JOIN (SELECT cannon_id, MAX(id) AS id FROM ballistics_fire_queue
+                                   WHERE plan_id = ? AND state = 'done' GROUP BY cannon_id) m
+                              ON m.id = q.id`;
+
+  const bucket = (cannonId) => {
+    const key = String(cannonId);
+    if (!out[key]) out[key] = { delivered: null, last: null };
+    return out[key];
+  };
+
+  try {
+    const delivered = await env.DB.prepare(
+      `SELECT cannon_id, sequence, yaw, pitch, target_key
+         FROM ballistics_fire_queue WHERE plan_id = ? AND state = 'delivered'`
+    ).bind(id).all();
+    for (const row of delivered.results || []) {
+      bucket(row.cannon_id).delivered = {
+        sequence: Number(row.sequence),
+        yaw: Number(row.yaw),
+        pitch: Number(row.pitch),
+        targetKey: row.target_key == null ? null : String(row.target_key),
+      };
+    }
+
+    let last = null;
+    try {
+      last = await env.DB.prepare(withFiredAt).bind(id).all();
+    } catch (err) {
+      last = await env.DB.prepare(withoutFiredAt).bind(id).all();
+    }
+    for (const row of (last && last.results) || []) {
+      bucket(row.cannon_id).last = {
+        sequence: Number(row.sequence),
+        yaw: Number(row.yaw),
+        pitch: Number(row.pitch),
+        targetKey: row.target_key == null ? null : String(row.target_key),
+        firedAt: row.fired_at || null,
+        doneAt: row.done_at || null,
+      };
+    }
+  } catch (err) {
+    console.warn('Could not read plan shots (run migration 0018?)', err);
+  }
+  return out;
+}
+
 // What the operator's page needs to keep the guns fed and to show progress:
 // per gun how much is still waiting, and per target how many shots it has
 // already been given. A cancelled shot does not count towards a target, so a
@@ -1568,6 +1675,166 @@ export async function firePlanProgress(env, planId) {
     }
   }
   return { guns, targets };
+}
+
+// An order that is never formally closed — an operator closes the tab on a
+// Constant run instead of pressing Stop — would otherwise stay 'running' for
+// ever. That is worse than untidy: it never reaches the log below, and because
+// resumeBombardment() reattaches to the newest live order, the operator's next
+// page load would pick up a barrage nobody is firing.
+//
+// So an order is treated as abandoned when it is running, has nothing queued or
+// in flight, and has not been fed for this long. Paused orders are deliberately
+// left alone: pausing was a click, and the operator is still holding the order.
+// `updated_at` is left untouched, so the log shows when it was last active
+// rather than when the sweep happened to notice.
+//
+// The window is a deployment choice rather than a law of the system — half an
+// hour of silence is abandoned, five minutes might not be — so it can be set
+// with a FIRE_PLAN_STALE_MS var and defaults to 30 minutes.
+const DEFAULT_STALE_PLAN_MS = 30 * 60 * 1000;
+
+function stalePlanMs(env) {
+  const n = Number(env && env.FIRE_PLAN_STALE_MS);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_STALE_PLAN_MS;
+}
+
+export async function sweepStaleFirePlans(env) {
+  const cutoff = new Date(Date.now() - stalePlanMs(env)).toISOString();
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT p.id FROM ballistics_fire_plans p
+        WHERE p.state = 'running' AND p.updated_at < ?
+          AND NOT EXISTS (
+            SELECT 1 FROM ballistics_fire_queue q
+             WHERE q.plan_id = p.id AND q.state IN ('pending', 'delivered'))`
+    ).bind(cutoff).all();
+    for (const row of results || []) {
+      await env.DB.prepare("UPDATE ballistics_fire_plans SET state = 'done' WHERE id = ?")
+        .bind(Number(row.id)).run();
+    }
+    return (results || []).length;
+  } catch (err) {
+    console.warn('Could not sweep stale fire plans (run migration 0018?)', err);
+    return 0;
+  }
+}
+
+function parseJsonList(json) {
+  try {
+    const v = JSON.parse(json || '[]');
+    return Array.isArray(v) ? v : [];
+  } catch { return []; }
+}
+
+// Every firing order that has ended, newest first, with what it actually fired.
+//
+// "What was fired" is the queue, not the request: a shot only counts once the
+// cannon acked it ('done'). A Stop withdraws shots that were handed out but
+// never acked, and those are reported as withdrawn instead — so a stopped
+// barrage cannot appear to have fired rounds it never did.
+//
+// Names come from each order's own snapshot, which is what was true when it was
+// fired for; a cannon renamed since does not rewrite history.
+export async function listFirePlanHistory(env, limit) {
+  const cap = Math.max(1, Math.min(200, Math.round(Number(limit) || 50)));
+  let plans = [];
+  try {
+    const { results } = await env.DB.prepare(
+      "SELECT * FROM ballistics_fire_plans WHERE state IN ('stopped', 'done') ORDER BY id DESC LIMIT ?"
+    ).bind(cap).all();
+    plans = results || [];
+  } catch (err) {
+    console.warn('Fire plan history unavailable (run migration 0018?)', err);
+    return [];
+  }
+  if (!plans.length) return [];
+
+  const ids = plans.map((p) => Number(p.id));
+  let rows = [];
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT plan_id, cannon_id, state, target_key, COUNT(*) AS n
+         FROM ballistics_fire_queue
+        WHERE plan_id IN (${ids.map(() => '?').join(',')})
+        GROUP BY plan_id, cannon_id, state, target_key`
+    ).bind(...ids).all();
+    rows = results || [];
+  } catch (err) {
+    console.warn('Could not read fired shots (run migration 0018?)', err);
+  }
+
+  const tally = new Map();
+  const vehicleIds = new Set();
+  for (const row of rows) {
+    const planId = Number(row.plan_id);
+    const gunId = Number(row.cannon_id);
+    const n = Number(row.n) || 0;
+    if (!tally.has(planId)) tally.set(planId, { guns: new Map(), targets: new Map(), fired: 0, withdrawn: 0 });
+    const t = tally.get(planId);
+    const gun = t.guns.get(gunId) || { cannonId: gunId, fired: 0, withdrawn: 0 };
+    if (row.state === 'done') { gun.fired += n; t.fired += n; }
+    else if (row.state === 'cancelled') { gun.withdrawn += n; t.withdrawn += n; }
+    t.guns.set(gunId, gun);
+    if (row.state === 'done' && row.target_key != null) {
+      const key = String(row.target_key);
+      t.targets.set(key, (t.targets.get(key) || 0) + n);
+    }
+  }
+
+  for (const plan of plans) {
+    for (const gun of parseJsonList(plan.guns)) {
+      if (gun && gun.vehicleId != null) vehicleIds.add(Number(gun.vehicleId));
+    }
+  }
+
+  // Ship names, so a gun reads as "on Dreadnought" rather than a bare id. The
+  // order's snapshot predates a rename, so the current name is the useful one.
+  const vehicleNames = new Map();
+  if (vehicleIds.size) {
+    const list = [...vehicleIds];
+    try {
+      const { results } = await env.DB.prepare(
+        `SELECT id, name FROM ballistics_vehicles WHERE id IN (${list.map(() => '?').join(',')})`
+      ).bind(...list).all();
+      for (const v of results || []) vehicleNames.set(Number(v.id), v.name || '');
+    } catch (err) {
+      console.warn('Could not read vehicle names for the firing log', err);
+    }
+  }
+
+  return plans.map((plan) => {
+    const t = tally.get(Number(plan.id)) || { guns: new Map(), targets: new Map(), fired: 0, withdrawn: 0 };
+    const targets = parseJsonList(plan.targets);
+    const labels = new Map(targets.map((x) => [String(x.key), x.label || String(x.key)]));
+    const guns = parseJsonList(plan.guns).map((g) => {
+      const gid = Number(g && g.cannonId);
+      const gun = t.guns.get(gid) || { fired: 0, withdrawn: 0 };
+      const vehicleId = (g && g.vehicleId == null) ? null : Number(g.vehicleId);
+      return {
+        cannonId: gid,
+        name: (g && g.name) || ('Cannon ' + gid),
+        vehicleId,
+        vehicleName: vehicleId == null ? null : (vehicleNames.get(vehicleId) || null),
+        fired: gun.fired,
+        withdrawn: gun.withdrawn,
+      };
+    });
+    return {
+      id:        Number(plan.id),
+      mode:      plan.mode,
+      state:     plan.state,
+      cycles:    Number(plan.cycles) || 1,
+      crew:      plan.crew || null,
+      created_at: plan.created_at,
+      ended_at:  plan.updated_at,
+      targets:   targets.map((x) => ({ key: String(x.key), x: x.x, y: x.y, z: x.z, label: x.label || String(x.key) })),
+      guns,
+      fired:     t.fired,
+      withdrawn: t.withdrawn,
+      byTarget:  [...t.targets.entries()].map(([key, n]) => ({ key, label: labels.get(key) || key, fired: n })),
+    };
+  });
 }
 
 // ---------- ballistics: GPS network ----------

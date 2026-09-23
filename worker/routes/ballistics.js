@@ -388,6 +388,12 @@ function planView(plan) {
     guns:       parseJsonArray(plan.guns),
     crew:       plan.crew || null,
     created_at: plan.created_at,
+    // How the shots were worked out, so the live map can replay their flight.
+    // Undefined until migration 0019 is applied, which simply reads as "unknown
+    // launch parameters" — the map then draws the aim without the shell.
+    drag:       plan.drag == null ? null : Number(plan.drag),
+    charges:    plan.charges == null ? null : Number(plan.charges),
+    trajectory: plan.trajectory || null,
   };
 }
 
@@ -445,6 +451,12 @@ export async function createFirePlan(request, env) {
   }
   if (!targets.length) return json({ error: 'A firing order needs at least one target.' }, { status: 400 });
 
+  // The launch parameters the operator's page solved with. Frozen here rather
+  // than taken from the page at draw time, so every officer looking at the order
+  // replays the same flight whatever their own sliders say.
+  const drag = Number(body.drag);
+  const charges = Number(body.charges);
+
   try {
     const plan = await store.insertFirePlan(env, {
       mode,
@@ -452,6 +464,9 @@ export async function createFirePlan(request, env) {
       targets,
       guns: resolved.guns,
       crew: auth.user && auth.user.username,
+      drag: Number.isFinite(drag) && drag > 0 && drag <= 1 ? drag : null,
+      charges: Number.isFinite(charges) && charges > 0 ? Math.min(99, Math.round(charges)) : null,
+      trajectory: body.trajectory === 'direct' ? 'direct' : 'optimal',
     });
     return json({ ok: true, plan: planView(plan) });
   } catch (err) {
@@ -474,6 +489,18 @@ export async function listFirePlans(request, env) {
   return json({ plans: (rows || []).map(planView) });
 }
 
+// GET /api/ballistics/fire-plans/history — the firing orders that have ended,
+// with what each gun actually fired and at which target. Abandoned orders are
+// swept into the log first, so closing the tab on a run lands it here instead of
+// leaving it live for ever.
+export async function listFirePlanHistory(request, env) {
+  const auth = await requireBallistics(request, env);
+  if (auth.error) return auth.error;
+  await store.sweepStaleFirePlans(env);
+  const limit = new URL(request.url).searchParams.get('limit');
+  return json({ orders: await store.listFirePlanHistory(env, limit) });
+}
+
 // GET /api/ballistics/fire-plans/:id — the order plus how far each gun and each
 // target has got, which is what the page uses to keep the guns fed.
 export async function getFirePlan(request, env, id) {
@@ -482,7 +509,10 @@ export async function getFirePlan(request, env, id) {
   const plan = await store.findFirePlanById(env, id);
   if (!plan) return json({ error: 'Firing order not found.' }, { status: 404 });
   const progress = await store.firePlanProgress(env, plan.id);
-  return json({ plan: planView(plan), progress });
+  // The shot each gun is on, so the live map can draw the trajectory being
+  // fired and time the shell against the moment the cannon reports it fired.
+  const shots = await store.listPlanCurrentShots(env, plan.id);
+  return json({ plan: planView(plan), progress, shots });
 }
 
 // POST /api/ballistics/fire-plans/:id/shots — append shots and fire any the

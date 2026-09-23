@@ -419,6 +419,7 @@ export default {
 
         if (pathname === '/api/ballistics/fire-plans' && method === 'GET') return await ballistics.listFirePlans(request, env);
         if (pathname === '/api/ballistics/fire-plans' && method === 'POST') return await ballistics.createFirePlan(request, env);
+        if (pathname === '/api/ballistics/fire-plans/history' && method === 'GET') return await ballistics.listFirePlanHistory(request, env);
 
         m = pathname.match(/^\/api\/ballistics\/fire-plans\/(\d+)$/);
         if (m && method === 'GET') return await ballistics.getFirePlan(request, env, m[1]);

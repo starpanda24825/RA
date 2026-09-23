@@ -297,8 +297,31 @@ local function doFire(mount)
     redstone.setOutput(cfg.redstoneSide, false)
     return true
   end
-  return pcall(function() mount.fire() end)
+  -- A failed shot is either an error (the mount refuses: not loaded, not
+  -- assembled) or an explicit `false`. `pcall` alone cannot tell the two apart —
+  -- it reports success for a call that returned false — and the difference now
+  -- matters: the website is told when a shot actually left the barrel, so a
+  -- shot that never happened must not be reported as one that did.
+  local ok, result = pcall(function() return mount.fire() end)
+  if not ok then return false end
+  return result ~= false
 end
+
+-- The instant a shot actually left the barrel, in epoch milliseconds.
+--
+-- The ack alone cannot serve as this: this computer only polls again once the
+-- whole sequence — reload, aim, fire — has finished, so the ack reaches the
+-- website seconds after the shell is away. The website times the shell on the
+-- live map against this instead.
+local function nowEpochMs()
+  local ok, ms = pcall(os.epoch, "utc")
+  if ok and type(ms) == "number" then return math.floor(ms) end
+  return nil
+end
+
+-- The last shot this computer fired, and when. Sent with the ack while it is
+-- still the sequence being acknowledged, and only then.
+local lastFired = nil
 
 local function runCommand(mount, cmd)
   print("Command #" .. tostring(cmd.sequence) .. ": aiming…")
@@ -330,6 +353,7 @@ local function runCommand(mount, cmd)
   -- 6. Fire
   local fired = doFire(mount)
   if fired then
+    lastFired = { sequence = cmd.sequence, at = nowEpochMs() }
     print("Fired! (yaw " .. string.format("%.1f", aimYaw) .. ", pitch " .. string.format("%.1f", aimPitch) .. ")")
   else
     print("Fire failed — is the cannon loaded and assembled?")
@@ -391,6 +415,11 @@ while true do
       pitch = curPitch,
       sequence = lastSequence,
     }
+    -- Only the command currently being acked carries a fire time, so the
+    -- website never sees a stale one.
+    if lastFired and lastFired.sequence == lastSequence then
+      body.firedAt = lastFired.at
+    end
     pcall(function() body.x = mount.getX() end)
     pcall(function() body.y = mount.getY() end)
     pcall(function() body.z = mount.getZ() end)

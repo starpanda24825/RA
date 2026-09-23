@@ -637,6 +637,7 @@
       <button class="bc-tab" id="tab-vehicles" type="button">Vehicle Registry</button>
       <button class="bc-tab" id="tab-gps" type="button">GPS Network</button>
       <button class="bc-tab" id="tab-presets" type="button">Reload Presets</button>
+      <button class="bc-tab" id="tab-log" type="button">Firing Log</button>
     </div>
 
     <div class="panel-inner" id="calc-panel">
@@ -843,6 +844,29 @@
           <button class="calc-btn" id="preset-save" type="button">Save Preset</button>
           <button class="map-btn" id="preset-cancel" type="button" style="display:none;">Cancel Edit</button>
         </div>
+      </div>
+
+    </div>
+
+    <div class="panel-inner" id="log-panel" style="display:none;">
+
+      <div class="field-group" style="grid-column:1/-1;">
+        <label>Firing Log</label>
+        <p class="field-hint">
+          Every firing order that has ended — whether it fired out or was stopped early — newest first.
+          Each entry names the officer who ordered it, how many shots each gun actually fired, and which
+          targets those shots went to.
+          <br/><br/>
+          A shot counts only once the cannon has reported it fired. Rounds a Stop withdrew before they were
+          fired are listed separately as <b>withdrawn</b>, so a stopped barrage cannot read as though it fired
+          rounds it never did. Gun names are the ones in force when the order was fired, so renaming a cannon
+          later does not rewrite the record.
+        </p>
+        <div class="registry-actions">
+          <button class="map-btn" id="log-refresh" type="button">Refresh</button>
+          <span class="field-hint" id="log-count" style="margin-left:8px;"></span>
+        </div>
+        <div class="registry-list" id="log-list"></div>
       </div>
 
     </div>
@@ -1620,10 +1644,19 @@
     if (trajLayer) trajLayer.remove();
     trajLayer = L.layerGroup().addTo(map);
 
-    function pathToLL(path) { return path.filter((_, i) => i % 5 === 0).map(p => mcToLL(p.x, p.z)); }
+    // Dot to dot: cannon to target, nothing else.
+    //
+    // The solved path runs on past the target until the shell reaches the
+    // ground, and it starts at the muzzle rather than the mount, which is what
+    // drew the overhang hanging off both ends of the line. Neither end belongs
+    // on a top-down map: the ground track of a shot under a fixed heading is a
+    // straight line between those two dots, so this is the real track rather
+    // than a shorthand for one. The height profile is a separate drawing (the
+    // results panel already gives peak height and time of flight).
+    const trackLL = [mcToLL(cx, cz), mcToLL(tx, tz)];
 
-    if (optimal) L.polyline(pathToLL(optimal.path), { color: '#b3273a', weight: 2, opacity: 0.85 }).addTo(trajLayer);
-    if (direct)  L.polyline(pathToLL(direct.path),  { color: '#c9a227', weight: 2, opacity: 0.85, dashArray: '6 3' }).addTo(trajLayer);
+    if (optimal) L.polyline(trackLL, { color: '#b3273a', weight: 2, opacity: 0.85 }).addTo(trajLayer);
+    if (direct)  L.polyline(trackLL,  { color: '#c9a227', weight: 2, opacity: 0.85, dashArray: '6 3' }).addTo(trajLayer);
 
     const v0 = selectedCharges * VEL_PER_CHARGE;
 
@@ -2184,6 +2217,17 @@
   let bombardTimer   = null;
   let bombardBusy    = false;
 
+  // ── What the order looks like on the map ──────────────────────
+  let bombardPlanShots   = {};      // per gun: the shot in hand and the one fired last
+  let bombardMapLayer    = null;    // trajectories still to be fired, grey dotted
+  let bombardActiveLayer = null;    // the trajectory being fired, coloured
+  let bombardShellLayer  = null;    // shells in flight
+  let bombardMapTimer    = null;
+  let bombardMapBusy     = false;
+  const bombardShells    = [];      // { key, path, tof, t0, marker }
+  const bombardActiveLines = new Map();  // cannonId -> { line, key }
+  let bombardPreview     = { key: null, lines: [], at: 0 };   // per-gun planned trajectories
+
   const bombardUnitsEl   = document.getElementById('bombard-units');
   const bombardTargetsEl = document.getElementById('bombard-targets');
   const bombardMultiEl   = document.getElementById('bombard-multi');
@@ -2387,6 +2431,15 @@
         (plan.mode === 'multi' ? ' · ' + plan.cycles + ' cycle' + (plan.cycles === 1 ? '' : 's') : ''),
       'Fired ' + shotsFired + ' · queued ' + inFlight + ' · ' + bombardPlan.charges + ' charges, ' + bombardPlan.trajectory + ' trajectory',
     ];
+    // Shell timing on the map is taken from the cannon's own report of the
+    // moment it fired. A computer still running the previous version of the
+    // program reports none, and the map falls back to when the website heard
+    // about it — the shells then fly late, which is worth saying out loud
+    // rather than leaving as an unexplained lag.
+    const reported = Object.values(bombardPlanShots).filter(s => s && s.last);
+    if (reported.length && reported.some(s => !s.last.firedAt)) {
+      lines.push('Shell timing on the map is estimated — re-run the installer to update the cannon programs.');
+    }
     if (plan.mode === 'multi') {
       const left = bombardPlan.targets
         .map(t => ({ t: t, n: Math.max(0, plan.cycles - (bombardPlan.targetsAssigned[t.key] || 0)) }))
@@ -2409,6 +2462,9 @@
       const data = await r.json();
       const plan = data.plan;
       const progress = data.progress || { guns: {}, targets: {} };
+      // Which shot each gun is on, and the one it fired last with the moment the
+      // cannon reported firing it — what the map draws and times its shells by.
+      bombardPlanShots = data.shots || {};
 
       // Seed the local counters from the server the first time, so a page that
       // was reloaded mid-barrage carries on rather than starting the count again.
@@ -2492,10 +2548,12 @@
     if (bombardTimer) return;
     bombardTimer = setInterval(bombardTick, 1000);
     bombardTick();
+    startBombardMap();
   }
 
   function endBombardment(message) {
     if (bombardTimer) { clearInterval(bombardTimer); bombardTimer = null; }
+    stopBombardMap();
     bombardPlan = null;
     bombardSetStatus(message || '');
     updateBombardButtons();
@@ -2561,6 +2619,11 @@
           cycles: cycles,
           targets: targets,
           guns: guns.map(g => ({ cannonId: g.cannonId })),
+          // Recorded with the order so the live map can replay each flight
+          // exactly, for every officer looking at it and not just this one.
+          drag: drag,
+          charges: charges,
+          trajectory: trajectory,
         }),
       });
       const data = await r.json().catch(() => ({}));
@@ -2622,9 +2685,15 @@
           const live = bombardGunById(g.cannonId);
           return live ? Object.assign({}, live, { name: g.name || live.name }) : null;
         }).filter(Boolean),
-        trajectory: bombardTrajEl.value === 'direct' ? 'direct' : 'optimal',
-        drag: parseFloat(shell.drag) || 0.99,
-        charges: selectedCharges,
+        // The order's own launch parameters win over this page's current
+        // sliders: they are what the shots being fired were actually solved
+        // with, and the map has to replay those, not whatever this officer
+        // happens to have selected. They are absent until migration 0019.
+        trajectory: plan.trajectory || (bombardTrajEl.value === 'direct' ? 'direct' : 'optimal'),
+        drag: Number.isFinite(Number(plan.drag)) && Number(plan.drag) > 0
+          ? Number(plan.drag) : (parseFloat(shell.drag) || 0.99),
+        charges: Number.isFinite(Number(plan.charges)) && Number(plan.charges) > 0
+          ? Number(plan.charges) : selectedCharges,
         given: {},
         idle: {},
         targetsAssigned: {},
@@ -3222,9 +3291,410 @@
   document.getElementById('preset-save').addEventListener('click', savePreset);
   document.getElementById('preset-cancel').addEventListener('click', resetPresetForm);
 
+  // ════════════════════════════════════════════
+  // 8e. FIRING LOG
+  //    Every firing order that has ended, read-only. The server owns the
+  //    record — a shot is only counted once the cannon acks it — so this tab
+  //    shows what happened rather than what was asked for.
+  // ════════════════════════════════════════════
+  let fireLog = [];
+
+  async function loadFireLog() {
+    const el = document.getElementById('log-list');
+    // Only show a placeholder on a first read: the tab refreshes itself while it
+    // is open, and replacing the list each time would make it flicker.
+    if (el && !fireLog.length) el.innerHTML = '<div class="registry-empty">Reading the log…</div>';
+    try {
+      const r = await fetch('/api/ballistics/fire-plans/history?limit=50');
+      if (!r.ok) {
+        if (el && !fireLog.length) el.innerHTML = '<div class="registry-empty">Could not read the firing log — is migration 0018 applied?</div>';
+        return;
+      }
+      const data = await r.json();
+      fireLog = data.orders || [];
+      renderFireLog();
+    } catch (e) {
+      if (el && !fireLog.length) el.innerHTML = '<div class="registry-empty">Could not reach the server.</div>';
+    }
+  }
+
+  // Orders, targets and the moment a gun fired are all ship-time sensitive, so
+  // the timestamp is shown in the reader's own timezone rather than as raw UTC.
+  function logTime(iso) {
+    const d = new Date(iso);
+    if (!iso || Number.isNaN(d.getTime())) return 'unknown';
+    return d.toLocaleString();
+  }
+
+  function fireLogModeText(mode) {
+    if (mode === 'constant') return 'Constant';
+    if (mode === 'multi') return 'Multi-Target';
+    return 'Normal';
+  }
+
+  function renderFireLog() {
+    const el = document.getElementById('log-list');
+    if (!el) return;
+    const countEl = document.getElementById('log-count');
+    if (countEl) {
+      countEl.textContent = fireLog.length
+        ? fireLog.length + ' order' + (fireLog.length === 1 ? '' : 's') + ' on record'
+        : '';
+    }
+    if (!fireLog.length) {
+      el.innerHTML = '<div class="registry-empty">No firing orders on record yet. Every order you fire — or stop — is kept here.</div>';
+      return;
+    }
+
+    el.innerHTML = fireLog.map(o => {
+      const shots = o.fired + ' shot' + (o.fired === 1 ? '' : 's');
+      const withdrawn = o.withdrawn > 0
+        ? ' · <b>' + o.withdrawn + '</b> withdrawn'
+        : '';
+
+      // What each gun did, with its ship alongside it when it belongs to one.
+      const gunLines = (o.guns || []).map(g => {
+        const ship = g.vehicleName ? ' <span class="cannon-badge">on ' + escHtml(g.vehicleName) + '</span>' : '';
+        return '<div class="bombard-row">' +
+            '<span class="bombard-row__name">' + escHtml(g.name) + ship + '</span>' +
+            '<span class="bombard-row__note">' + g.fired + ' fired' +
+              (g.withdrawn > 0 ? ' · ' + g.withdrawn + ' withdrawn' : '') + '</span>' +
+          '</div>';
+      }).join('');
+
+      // Only targets that were actually shot at are listed; a target every gun
+      // was out of reach of never received a round and says nothing about what
+      // was fired.
+      const firedTargets = (o.byTarget || []).filter(t => t.fired > 0);
+      const targetLines = firedTargets.length
+        ? firedTargets.map(t =>
+            '<div class="bombard-row">' +
+              '<span class="bombard-row__name">' + escHtml(t.label) + '</span>' +
+              '<span class="bombard-row__note">' + t.fired + ' shot' + (t.fired === 1 ? '' : 's') + '</span>' +
+            '</div>').join('')
+        : '<div class="bombard-empty">Nothing was fired at any queued target.</div>';
+
+      const cycles = (o.mode === 'multi' && o.cycles > 1)
+        ? ' · ' + o.cycles + ' cycles'
+        : '';
+
+      return '<div class="cannon-card" data-log-id="' + o.id + '">' +
+        '<div class="cannon-card__head">' +
+          '<span class="cannon-card__name" style="cursor:default;">Order #' + o.id + ' · ' + escHtml(fireLogModeText(o.mode)) + cycles + '</span>' +
+          '<span class="cannon-badge">' + escHtml(o.state === 'stopped' ? 'stopped' : 'fired out') + '</span>' +
+        '</div>' +
+        '<div class="cannon-card__meta">' +
+          shots + withdrawn + ' · ' + (o.guns || []).length + ' gun' + ((o.guns || []).length === 1 ? '' : 's') +
+          '<br/>Ordered by ' + escHtml(o.crew || 'an officer') + ' · ' + escHtml(logTime(o.created_at)) +
+          '<br/>Ended ' + escHtml(logTime(o.ended_at)) +
+        '</div>' +
+        '<div class="bombard-list">' + gunLines + '</div>' +
+        '<div class="field-hint" style="margin-top:6px;">Targets hit</div>' +
+        '<div class="bombard-list">' + targetLines + '</div>' +
+      '</div>';
+    }).join('');
+  }
+
+  document.getElementById('log-refresh').addEventListener('click', loadFireLog);
+
+  // ════════════════════════════════════════════
+  // 8f. THE FIRING ORDER ON THE MAP
+  //    Every trajectory a gun still has to fire is drawn light grey and
+  //    dotted, the one it is firing now is drawn coloured, and the shell
+  //    travels along that coloured line — timed from the instant the cannon
+  //    reported it fired, which is what makes it line up with the shot in game
+  //    rather than with when the website heard about it.
+  //
+  //    The grey set is the REST of the order, worked out with the same
+  //    scheduler that feeds the guns, run over a copy of its counters so that
+  //    asking "what comes next" never consumes the real next shot.
+  // ════════════════════════════════════════════
+  const BOMBARD_MAP_TICK_MS        = 80;
+  const BOMBARD_PREVIEW_REFRESH_MS = 3000;   // never re-simulate faster than this
+  const BOMBARD_PREVIEW_SHOTS      = 10;     // shots per gun looked ahead
+  const BOMBARD_PREVIEW_MAX_LINES  = 300;    // ... and trajectories drawn in all
+  const BOMBARD_PLANNED_STYLE = { color: '#9aa0aa', weight: 1, opacity: 0.6, dashArray: '1 6' };
+  const BOMBARD_ACTIVE_STYLE  = { color: '#ffd166', weight: 2, opacity: 0.95, dashArray: '8 5' };
+  const BOMBARD_SHELL_STYLE   = { radius: 3.5, color: '#fff4d6', weight: 2, fillColor: '#ffb703', fillOpacity: 1 };
+
+  // >>> BOMBARD MAP MATH
+  // Where the shell starts: the mount's block pushed out along the barrel's
+  // heading. The same offset the aim solver uses, so a drawn line and the shot
+  // it describes begin in the same place.
+  function bombardMuzzle(gun, yawDeg) {
+    const yawR = Number(yawDeg) * Math.PI / 180;
+    const len  = Number(gun.length) || 4;
+    return {
+      x: Number(gun.x) - len * Math.sin(yawR),
+      y: Number(gun.y),
+      z: Number(gun.z) + len * Math.cos(yawR),
+    };
+  }
+
+  // The flight of one shot, rebuilt from the shot's OWN aim: the yaw and pitch
+  // it was fired with, plus the charges and drag the order was opened with.
+  // Nothing is re-solved, so this is a replay of what was fired rather than a
+  // fresh calculation that might now disagree with it.
+  //
+  // `tof` is the moment the shell reaches the target's horizontal distance —
+  // the point the aim was solved for, and the point it should be treated as
+  // landed. Null when the shell never gets that far (a shot that fell short).
+  function bombardShotFlight(gun, yaw, pitch, target, charges, drag) {
+    if (!gun) return null;
+    const y = Number(yaw), p = Number(pitch);
+    const v0 = Number(charges), d = Number(drag);
+    if (!Number.isFinite(y) || !Number.isFinite(p)) return null;
+    if (!Number.isFinite(v0) || v0 <= 0) return null;
+    if (!Number.isFinite(d) || d <= 0 || d > 1) return null;
+
+    const muzzle = bombardMuzzle(gun, y);
+    const path = simulate(muzzle.x, muzzle.y, muzzle.z, y, p, v0, d);
+    if (!target) return { path, tof: null, muzzle };
+    const hDist = Math.hypot(Number(target.x) - muzzle.x, Number(target.z) - muzzle.z);
+    const r = yAtHDist(path, muzzle.x, muzzle.z, hDist);
+    return { path, tof: r ? r.tick / TICKS_PER_SEC : null, muzzle };
+  }
+
+  // Where the shell is after `ticks`, interpolated between the two sampled
+  // points it falls between — the integrator steps a tick at a time, and a
+  // marker that only moved on tick boundaries would stutter.
+  function bombardShellPoint(path, ticks) {
+    if (!path || path.length < 2) return null;
+    if (!Number.isFinite(ticks) || ticks < 0) return null;
+    const i = Math.floor(ticks);
+    if (i >= path.length - 1) return null;
+    const f = ticks - i;
+    const a = path[i], b = path[i + 1];
+    return {
+      x: a.x + f * (b.x - a.x),
+      y: a.y + f * (b.y - a.y),
+      z: a.z + f * (b.z - a.z),
+    };
+  }
+  // <<< BOMBARD MAP MATH
+
+  // A queued shot names its target by "x,y,z"; the plan holds the labelled
+  // version. Either will do, but the plan's is nicer if it is there.
+  function bombardTargetByKey(key) {
+    if (!key) return null;
+    const t = (bombardPlan && bombardPlan.targets || []).find(x => x.key === key);
+    if (t) return t;
+    const parts = String(key).split(',');
+    if (parts.length !== 3) return null;
+    const x = Number(parts[0]), y = Number(parts[1]), z = Number(parts[2]);
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+    return { key: String(key), x: x, y: Number.isFinite(y) ? y : 64, z: z };
+  }
+
+  function startBombardMap() {
+    if (!bombardMapLayer)    bombardMapLayer    = L.layerGroup().addTo(map);
+    if (!bombardActiveLayer) bombardActiveLayer = L.layerGroup().addTo(map);
+    if (!bombardShellLayer)  bombardShellLayer  = L.layerGroup().addTo(map);
+    if (bombardMapTimer) return;
+    bombardMapTimer = setInterval(bombardMapTick, BOMBARD_MAP_TICK_MS);
+    bombardMapTick();
+  }
+
+  // Called when the order ends. Everything this section put on the map comes
+  // off it, so a finished barrage leaves no half-drawn lines behind.
+  function stopBombardMap() {
+    if (bombardMapTimer) { clearInterval(bombardMapTimer); bombardMapTimer = null; }
+    for (const s of bombardShells) if (s.marker) s.marker.remove();
+    bombardShells.length = 0;
+    for (const entry of bombardActiveLines.values()) entry.line.remove();
+    bombardActiveLines.clear();
+    if (bombardMapLayer) bombardMapLayer.clearLayers();
+    bombardPreview = { key: null, lines: [], at: 0 };
+  }
+
+  // Everything the grey dotted set depends on. Rebuilding it solves a shot per
+  // target per gun, so it is only worth doing when one of these actually
+  // changes — and never more often than the refresh floor below.
+  function bombardPreviewSignature(positions) {
+    const p = bombardPlan;
+    if (!p) return null;
+    const guns = p.guns.map(g => {
+      const live = positions.get(g.cannonId);
+      return live
+        ? g.cannonId + ':' + Math.round(live.x) + ',' + Math.round(live.y) + ',' + Math.round(live.z)
+        : g.cannonId + ':-';
+    }).join(' ');
+    const counters = (obj) => Object.keys(obj).sort().map(k => k + '=' + obj[k]).join(' ');
+    return [p.mode, p.cycles, p.trajectory, p.charges, p.drag, guns,
+            p.targets.map(t => t.key).join(' '),
+            counters(p.given), counters(p.targetsAssigned)].join('|');
+  }
+
+  function bombardRebuildPreview(positions, signature, now) {
+    const plan = bombardPlan;
+    const lines = [];
+    let budget = BOMBARD_PREVIEW_MAX_LINES;
+
+    // Point the scheduler at a copy of its counters while it is asked what
+    // comes next, then put the real one back. Without this, looking ahead would
+    // eat the shots the real scheduler is about to queue.
+    const real = plan;
+    const scratch = {
+      mode: real.mode, cycles: real.cycles, trajectory: real.trajectory,
+      drag: real.drag, charges: real.charges,
+      targets: real.targets, guns: real.guns,
+      given: Object.assign({}, real.given),
+      idle: Object.assign({}, real.idle),
+      targetsAssigned: Object.assign({}, real.targetsAssigned),
+    };
+
+    bombardPlanSwap(scratch);
+    try {
+      for (const g of real.guns) {
+        if (budget <= 0) break;
+        const gun = positions.get(g.cannonId);
+        if (!gun) continue;
+        // The target it is firing right now is the coloured line, so it is not
+        // repeated in grey — that is what "the next shot turns from dotted to
+        // dashed" looks like on the map.
+        const current = (bombardPlanShots[String(g.cannonId)] || {}).delivered;
+        const shown = new Set();
+        for (let i = 0; i < BOMBARD_PREVIEW_SHOTS && budget > 0; i++) {
+          const shot = nextBombardShot(gun);
+          if (!shot) break;
+          scratch.given[gun.cannonId] = (scratch.given[gun.cannonId] || 0) + 1;
+          if (shot.targetKey) {
+            scratch.targetsAssigned[shot.targetKey] = (scratch.targetsAssigned[shot.targetKey] || 0) + 1;
+          }
+          if (!shot.targetKey || shown.has(shot.targetKey)) continue;
+          if (current && current.targetKey === shot.targetKey) continue;
+          shown.add(shot.targetKey);
+          const target = bombardTargetByKey(shot.targetKey);
+          if (!target) continue;
+          const muzzle = bombardMuzzle(gun, shot.yaw);
+          lines.push([[muzzle.x, muzzle.z], [target.x, target.z]]);
+          budget--;
+        }
+      }
+    } finally {
+      bombardPlanSwap(real);
+    }
+
+    bombardMapLayer.clearLayers();
+    for (const seg of lines) {
+      L.polyline([mcToLL(seg[0][0], seg[0][1]), mcToLL(seg[1][0], seg[1][1])], BOMBARD_PLANNED_STYLE)
+        .addTo(bombardMapLayer);
+    }
+    bombardPreview = { key: signature, lines: lines, at: now };
+  }
+
+  // Reading and writing the module-level plan the scheduler works from. Kept as
+  // one named place so the swap can never be left half-done.
+  function bombardPlanSwap(p) { bombardPlan = p; }
+
+  function bombardDrawActive(positions, plan, now) {
+    const liveShells = new Set();
+    const wantedGuns = new Set();
+
+    for (const g of plan.guns) {
+      const gun = positions.get(g.cannonId);
+      if (!gun) continue;
+      const info = bombardPlanShots[String(g.cannonId)] || {};
+      const last = info.last || null;
+      let shell = null;
+
+      // The shot that last left the barrel, while its shell is still in the
+      // air. `firedAt` is the cannon's own report of the moment it fired, which
+      // is the whole point — `doneAt` is when the website heard about it, and a
+      // cannon only polls after the sequence has finished. Older cannon
+      // programs report no fire time, so the ack is used and the flight simply
+      // runs late rather than not at all.
+      if (last) {
+        const t0 = Date.parse(last.firedAt || last.doneAt || '');
+        const flight = Number.isFinite(t0)
+          ? bombardShotFlight(gun, last.yaw, last.pitch,
+              bombardTargetByKey(last.targetKey), plan.charges, plan.drag)
+          : null;
+        if (flight && flight.tof != null) {
+          const elapsed = (now - t0) / 1000;
+          if (elapsed >= 0 && elapsed <= flight.tof + 0.2) {
+            shell = { t0: t0, flight: flight, sequence: last.sequence };
+          }
+        }
+      }
+
+      // What this gun is firing now: the shot it is holding, or — between the
+      // two — the one whose shell is still travelling, so the shell always has
+      // its line under it.
+      const current = info.delivered || (shell ? last : null);
+      if (current) {
+        const target = bombardTargetByKey(current.targetKey);
+        if (target) {
+          const muzzle = bombardMuzzle(gun, current.yaw);
+          const ll = [mcToLL(muzzle.x, muzzle.z), mcToLL(target.x, target.z)];
+          const key = [current.sequence, Math.round(gun.x), Math.round(gun.z), current.targetKey].join('|');
+          let entry = bombardActiveLines.get(g.cannonId);
+          if (!entry || entry.key !== key) {
+            if (entry) entry.line.remove();
+            entry = { key: key, line: L.polyline(ll, BOMBARD_ACTIVE_STYLE).addTo(bombardActiveLayer) };
+            bombardActiveLines.set(g.cannonId, entry);
+          } else {
+            entry.line.setLatLngs(ll);
+          }
+          wantedGuns.add(g.cannonId);
+        }
+      }
+
+      if (!shell) continue;
+      const shellKey = g.cannonId + ':' + shell.sequence;
+      liveShells.add(shellKey);
+      let s = bombardShells.find(x => x.key === shellKey);
+      if (!s) {
+        s = { key: shellKey, path: shell.flight.path, t0: shell.t0, marker: null };
+        bombardShells.push(s);
+      }
+      const pt = bombardShellPoint(s.path, ((now - s.t0) / 1000) * TICKS_PER_SEC);
+      if (!pt) continue;
+      if (!s.marker) s.marker = L.circleMarker(mcToLL(pt.x, pt.z), BOMBARD_SHELL_STYLE).addTo(bombardShellLayer);
+      else s.marker.setLatLng(mcToLL(pt.x, pt.z));
+    }
+
+    // Retire what has landed, and any line whose gun has no shot in hand.
+    for (const s of bombardShells.slice()) {
+      if (liveShells.has(s.key)) continue;
+      if (s.marker) s.marker.remove();
+      bombardShells.splice(bombardShells.indexOf(s), 1);
+    }
+    for (const [id, entry] of Array.from(bombardActiveLines.entries())) {
+      if (wantedGuns.has(id)) continue;
+      entry.line.remove();
+      bombardActiveLines.delete(id);
+    }
+  }
+
+  function bombardMapTick() {
+    if (!bombardPlan || bombardMapBusy) return;
+    bombardMapBusy = true;
+    try {
+      const plan = bombardPlan;
+      const now  = Date.now();
+      const byId = new Map(bombardGunList().map(g => [g.cannonId, g]));
+      const positions = new Map();
+      for (const g of plan.guns) {
+        const live = byId.get(g.cannonId);
+        if (live) positions.set(g.cannonId, live);
+      }
+
+      const signature = bombardPreviewSignature(positions);
+      if (signature !== bombardPreview.key && now - (bombardPreview.at || 0) >= BOMBARD_PREVIEW_REFRESH_MS) {
+        bombardRebuildPreview(positions, signature, now);
+      }
+      bombardDrawActive(positions, plan, now);
+    } catch (e) {
+      console.warn('Firing order map draw failed.', e);
+    } finally {
+      bombardMapBusy = false;
+    }
+  }
+
   function setTab(which) {
-    const tabs   = { calc: 'tab-calc', cannons: 'tab-cannons', vehicles: 'tab-vehicles', gps: 'tab-gps', presets: 'tab-presets' };
-    const panels = { calc: 'calc-panel', cannons: 'registry-panel', vehicles: 'vehicles-panel', gps: 'gps-panel', presets: 'presets-panel' };
+    const tabs   = { calc: 'tab-calc', cannons: 'tab-cannons', vehicles: 'tab-vehicles', gps: 'tab-gps', presets: 'tab-presets', log: 'tab-log' };
+    const panels = { calc: 'calc-panel', cannons: 'registry-panel', vehicles: 'vehicles-panel', gps: 'gps-panel', presets: 'presets-panel', log: 'log-panel' };
     Object.keys(panels).forEach(k => {
       document.getElementById(tabs[k]).classList.toggle('active', k === which);
       document.getElementById(panels[k]).style.display = (k === which) ? '' : 'none';
@@ -3236,6 +3706,7 @@
   document.getElementById('tab-vehicles').addEventListener('click', () => { setTab('vehicles'); loadCannons().then(loadVehicles); });
   document.getElementById('tab-gps').addEventListener('click', () => { setTab('gps'); loadCannons().then(() => { renderGps(); }); loadTowers(); });
   document.getElementById('tab-presets').addEventListener('click', () => { setTab('presets'); resetPresetForm(); loadPresets(); });
+  document.getElementById('tab-log').addEventListener('click', () => { setTab('log'); loadFireLog(); });
 
   // Keep the map dots fresh: sublevel cannons push new GPS coordinates every
   // ~3s, so poll on the same cadence. While the registry tab is open we skip
@@ -3255,12 +3726,17 @@
   function presetsTabOpen() {
     return document.getElementById('presets-panel').style.display !== 'none';
   }
+  // The log only grows when an order ends, which is rare, so it refreshes on the
+  // slow timer below rather than with the positions.
+  function logTabOpen() {
+    return document.getElementById('log-panel').style.display !== 'none';
+  }
   let cannonsPollBusy = false;
   setInterval(async () => {
     if (cannonsPollBusy) return;
     cannonsPollBusy = true;
     try {
-      await loadCannons({ light: registryTabOpen() || gpsTabOpen() || vehiclesTabOpen() || presetsTabOpen() });
+      await loadCannons({ light: registryTabOpen() || gpsTabOpen() || vehiclesTabOpen() || presetsTabOpen() || logTabOpen() });
       if (gpsTabOpen()) renderGps();
       if (vehiclesTabOpen()) await loadVehicles({ light: true });
     } finally { cannonsPollBusy = false; }
@@ -3268,6 +3744,7 @@
 
   // The tower registry changes far more slowly than positions do.
   setInterval(() => { if (gpsTabOpen()) loadTowers(); }, 15000);
+  setInterval(() => { if (logTabOpen()) loadFireLog(); }, 15000);
 
   // 9. AUTH — last, because showApp() needs `map` to already exist
   // ════════════════════════════════════════════════════════════

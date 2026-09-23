@@ -165,8 +165,12 @@ export async function ccPoll(request, env) {
   // Acknowledge the last command the computer says it executed. A new ack also
   // hands this cannon the next shot of its plan within the same request, so the
   // refreshed row is the one that decides whether there is a command to deliver.
+  //
+  // `firedAt` rides along on a LATER poll of the same sequence — the ack claims
+  // the command, the firing happens seconds into it — and is what the live map
+  // times the shell against, so it is worth carrying up here.
   const ack = Math.round(num(body.sequence, 0));
-  if (ack > 0) cannon = (await store.ackCannonCommand(env, cannon.id, ack)) || cannon;
+  if (ack > 0) cannon = (await store.ackCannonCommand(env, cannon.id, ack, body.firedAt)) || cannon;
 
   // Does a Sublevel Vehicle Computer own this cannon? Only an ACCEPTED vehicle
   // may take a cannon over: a pending one leaves its cannons running
@@ -283,7 +287,7 @@ export async function ccVehiclePoll(request, env) {
           pitch: num(report.pitch, 0),
         });
         const ack = Math.round(num(report.sequence, 0));
-        if (ack > 0) await store.ackCannonCommand(env, id, ack);
+        if (ack > 0) await store.ackCannonCommand(env, id, ack, report.firedAt);
       } catch (err) {
         console.warn('CC vehicle poll: cannon report failed for', id, err);
       }

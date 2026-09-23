@@ -258,7 +258,7 @@ local assigned       = {}     -- [cannonId] = last sequence assigned (for the ac
 local cannonNames    = {}     -- [cannonId] = display name
 
 -- Latest report from each of our cannon computers:
---   [cannonId] = { x, y, z, gpsOk, yaw, pitch, sequence, mount, at }
+--   [cannonId] = { x, y, z, gpsOk, yaw, pitch, sequence, firedAt, mount, at }
 local reports = {}
 
 -- What we have already forwarded to the website for each cannon, so a cannon
@@ -367,6 +367,7 @@ local function networkPump()
                 yaw = tonumber(data.yaw) or 0,
                 pitch = tonumber(data.pitch) or 0,
                 sequence = tonumber(data.sequence) or 0,
+                firedAt = tonumber(data.firedAt),
                 mount = data.mount == true,
                 at = os.clock(),
               }
@@ -518,6 +519,13 @@ local function mainLoop()
             entry.x, entry.y, entry.z, entry.gpsOk = r.x, r.y, r.z, true
           end
           entry.yaw, entry.pitch = r.yaw, r.pitch
+          -- The instant the shell left the barrel. It arrives on a LATER report
+          -- than the ack — the ack claims the command, the firing happens
+          -- seconds into it — so it is carried on every report until the next
+          -- command comes along. Re-sending it costs one number and means a
+          -- dropped poll cannot leave a shot without its fire time; the website
+          -- records the first one it sees and ignores the rest.
+          if r.firedAt then entry.firedAt = r.firedAt end
         end
         cannonReports[#cannonReports + 1] = entry
         forwarded[cid] = { at = fresh and r.at or (seen and seen.at or 0), ack = ackSeq }
