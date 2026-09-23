@@ -957,6 +957,7 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="../assets/bluemap-layer.js"></script>
 <script>
 (async function () {
   'use strict';
@@ -1299,157 +1300,70 @@
   function mcToLL(x, z) { return L.latLng(-z, x); }
   function llToMc(ll)   { return { x: Math.round(ll.lng), z: Math.round(-ll.lat) }; }
 
-  // BlueMap low-res tile paths look like:
-  //   /maps/{mapId}/tiles/{lod}/x{tileX}/z{tileZ}.png
-  // Each coordinate is split digit-by-digit into a subpath (so tile
-  // x=12 lives at "x1/2"), and negative coordinates get a "-" prefix.
+  // The tile pyramid, the level-of-detail choice and the zoom range all
+  // live in ../assets/bluemap-layer.js, which this page now loads before
+  // this script. The Land Registry's cadastral map draws the same basemap,
+  // and the two pages had grown separate copies of this logic that failed
+  // in different ways — see that file's header for the whole story.
   //
-  // BlueMap publishes the low-res tiles as a pyramid, and which level we
-  // ask for matters a great deal: lod 1 is 1 block per pixel (500 blocks
-  // across a tile) and every further level coarsens by lodFactor (5), so
-  // lod 2 is 2 500 blocks a tile and lod 3 is 12 500.
-  //
-  // Pinning EVERY zoom to lod 1 — as this used to — means a zoomed-out view
-  // asks for hundreds of ~150 KB PNGs at once. That is why zooming out made
-  // the map look like it had stopped loading, and why panning then filled it
-  // in: a pan requests far fewer new tiles than a change of zoom does.
-  // Asking each zoom level for the lod that keeps a tile a sensible size on
-  // screen bounds the number of tiles at every zoom instead.
-  //
-  // Leaflet derives the tile grid from the layer's "native zoom" (the zoom
-  // at which one tile is exactly tileSize pixels), so switching level of
-  // detail is only a matter of giving the layer the right native zoom.
-  const LOWRES_FACTOR = 5;                 // the map's lodFactor
+  // These two thunks are the library's only view of our state, so a source
+  // or map change only has to update MAPINFO/CFG and ask for a refresh.
+  const blueMapGeometry = () => ({
+    tileSize: MAPINFO.tileSize || 500,
+    lodFactor: MAPINFO.lodFactor || 5,
+    lodCount: MAPINFO.lodCount || 1,
+  });
+  const blueMapSource = () => ({
+    mapId: MAPINFO.mapId,
+    baseUrl: CFG.bluemapBaseUrl,
+    useProxy: CFG.useProxy,
+  });
 
-  function lodBlocksPerTile(lod) {
-    // lod 1 is one block per pixel, so its tile spans exactly tileSize blocks.
-    return (MAPINFO.tileSize || 500) * Math.pow(LOWRES_FACTOR, lod - 1);
-  }
-
-  function lodNativeZoom(lod) {
-    return Math.log2((MAPINFO.tileSize || 500) / lodBlocksPerTile(lod));
-  }
-
-  // Set so a tile stays roughly 200-800 screen pixels wide at every zoom,
-  // which keeps the request count small even when the whole world is in view.
-  function lodForZoom(zoom) {
-    if (zoom <= -4) return 3;
-    if (zoom <= -2) return 2;
-    return 1;
-  }
-  function blueMapPathFromCoords(x, z) {
-    function split(n) {
-      let s = '';
-      if (n < 0) { n = -n; s += '-'; }
-      const d = String(n);
-      for (let i = 0; i < d.length; i++) s += d.charAt(i) + '/';
-      return s;
-    }
-    const t = 'x' + split(x) + 'z' + split(z);
-    return t.substring(0, t.length - 1);
-  }
-
-  const BlueMapLayer = L.GridLayer.extend({
-    options: { tileSize: 500, updateWhenIdle: false, keepBuffer: 2, attribution: 'Map data: BlueMap' },
-    createTile(coords, done) {
-      const size = this.getTileSize().x;
-      const canvas = document.createElement('canvas');
-      canvas.width = size;
-      canvas.height = size;
-      const img = new Image();
-      img.onload = () => {
-        // BlueMap low-res tiles are (tileSize+1) wide and 2×(tileSize+1)
-        // tall: the top half is the colour map, the bottom half is height
-        // metadata. Crop the colour half so it renders 1 block = 1 pixel.
-        const ctx = canvas.getContext('2d');
-        const sw = Math.min(img.naturalWidth, size);
-        const sh = Math.min(Math.floor(img.naturalHeight / 2), size);
-        ctx.drawImage(img, 0, 0, sw, sh, 0, 0, size, size);
-        done();
-      };
-      // Empty/unrendered tiles come back as 204/404 — leave them blank.
-      img.onerror = () => done();
-      img.src = this._tileUrl(coords);
-      return canvas;
-    },
-    _tileUrl(coords) {
-      const lod = this.options.lod || 1;
-      const tilePath = `/maps/${encodeURIComponent(MAPINFO.mapId)}/tiles/${lod}/${blueMapPathFromCoords(coords.x, coords.y)}.png`;
-      if (CFG.useProxy) return `/api/maptile?path=${encodeURIComponent(tilePath)}`;
-      return CFG.bluemapBaseUrl.replace(/\/$/, '') + tilePath;
-    }
+  // Ask the server which levels of detail it really publishes before
+  // trusting the discovered config: a zoom level that expects tiles the
+  // host doesn't have is a blank map with no way for anyone to tell why.
+  MAPINFO.lodCount = await RABlueMap.probeLodCount({
+    geometry: blueMapGeometry(),
+    source: blueMapSource(),
+    at: MAPINFO.startPos || { x: 0, z: 0 },
   });
 
   const initialX = (MAPINFO.startPos ? MAPINFO.startPos.x : CFG.defaultMcX);
   const initialZ = (MAPINFO.startPos ? MAPINFO.startPos.z : CFG.defaultMcZ);
 
+  // Zoom further out than the coarsest level can cover and the only way to
+  // fill the screen is a request storm that never finishes — which is what
+  // "the map is black until I zoom back in" was.
+  const blueMapLimits = RABlueMap.limits(blueMapGeometry(), 2);
+
   const map = L.map('map', {
     crs: L.CRS.Simple,
     center: mcToLL(initialX, initialZ),
     zoom: CFG.defaultZoom,
-    minZoom: -6,
-    maxZoom: 2,
+    minZoom: blueMapLimits.minZoom,
+    maxZoom: blueMapLimits.maxZoom,
     zoomSnap: 0.5,
     zoomDelta: 0.5
   });
 
-  // One layer per level of detail, built on demand and swapped in as the zoom
-  // crosses a threshold. `bluemapLayer` is whichever one is currently shown.
-  const lodLayers = {};
-  let activeLod = null;
-  let bluemapLayer = null;
+  // Keeps exactly one level of detail on the map, swapping bands as the zoom
+  // crosses between them, and re-arming itself if the source or map changes.
+  const blueMapTiles = RABlueMap.attach(map, L, {
+    geometry: blueMapGeometry,
+    source: blueMapSource,
+    maxZoomCap: 2,
+    onLimits(lim) { map.setMinZoom(lim.minZoom); map.setMaxZoom(lim.maxZoom); },
+  });
 
-  function lodLayer(lod) {
-    if (!lodLayers[lod]) {
-      const native = lodNativeZoom(lod);
-      lodLayers[lod] = new BlueMapLayer({
-        lod,
-        tileSize: MAPINFO.tileSize,
-        minNativeZoom: native,
-        maxNativeZoom: native
-      });
-    }
-    return lodLayers[lod];
-  }
+  map.on('zoomend', () => blueMapTiles.apply());
 
-  function applyLod() {
-    const want = lodForZoom(map.getZoom());
-    if (want === activeLod) return;
-
-    const next = lodLayer(want);
-    const previous = activeLod === null ? null : lodLayers[activeLod];
-
-    // Bring the new level in first and retire the old one after it has drawn:
-    // removing first would blink an empty map on every threshold crossing.
-    let dropped = false;
-    const drop = () => {
-      if (dropped) return;
-      dropped = true;
-      if (previous && map.hasLayer(previous)) map.removeLayer(previous);
-    };
-    next.once('load', drop);
-    next.addTo(map);
-    bluemapLayer = next;
-    activeLod = want;
-    if (previous) setTimeout(drop, 2500);
-  }
-
-  // Called when the BlueMap source or map ID changes. Tile URLs embed the map
-  // ID, so any level of detail other than the one on screen is now stale and
-  // has to be thrown away rather than left to be swapped in later.
+  // Called when the BlueMap source or map ID changes. Every cached level of
+  // detail is stale once those change (tile URLs embed the map ID, and the
+  // native zooms move with the tile size), so the library throws the lot
+  // away and starts the new source from the coarsest level it may show.
   function reloadMapSource() {
-    Object.keys(lodLayers).forEach((lod) => {
-      const layer = lodLayers[lod];
-      if (layer !== bluemapLayer) {
-        if (map.hasLayer(layer)) map.removeLayer(layer);
-        delete lodLayers[lod];
-      }
-    });
-    if (bluemapLayer) bluemapLayer.redraw();
+    blueMapTiles.refresh();
   }
-
-  applyLod();
-  map.on('zoomend', applyLod);
 
   const cursorEl = document.getElementById('cursor-coords');
   map.on('mousemove', (e) => {

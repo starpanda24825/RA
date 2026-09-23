@@ -15,7 +15,10 @@
 
 #map-wrap { position: relative; flex: 1 1 0; min-height: 0; }
 #map2d, #map3d { width: 100%; height: 100%; background: var(--ink); }
-#map3d { display: none; }
+/* The 3D view is this page's default (see the boot section at the end of
+   the script), so it is the one in the markup's initial state: that way
+   there is no flash of a 2D map the page is about to replace. */
+#map2d { display: none; }
 #map3d canvas { display: block; }
 
 #panel {
@@ -171,8 +174,11 @@ body.is-resizing-panel { cursor: row-resize; }
         <option value="archived">Archived</option>
       </select>
       <span class="map-bar__divider" aria-hidden="true"></span>
-      <button class="map-btn active" id="btn-mode-2d">2D</button>
-      <button class="map-btn" id="btn-mode-3d">3D</button>
+      <button class="map-btn" id="btn-mode-2d">2D</button>
+      <button class="map-btn active" id="btn-mode-3d">3D</button>
+      <span class="map-bar__divider" aria-hidden="true"></span>
+      <button class="map-btn" id="btn-frame-all" style="display:none;" title="Re-centre the view on every claim currently shown">Frame All</button>
+      <button class="map-btn active" id="btn-surface" style="display:none;" title="Hide the terrain surface to inspect claims that lie beneath it">Terrain</button>
       <span class="map-bar__divider" aria-hidden="true"></span>
       <button class="map-btn" id="btn-mapsource">Map Source</button>
     </div>
@@ -234,28 +240,41 @@ body.is-resizing-panel { cursor: row-resize; }
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="../../assets/bluemap-layer.js"></script>
+<!-- Three.js ships its addons (OrbitControls among them) importing the bare
+     specifier "three". Without this map those imports cannot resolve, which
+     does not degrade the 3D view — it kills the entire module, so the page
+     had no map at all. The importmap is what makes "three" a URL. -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
 <script type="module">
-import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
-import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+import { createPlotViewer } from '../assets/land-registry-3d.js';
 
 (async function () {
   'use strict';
 
   /* ════════════════════════════════════════════════════════════
      This page shows registered land plots two ways:
-       - 2D: the real BlueMap tiles (same auto-discovery as the
-         Ballistic Calculator) with each plot drawn as its actual
-         quadrilateral footprint. If two or more plots share the
-         EXACT same footprint at different heights (one built over
-         another), only the topmost is drawn here — see
+       - 3D (the default, and the authoritative one): every claim
+         extruded from Y Lower to Y Upper over a surface drawn from
+         the BlueMap basemap. Claims are three-dimensional — a claim
+         is a volume between two heights — so this is the view that
+         can show all of them at once. See
+         ../assets/land-registry-3d.js for the scene itself.
+       - 2D: the real BlueMap tiles (same auto-discovery and same
+         level-of-detail handling as the Ballistic Calculator) with
+         each plot drawn as its actual quadrilateral footprint. Flat,
+         so where two or more plots share the EXACT same footprint at
+         different heights only the topmost can be drawn — see
          pickTopmostPerFootprint() below. Partial overlaps between
          differently-shaped plots aren't merged; this only collapses
          plots that occupy the identical 4 corners.
-       - 3D: every plot, all at once, each simplified to the
-         axis-aligned bounding box of its corners extruded from
-         Y Lower to Y Upper — i.e. drawn as a cube/cuboid, by design
-         (plots can be arbitrary quadrilaterals, but the 3D view only
-         ever draws boxes, so stacked plots are unambiguous).
      A third "picker" mode (?pick=1) repurposes the 2D map for an
      admin to trace a new plot's corners by clicking, then posts the
      result back to the admin panel tab that opened this window.
@@ -420,57 +439,54 @@ import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/cont
   function mcToLL(x, z) { return L.latLng(-z, x); }
   function llToMc(ll) { return { x: Math.round(ll.lng), z: Math.round(-ll.lat) }; }
 
-  function blueMapPathFromCoords(x, z) {
-    function split(n) {
-      var s = '';
-      if (n < 0) { n = -n; s += '-'; }
-      var d = String(n);
-      for (var i = 0; i < d.length; i++) s += d.charAt(i) + '/';
-      return s;
-    }
-    var t = 'x' + split(x) + 'z' + split(z);
-    return t.substring(0, t.length - 1);
+  // ── The basemap ────────────────────────────────────────────
+  //
+  // Both this page and the Ballistic Calculator draw the same BlueMap
+  // tiles, and both used to carry their own copy of the code that asks
+  // for them — including the part that decides which level of detail a
+  // zoom level should use. Two copies meant two sets of bugs: this page
+  // pinned every zoom to the finest level, so a zoomed-out view asked for
+  // thousands of tiles at once and the map stayed black until you zoomed
+  // back in. That logic now lives once, in ../../assets/bluemap-layer.js,
+  // which is loaded above this script. Read its header for the details.
+  function blueMapGeometry() {
+    return {
+      tileSize: MAPINFO.tileSize || 500,
+      lodFactor: MAPINFO.lodFactor || 5,
+      lodCount: MAPINFO.lodCount || 1,
+    };
+  }
+  function blueMapSource() {
+    return { mapId: MAPINFO.mapId, baseUrl: CFG.bluemapBaseUrl, useProxy: CFG.useProxy };
   }
 
-  var BlueMapLayer = L.GridLayer.extend({
-    options: { tileSize: 500, updateWhenIdle: true, attribution: 'Map data: BlueMap' },
-    createTile: function (coords, done) {
-      var size = this.getTileSize().x;
-      var canvas = document.createElement('canvas');
-      canvas.width = size;
-      canvas.height = size;
-      var img = new Image();
-      img.onload = function () {
-        // BlueMap low-res tiles are (tileSize+1) wide and 2×(tileSize+1)
-        // tall: the top half is the colour map, the bottom half is height
-        // metadata. Crop the colour half so it renders 1 block = 1 pixel.
-        var ctx = canvas.getContext('2d');
-        var sw = Math.min(img.naturalWidth, size);
-        var sh = Math.min(Math.floor(img.naturalHeight / 2), size);
-        ctx.drawImage(img, 0, 0, sw, sh, 0, 0, size, size);
-        done();
-      };
-      // Empty/unrendered tiles come back as 204/404 — leave them blank.
-      img.onerror = function () { done(); };
-      img.src = this._tileUrl(coords);
-      return canvas;
-    },
-    _tileUrl: function (coords) {
-      var tilePath = '/maps/' + encodeURIComponent(MAPINFO.mapId) + '/tiles/1/' + blueMapPathFromCoords(coords.x, coords.y) + '.png';
-      if (CFG.useProxy) return '/api/maptile?path=' + encodeURIComponent(tilePath);
-      return CFG.bluemapBaseUrl.replace(/\/$/, '') + tilePath;
-    }
+  // Ask the host which levels of detail it really publishes before trusting
+  // the discovered config — a zoom level expecting tiles the host doesn't
+  // have is a blank map with nothing on screen to explain why.
+  MAPINFO.lodCount = await RABlueMap.probeLodCount({
+    geometry: blueMapGeometry(),
+    source: blueMapSource(),
+    at: MAPINFO.startPos || { x: 0, z: 0 },
   });
 
   var initialX = MAPINFO.startPos ? MAPINFO.startPos.x : CFG.defaultMcX;
   var initialZ = MAPINFO.startPos ? MAPINFO.startPos.z : CFG.defaultMcZ;
 
+  // Zooming out past the coarsest level the host has is what makes a map
+  // go black, so the range stops there and the whole world stays legible.
+  var blueMapLimits = RABlueMap.limits(blueMapGeometry(), 2);
+
   var map2d = L.map('map2d', {
     crs: L.CRS.Simple, center: mcToLL(initialX, initialZ), zoom: CFG.defaultZoom,
-    minZoom: -5, maxZoom: 2, zoomSnap: 0.5, zoomDelta: 0.5
+    minZoom: blueMapLimits.minZoom, maxZoom: blueMapLimits.maxZoom, zoomSnap: 0.5, zoomDelta: 0.5
   });
-  var bluemapLayer = new BlueMapLayer({ maxNativeZoom: 0, minNativeZoom: 0, tileSize: MAPINFO.tileSize });
-  bluemapLayer.addTo(map2d);
+  var blueMapTiles = RABlueMap.attach(map2d, L, {
+    geometry: blueMapGeometry,
+    source: blueMapSource,
+    maxZoomCap: 2,
+    onLimits: function (lim) { map2d.setMinZoom(lim.minZoom); map2d.setMaxZoom(lim.maxZoom); },
+  });
+  map2d.on('zoomend', function () { blueMapTiles.apply(); });
 
   var cursorEl = document.getElementById('cursor-coords');
   map2d.on('mousemove', function (e) { var mc = llToMc(e.latlng); cursorEl.textContent = 'X ' + mc.x + '  Z ' + mc.z; });
@@ -479,35 +495,21 @@ import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/cont
   var pickerLayerGroup = L.layerGroup().addTo(map2d);
 
   // ════════════════════════════════════════════════════════════
-  // 4. THREE.JS 3D CUBE VIEW
+  // 4. 3D VIEW (the page's default)
+  //
+  //    A claim is a volume between two heights, and a flat map can only
+  //    ever draw the top of a stack — so the authoritative view is this
+  //    one, drawn over the BlueMap basemap. The scene itself is in
+  //    ../assets/land-registry-3d.js; this page only tells it what the
+  //    claims are and where to get tiles.
+  //
+  //    That basemap is a *field* of ground tiles on the same level-of-detail
+  //    ladder the 2D map uses (read that module's header for why): the ones
+  //    the camera can see, at the finest level the tile budget allows. It is
+  //    what lets the view zoom out to the whole world and still be looking
+  //    at terrain, rather than at a ground plane exactly the size of the
+  //    register surrounded by black.
   // ════════════════════════════════════════════════════════════
-  var scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x121113);
-  var camera = new THREE.PerspectiveCamera(55, 1, 0.1, 50000);
-  var renderer = new THREE.WebGLRenderer({ antialias: true });
-  map3dEl.appendChild(renderer.domElement);
-
-  scene.add(new THREE.AmbientLight(0xffffff, 0.65));
-  var sun = new THREE.DirectionalLight(0xffffff, 0.8);
-  sun.position.set(1, 1.4, 0.8);
-  scene.add(sun);
-
-  var controls = new OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true;
-  controls.dampingFactor = 0.08;
-
-  var cubeGroup = new THREE.Group();
-  scene.add(cubeGroup);
-  var gridHelper = null;
-
-  function resize3D() {
-    var w = map3dEl.clientWidth || 1, h = map3dEl.clientHeight || 1;
-    renderer.setSize(w, h, false);
-    camera.aspect = w / h;
-    camera.updateProjectionMatrix();
-  }
-  window.addEventListener('resize', resize3D);
-
   function statusColor(status) {
     if (status === 'vacant') return 0x6b7075;
     if (status === 'disputed') return 0xb3273a;
@@ -521,59 +523,40 @@ import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/cont
     return { minX: Math.min.apply(null, xs), maxX: Math.max.apply(null, xs), minZ: Math.min.apply(null, zs), maxZ: Math.max.apply(null, zs) };
   }
 
-  function rebuild3D(plots) {
-    cubeGroup.clear();
-    if (gridHelper) { scene.remove(gridHelper); gridHelper = null; }
-    if (!plots.length) return;
-
-    var minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity, minY = Infinity, maxY = -Infinity;
-    plots.forEach(function (p) {
-      var b = plotBBox(p);
-      minX = Math.min(minX, b.minX); maxX = Math.max(maxX, b.maxX);
-      minZ = Math.min(minZ, b.minZ); maxZ = Math.max(maxZ, b.maxZ);
-      minY = Math.min(minY, p.yLower); maxY = Math.max(maxY, p.yUpper);
-
-      var w = Math.max(1, b.maxX - b.minX), d = Math.max(1, b.maxZ - b.minZ), h = Math.max(1, p.yUpper - p.yLower);
-      var geo = new THREE.BoxGeometry(w, h, d);
-      var mat = new THREE.MeshStandardMaterial({ color: statusColor(p.status), transparent: true, opacity: 0.55, side: THREE.DoubleSide });
-      var mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set((b.minX + b.maxX) / 2, (p.yLower + p.yUpper) / 2, (b.minZ + b.maxZ) / 2);
-      mesh.userData.plot = p;
-      var edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color: 0xe3bf4c }));
-      edges.position.copy(mesh.position);
-      cubeGroup.add(mesh);
-      cubeGroup.add(edges);
-    });
-
-    var spanX = Math.max(40, maxX - minX), spanZ = Math.max(40, maxZ - minZ);
-    var gridSize = Math.ceil(Math.max(spanX, spanZ) * 1.6 / 16) * 16;
-    gridHelper = new THREE.GridHelper(gridSize, Math.max(4, Math.round(gridSize / 16)), 0x4b4f54, 0x2a2930);
-    gridHelper.position.set((minX + maxX) / 2, minY - 2, (minZ + maxZ) / 2);
-    scene.add(gridHelper);
-
-    var cx = (minX + maxX) / 2, cy = (minY + maxY) / 2, cz = (minZ + maxZ) / 2;
-    var dist = Math.max(60, Math.max(spanX, spanZ) * 1.1);
-    camera.position.set(cx + dist * 0.6, cy + dist * 0.7, cz + dist * 0.6);
-    controls.target.set(cx, cy, cz);
-    controls.update();
-  }
-
-  var raycaster = new THREE.Raycaster();
-  var pointerNDC = new THREE.Vector2();
-  renderer.domElement.addEventListener('click', function (ev) {
-    var rect = renderer.domElement.getBoundingClientRect();
-    pointerNDC.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
-    pointerNDC.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
-    raycaster.setFromCamera(pointerNDC, camera);
-    var hits = raycaster.intersectObjects(cubeGroup.children.filter(function (o) { return o.isMesh; }));
-    if (hits.length) selectPlot(hits[0].object.userData.plot);
+  var viewer = createPlotViewer(map3dEl, {
+    colorFor: statusColor,
+    lodCount: MAPINFO.lodCount || 1,
+    // The ground is drawn from the same tiles, through the same proxy,
+    // and off the same level-of-detail ladder as the 2D basemap: one
+    // place decides how a tile is fetched, so the two views cannot
+    // disagree about a tile or about which level of detail it comes from.
+    blocksPerTile: function (lod) {
+      return RABlueMap.blocksPerTile(MAPINFO.tileSize || 500, MAPINFO.lodFactor || 5, lod);
+    },
+    tileUrl: function (t) {
+      return RABlueMap.tileUrl({
+        mapId: MAPINFO.mapId, baseUrl: CFG.bluemapBaseUrl, useProxy: CFG.useProxy,
+        lod: t.lod, x: t.x, z: t.z,
+      });
+    },
+    onPick: function (plot) { selectPlot(plot); },
   });
 
-  (function animate() {
-    requestAnimationFrame(animate);
-    controls.update();
-    renderer.render(scene, camera);
-  })();
+  // A handle on the 3D scene for diagnostics (and for the page's own tests):
+  // a WebGL view has no DOM to inspect, so without one there is no way to ask
+  // what it is doing. Nothing in the page reads it.
+  map3dEl.__viewer = viewer;
+
+  window.addEventListener('resize', function () { viewer.resize(); });
+
+  var frameAllBtn = document.getElementById('btn-frame-all');
+  var surfaceBtn = document.getElementById('btn-surface');
+  frameAllBtn.addEventListener('click', function () { viewer.frameAll(); });
+  surfaceBtn.addEventListener('click', function () {
+    var shown = !surfaceBtn.classList.contains('active');
+    surfaceBtn.classList.toggle('active', shown);
+    viewer.setSurfaceVisible(shown);
+  });
 
   // ════════════════════════════════════════════════════════════
   // 5. FOOTPRINT GROUPING (2D: topmost-only when stacked)
@@ -622,7 +605,9 @@ import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/cont
     Array.prototype.slice.call(plotListEl.querySelectorAll('[data-rn]')).forEach(function (btn) {
       btn.addEventListener('click', function () {
         var p = allPlots.filter(function (x) { return x.registerNumber === btn.dataset.rn; })[0];
-        if (p) selectPlot(p);
+        // Choosing from the list is a request to look at that claim, so the
+        // 3D camera flies to it — a click on the map itself does not move it.
+        if (p) selectPlot(p, true);
       });
     });
   }
@@ -648,19 +633,15 @@ import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/cont
         layer.setStyle({ weight: isSel ? 3 : 1.5, color: isSel ? '#e3bf4c' : layer.options._baseColor });
       }
     });
-    cubeGroup.children.forEach(function (obj) {
-      if (obj.isMesh) {
-        var isSel = selected && obj.userData.plot.registerNumber === selected.registerNumber;
-        obj.material.opacity = isSel ? 0.85 : 0.55;
-      }
-    });
+    viewer.select(selected, false);
   }
 
-  function selectPlot(p) {
+  function selectPlot(p, moveCamera) {
     selected = p;
     renderDetail(p);
     renderList(applyFilters());
     highlightSelection();
+    if (p && moveCamera) viewer.select(p, true);
   }
 
   function colorHexFor(status) {
@@ -681,7 +662,7 @@ import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/cont
       poly.bindTooltip(p.registerNumber, { sticky: true });
       poly.on('click', function () { selectPlot(p); });
     });
-    rebuild3D(filtered);
+    viewer.setPlots(filtered, false);
     renderList(filtered);
     highlightSelection();
   }
@@ -693,12 +674,23 @@ import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/cont
   // ════════════════════════════════════════════════════════════
   function setMode(m) {
     mode = m;
-    btnMode2d.classList.toggle('active', m === '2d');
-    btnMode3d.classList.toggle('active', m === '3d');
-    map2dEl.style.display = m === '2d' ? '' : 'none';
-    map3dEl.style.display = m === '3d' ? '' : 'none';
-    if (m === '2d') setTimeout(function () { map2d.invalidateSize(); }, 30);
-    else resize3D();
+    var is3d = m === '3d';
+    btnMode2d.classList.toggle('active', !is3d);
+    btnMode3d.classList.toggle('active', is3d);
+    // 'block', not '' — the stylesheet hides #map2d by default so the page
+    // does not flash a 2D map it is about to replace, and clearing the inline
+    // style would fall back to that rule and leave the 2D view invisible.
+    map2dEl.style.display = is3d ? 'none' : 'block';
+    map3dEl.style.display = is3d ? 'block' : 'none';
+    // The two controls only mean anything in the 3D view, so they only
+    // appear there.
+    frameAllBtn.style.display = is3d ? '' : 'none';
+    surfaceBtn.style.display = is3d ? '' : 'none';
+    // Only the visible view is told about it: the 3D scene stops drawing
+    // while it is hidden, so a 2D visit does not burn a GPU frame budget.
+    viewer.setActive(is3d);
+    if (is3d) viewer.resize();
+    else setTimeout(function () { map2d.invalidateSize(); }, 30);
   }
   btnMode2d.addEventListener('click', function () { if (!PICK_MODE) setMode('2d'); });
   btnMode3d.addEventListener('click', function () { if (!PICK_MODE) setMode('3d'); });
@@ -734,7 +726,15 @@ import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/cont
     if (!discovered) { errEl.textContent = "Couldn't reach that BlueMap."; errEl.style.display = 'block'; return; }
     MAPINFO = pickMapInfo(discovered, { isOverride: true });
     try { localStorage.setItem(MS_OVERRIDE_KEY, JSON.stringify({ baseUrl: CFG.bluemapBaseUrl, mapId: MAPINFO.mapId })); } catch (e) {}
-    bluemapLayer.redraw();
+    // A different BlueMap can have a different tile size and a different
+    // number of levels, so the level-of-detail ladder and the zoom range
+    // are re-derived, not just re-fetched.
+    MAPINFO.lodCount = await RABlueMap.probeLodCount({
+      geometry: blueMapGeometry(), source: blueMapSource(), at: MAPINFO.startPos || { x: 0, z: 0 },
+    });
+    blueMapTiles.refresh();
+    viewer.setGeometry(MAPINFO.lodCount || 1);
+    redraw();
     if (MAPINFO.startPos) map2d.setView(mcToLL(MAPINFO.startPos.x, MAPINFO.startPos.z), CFG.defaultZoom);
     okEl.textContent = 'Detected ' + discovered.maps.length + ' map(s).'; okEl.style.display = 'block';
     updateSourcePill();
@@ -752,7 +752,7 @@ import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/cont
     function clampH(h) { return Math.max(MIN_H, Math.min(maxH(), h)); }
     function setHeight(h) {
       panelEl.style.height = clampH(h) + 'px';
-      requestAnimationFrame(function () { if (mode === '2d') map2d.invalidateSize(); else resize3D(); });
+      requestAnimationFrame(function () { if (mode === '2d') map2d.invalidateSize(); else viewer.resize(); });
     }
     var dragging = false, startY = 0, startH = 0;
     handle.addEventListener('pointerdown', function (e) {
@@ -887,21 +887,50 @@ import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/cont
 
   // ════════════════════════════════════════════════════════════
   // 11. BOOT
+  //
+  //     The 3D view comes up first, and is re-told on every redraw: a claim
+  //     is a volume, and the flat view physically cannot show a stack of
+  //     them. The 2D basemap is still one click away, and is what
+  //     corner-picking uses.
   // ════════════════════════════════════════════════════════════
-  resize3D();
   redraw();
-  setMode('2d');
+  setMode(PICK_MODE ? '2d' : '3d');
+
+  // The 2D view opens on the registered land rather than on the world's
+  // spawn: the register is the subject here, and a plot someone has come
+  // to look at should not be off-screen at some arbitrary zoom. If there
+  // is nothing registered yet, or the caller named a plot, the map stays
+  // where the map source pointed it.
+  if (!FOCUS_NUM) {
+    var allBounds = allPlots.length ? (function () {
+      var minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+      allPlots.forEach(function (p) {
+        p.corners.forEach(function (c) {
+          minX = Math.min(minX, c.x); maxX = Math.max(maxX, c.x);
+          minZ = Math.min(minZ, c.z); maxZ = Math.max(maxZ, c.z);
+        });
+      });
+      return { minX: minX, maxX: maxX, minZ: minZ, maxZ: maxZ };
+    })() : null;
+    if (allBounds) {
+      // maxZoom 0 keeps a small holding from filling the screen with four
+      // enormous, blocky pixels; the ladder's minZoom still lets anyone
+      // pull back to the whole world in a handful of tiles.
+      map2d.fitBounds([mcToLL(allBounds.minX, allBounds.minZ), mcToLL(allBounds.maxX, allBounds.maxZ)],
+        { padding: [60, 60], maxZoom: 0 });
+    }
+  }
 
   if (FOCUS_NUM) {
     var focusPlot = allPlots.filter(function (p) { return p.registerNumber === FOCUS_NUM; })[0];
     if (focusPlot) {
       var topmostSet = pickTopmostPerFootprint(applyFilters());
       var isTopmost = topmostSet.some(function (p) { return p.registerNumber === focusPlot.registerNumber; });
-      if (!isTopmost) {
+      if (!isTopmost && mode === '2d') {
         showBanner('This plot is beneath another at the same location, so the 2D view shows the one built over it instead. Switched to the 3D view.');
         setMode('3d');
       }
-      selectPlot(focusPlot);
+      selectPlot(focusPlot, mode === '3d');
       if (mode === '2d') {
         var b = plotBBox(focusPlot);
         map2d.fitBounds([mcToLL(b.minX, b.minZ), mcToLL(b.maxX, b.maxZ)], { padding: [80, 80] });

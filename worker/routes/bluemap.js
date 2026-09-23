@@ -40,6 +40,15 @@ function bluemapBase(env) {
   return String((env && env.BLUEMAP_BASE_URL) || 'http://regnumaeternum.enderman.cloud:50500').replace(/\/$/, '');
 }
 
+// Tile cache lifetimes, in seconds. Rendered tiles only change when
+// BlueMap re-renders that area, so a few minutes in the browser is
+// plenty stale-by-default, while the edge copy can live much longer —
+// the site's maps are re-read far more often than the world changes.
+const TILE_BROWSER_TTL = 300;   // 5 minutes in the visitor's own cache
+const TILE_EDGE_TTL = 3600;     // 1 hour at the Cloudflare edge
+const EMPTY_TILE_TTL = 60;      // void/unrendered tiles: short, since
+                                // rendering fills them in over time
+
 function normalizeMap(id, m) {
   const lowres = (m && m.lowres) || {};
   const startPos = Array.isArray(m && m.startPos)
@@ -509,18 +518,30 @@ export async function getTile(request, env) {
     return new Response('Invalid tile path', { status: 400 });
   }
   try {
-    const upstream = await fetch(bluemapBase(env) + tilePath);
+    // Tiles are immutable between renders, so let Cloudflare hold them
+    // too: a pan or a zoom-out that revisits a tile then never reaches
+    // the BlueMap host at all. This is what makes scrolling around the
+    // full map cheap no matter how many people are looking at it.
+    const upstream = await fetch(bluemapBase(env) + tilePath, {
+      cf: { cacheTtl: TILE_EDGE_TTL, cacheEverything: true },
+    });
     // BlueMap returns 204/404 for empty or unrendered tiles — pass that
     // through so the client renders them as blank rather than an error.
+    // They are still cached, because the void outside a world is most of
+    // what a zoomed-out view asks for: re-asking for thousands of empty
+    // tiles on every zoom is exactly the stall this route must avoid.
     if (upstream.status === 204 || upstream.status === 404) {
-      return new Response(null, { status: upstream.status });
+      return new Response(null, {
+        status: upstream.status,
+        headers: { 'Cache-Control': 'public, max-age=' + EMPTY_TILE_TTL },
+      });
     }
     if (!upstream.ok || !upstream.body) {
       return new Response('Tile unavailable', { status: 502 });
     }
     const headers = new Headers();
     headers.set('Content-Type', upstream.headers.get('Content-Type') || 'image/png');
-    headers.set('Cache-Control', 'public, max-age=60');
+    headers.set('Cache-Control', 'public, max-age=' + TILE_BROWSER_TTL + ', stale-while-revalidate=' + TILE_EDGE_TTL);
     return new Response(upstream.body, { status: 200, headers });
   } catch (err) {
     return new Response('Tile unavailable', { status: 502 });
