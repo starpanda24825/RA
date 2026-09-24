@@ -467,12 +467,19 @@
    One shape per kind of thing, so the map can be read without a key:
      cannon          → red circle      sublevel cannon → yellow circle
      vehicle         → blue square     radar tower     → green wifi mark
+     target          → red bullseye
    Anything that is offline draws grey, whatever its shape was, so a dead
    gun or a quiet tower reads at a glance instead of looking alive. */
 .cannon-icon { width:18px; height:18px; background:var(--crimson-bright); border:2px solid var(--parchment); border-radius:50%; }
 .cannon-icon--mobile { background:var(--gold-bright); border-color:var(--ink); }
 .cannon-icon--offline { background:var(--slate-soft); border-color:var(--parchment-faint); }
 .target-icon { width:18px; height:18px; background:var(--gold-bright);    border:2px solid var(--ink);        border-radius:50%; }
+/* A registered target: a red bullseye, so a named place reads as somewhere to
+   shoot rather than as another unit. The hidden twin draws slate, and only a
+   reader the worker already trusts to see a hidden target is ever given one. */
+.target-bullseye { width:20px; height:20px; color:var(--crimson-bright); filter:drop-shadow(0 1px 2px rgba(0,0,0,0.85)); }
+.target-bullseye--hidden { color:var(--slate-soft); }
+.target-bullseye svg { display:block; width:100%; height:100%; }
 .cannon-dot { width:12px; height:12px; background:var(--crimson-bright); border:2px solid var(--parchment); border-radius:50%; }
 .cannon-dot--mobile { background:var(--gold-bright); border-color:var(--ink); }
 .cannon-dot--offline { background:var(--slate-soft); border-color:var(--parchment-faint); }
@@ -511,6 +518,8 @@
 .map-legend__swatch--vehicle  { border-radius:2px; background:#3b82f6; border:1.5px solid var(--parchment); }
 .map-legend__swatch--tower    { color:#4cc46a; }
 .map-legend__swatch--tower svg { display:block; width:100%; height:100%; }
+.map-legend__swatch--target   { color:var(--crimson-bright); }
+.map-legend__swatch--target svg { display:block; width:100%; height:100%; }
 .map-legend__swatch--offline  { border-radius:50%; background:var(--slate-soft); border:1.5px solid var(--parchment-faint); }
 @media (max-width:520px) { .map-legend { display:none; } }
 /* ---------- Tabs ---------- */
@@ -804,6 +813,7 @@
       <div class="map-legend__row"><span class="map-legend__swatch map-legend__swatch--cannon"></span><span>Cannon</span></div>
       <div class="map-legend__row"><span class="map-legend__swatch map-legend__swatch--sublevel"></span><span>Sublevel cannon</span></div>
       <div class="map-legend__row"><span class="map-legend__swatch map-legend__swatch--vehicle"></span><span>Vehicle</span></div>
+      <div class="map-legend__row"><span class="map-legend__swatch map-legend__swatch--target"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.6"/><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/></svg></span><span>Target</span></div>
       <div class="map-legend__row"><span class="map-legend__swatch map-legend__swatch--tower"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M3 9.2a13.2 13.2 0 0 1 18 0"/><path d="M6.4 12.9a8.4 8.4 0 0 1 11.2 0"/><path d="M9.7 16.4a4 4 0 0 1 4.6 0"/><circle cx="12" cy="19.6" r="1.4" fill="currentColor" stroke="none"/></svg></span><span>Radar tower</span></div>
       <div class="map-legend__row"><span class="map-legend__swatch map-legend__swatch--offline"></span><span>Offline</span></div>
     </div>
@@ -1683,6 +1693,16 @@
   // The shape is the type (see the CSS block); the colour is the state.
   const targetIcon = L.divIcon({ className: '', html: '<div class="target-icon"></div>', iconSize: [18,18], iconAnchor: [9,9] });
 
+  // A registered target on the map: a red bullseye at its coordinates, so a
+  // named place is visible whether or not anything is aimed at it. The hidden
+  // twin is the same mark in slate, for a target only a secret reader is given.
+  const TARGET_BULLSEYE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">'
+    + '<circle cx="12" cy="12" r="9"/>'
+    + '<circle cx="12" cy="12" r="4.6"/>'
+    + '<circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/></svg>';
+  const targetBullseyeIcon       = L.divIcon({ className: '', html: '<div class="target-bullseye">' + TARGET_BULLSEYE_SVG + '</div>', iconSize: [20,20], iconAnchor: [10,10] });
+  const targetBullseyeHiddenIcon = L.divIcon({ className: '', html: '<div class="target-bullseye target-bullseye--hidden">' + TARGET_BULLSEYE_SVG + '</div>', iconSize: [20,20], iconAnchor: [10,10] });
+
   const cannonIcon               = L.divIcon({ className: '', html: '<div class="cannon-icon"></div>', iconSize: [18,18], iconAnchor: [9,9] });
   const cannonIconMobile         = L.divIcon({ className: '', html: '<div class="cannon-icon cannon-icon--mobile"></div>', iconSize: [18,18], iconAnchor: [9,9] });
   const cannonIconOffline        = L.divIcon({ className: '', html: '<div class="cannon-icon cannon-icon--offline"></div>', iconSize: [18,18], iconAnchor: [9,9] });
@@ -1713,6 +1733,7 @@
   const registeredCannonMarkers  = {}; // cannon id  -> L.marker
   const registeredVehicleMarkers = {}; // vehicle id -> L.marker
   const registeredTowerMarkers   = {}; // tower key  -> L.marker
+  const registeredTargetMarkers  = {}; // target id  -> L.marker (registered targets)
   const bombardTargetMarkers     = {}; // target key -> L.marker (Multi-Target queue)
   let   bombardTargetLayer       = null;
   let   cannonMarkerState        = { sublevel: false, online: true };
@@ -2296,7 +2317,7 @@
                : c.reload_type === 'autoloader' ? 'Auto-loader' : null;
     const secs = c.reload_time == null ? null : Number(c.reload_time).toFixed(2) + 's';
     if (!kind && !secs) return '';
-    const where = c.reload_type === 'arm' ? 'reloads in place between shots'
+    const where = c.reload_type === 'arm' ? 'reloads in place between the shots of an order'
                 : c.reload_type === 'autoloader' ? 'reloads between disassemble and assemble'
                 : '';
     return '<br/>' + (kind || 'Reload') + (secs ? ' · ' + secs : '') + (where ? ' — ' + where : '');
@@ -2346,6 +2367,38 @@
       }
     }
     renderVehicleDots();
+  }
+
+  // Draw one red bullseye per registered target, at its own coordinates. The
+  // registry is what the calculator picks its targets from, so having them on
+  // the map saves reading coordinates off the list and clicking the spot by
+  // hand. A hidden target is only ever in `targets` for a reader the worker
+  // trusts with it, and draws in slate so that reader can tell it apart.
+  function renderTargetDots() {
+    const seen = new Set();
+    for (const t of targets) {
+      const key = String(t.id);
+      seen.add(key);
+      const latlng = mcToLL(Number(t.x) || 0, Number(t.z) || 0);
+      const icon = t.hidden ? targetBullseyeHiddenIcon : targetBullseyeIcon;
+      const content = '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:12px;">' +
+        escHtml(t.name) + ' — target<br/>X ' + t.x + ' · Y ' + t.y + ' · Z ' + t.z +
+        (t.hidden ? '<br/><span style="opacity:.7;">hidden from others</span>' : '') + '</span>';
+      if (registeredTargetMarkers[key]) {
+        registeredTargetMarkers[key].setLatLng(latlng);
+        registeredTargetMarkers[key].setIcon(icon);
+        registeredTargetMarkers[key].setPopupContent(content);
+      } else {
+        registeredTargetMarkers[key] = L.marker(latlng, { icon: icon, zIndexOffset: 140 })
+          .addTo(map).bindPopup(content);
+      }
+    }
+    for (const key of Object.keys(registeredTargetMarkers)) {
+      if (!seen.has(key)) {
+        map.removeLayer(registeredTargetMarkers[key]);
+        delete registeredTargetMarkers[key];
+      }
+    }
   }
 
   // One blue square per active vehicle, at the centre of the guns that belong
@@ -3519,6 +3572,9 @@
       console.warn('Could not load the target registry.', e);
       return;
     }
+    // The bullseyes follow the data on every poll (a target may have been moved
+    // by another officer), while the registry cards are only rebuilt when asked.
+    renderTargetDots();
     if (!light) renderTargets();
     renderTargetPicker();
     // A hidden target only exists to a reader entitled to it, so this is also
@@ -5384,9 +5440,10 @@
   // because only it knows its mechanism, its reload time and whether another
   // shot follows. Three cases come out of that:
   //
-  //   reloadMs > 0   a mechanical-arm shot mid-run: the arm reloads during the
-  //                  stand-down and the cannon stays assembled, so there is a
-  //                  real window to count down.
+  //   reloadMs > 0   a mechanical-arm shot with another one already queued for
+  //                  that gun: the arm reloads during the stand-down and the
+  //                  cannon stays assembled, so there is a real window to count
+  //                  down.
   //   reloadMs = 0   the cannon left itself unloaded — a single shot, an
   //                  auto-loader, or the last shot of a run. Its reload happens
   //                  inside the next command, so there is no window to show; a

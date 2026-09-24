@@ -1624,12 +1624,13 @@ export async function appendPlanShots(env, planId, shots) {
 
 // Hand a cannon the next shot of its queue, if it is idle and the plan is
 // running. `burst` and `more` are decided here rather than by the caller:
-//  • burst  — a shot in a multi-shot run (Constant / Multi-Target). A cannon in
-//             one of those modes must not repeat its full disassemble/assemble
-//             cycle between shots when a mechanical arm only needs its reload.
-//  • more   — another shot for this gun is already queued, so the cannon is left
-//             assembled at the end of this one. Derived from the queue itself,
-//             which is the only authoritative answer at hand-out time.
+//  • burst  — a shot in a multi-shot run (Constant / Multi-Target). Kept for a
+//             cannon still running an older program; the current one no longer
+//             reads it.
+//  • more   — another shot for this gun is already queued, so a mechanical arm
+//             is left assembled and reloaded at the end of this one and skips
+//             the disassemble/assemble cycle on the next. Derived from the queue
+//             itself, which is the only authoritative answer at hand-out time.
 export async function promoteQueuedShot(env, cannonId) {
   const cannon = await findCannonById(env, cannonId);
   if (!cannon || cannon.status !== 'active') return cannon;

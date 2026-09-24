@@ -215,10 +215,12 @@ export async function ccPoll(request, env) {
   if (!vehicle && cannon.status === 'active' &&
       Number(cannon.command_sequence) > 0 &&
       Number(cannon.acked_sequence) < Number(cannon.command_sequence)) {
-    // A plan shot carries two extra flags so a multi-shot run does not repeat
-    // the whole disassemble/assemble cycle between shots (see the cannon
-    // program). A plain single-shot fire has no queue row and therefore
-    // neither flag, which is exactly the old behaviour.
+    // A plan shot carries two extra flags so an order does not repeat the whole
+    // disassemble/assemble cycle between shots (see the cannon program). `more`
+    // is the one a mechanical arm acts on: another shot for this gun is already
+    // queued, so it stays assembled and reloads in place. A plain single-shot
+    // fire has no queue row and therefore neither flag, which is exactly the
+    // old behaviour.
     const shot = await store.findDeliveredShot(env, cannon.id, cannon.command_sequence);
     command = {
       sequence: Number(cannon.command_sequence),
@@ -350,8 +352,9 @@ export async function ccVehiclePoll(request, env) {
         yaw:      Number(c.command_yaw),
         pitch:    Number(c.command_pitch),
         fire:     !!c.command_fire,
-        // See ccPoll: a plan shot may skip the disassemble/assemble cycle and
-        // leave the gun assembled for the shot that follows it.
+        // See ccPoll: `more` tells the gun another shot is queued, so a
+        // mechanical arm stays assembled and reloads in place instead of
+        // running the disassemble/assemble cycle again.
         burst:    !!(shot && Number(shot.burst) === 1),
         more:     !!(shot && Number(shot.more) === 1),
         target:   shot && shot.target_key ? String(shot.target_key) : null,

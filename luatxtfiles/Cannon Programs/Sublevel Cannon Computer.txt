@@ -59,12 +59,15 @@
 --        a) Polls for fire commands (yaw + pitch). On a command it
 --           runs the same sequence as static cannons:
 --              disassemble → assemble → aim → fire → disassemble
---           A command carrying `burst` is one shot of a multi-shot run
---           (Ballistic Calculator → Constant or Multi-Target mode). There the
---           cycle is not repeated: a mechanical arm only needs its reload
---           time and the cannon stays assembled between shots, while an
---           auto-loader reloads by disassembling and always runs the full
---           cycle. `more` says another shot follows at once.
+--           That whole cycle is run only for the FIRST shot of an order (any
+--           Ballistic Calculator mode — Normal with a pass count, Constant or
+--           Multi-Target). A mechanical arm never needs the cannon taken apart
+--           to reload: assembled once at the start, the cannon stays assembled
+--           and the rest of the order is aim → fire → reload → aim → fire …
+--           until it is disassembled once at the end. `more` — another shot
+--           already queued for this gun — is what decides that. An auto-loader
+--           reloads BY disassembling, so it still runs the full cycle for
+--           every shot.
 --           Every shot is reported to the website with the instant it
 --           actually left the barrel, so the live map can time the shell
 --           against the real thing instead of against when the website heard
@@ -281,18 +284,19 @@ end
 -- when it left itself unloaded and will do the reload inside the NEXT command
 -- instead.
 --
--- Only an arm shot in a multi-shot run reloads on its own: the cannon stays
--- assembled with a shell in it, so after the post-fire stand-down the arm simply
--- reloads (`more` is what decides that, see runCommand). Every other case — a
--- single shot, an auto-loader, the last shot of a run — ends with the cannon
--- disassembled, and its reload belongs to whatever command comes next. There is
--- therefore no reload to count down at all, and saying 0 is the honest answer.
+-- Only an arm shot with another shot already queued for this gun reloads on its
+-- own: the cannon stays assembled with a shell in it, so after the post-fire
+-- stand-down the arm simply reloads (`more` is what decides that, see
+-- runCommand). Every other case — a single shot, an auto-loader, the last shot
+-- of an order — ends with the cannon disassembled, and its reload belongs to
+-- whatever command comes next. There is therefore no reload to count down at
+-- all, and saying 0 is the honest answer.
 --
 -- This is reported to the website alongside the fire instant so the live map can
 -- draw a gun's reload progress from the cannon's OWN timings. Working it out here
 -- rather than there means the two can never drift apart.
-local function reloadWindowMs(burst, more)
-  if not (burst and more and cfg.reloadType == "arm") then return 0 end
+local function reloadWindowMs(more)
+  if not (more and cfg.reloadType == "arm") then return 0 end
   -- triggerReload() holds the redstone line high for the pulse length first, so
   -- that delay is part of the wait when a trigger is wired up.
   local pulse = 0
@@ -914,29 +918,29 @@ local function triggerReload()
   end
 end
 
--- A multi-shot run — Ballistic Calculator → Constant or Multi-Target mode —
--- does NOT repeat the whole disassemble → assemble cycle between shots. A
--- mechanical arm only needs its known reload time: the cannon is still
--- assembled with a shell in it from the shot before, so nothing has to be taken
--- apart. An auto-loader reloads BY disassembling, so it always runs the full
--- cycle, which is the one difference between the two mechanisms.
+-- An order — any mode — does NOT repeat the whole disassemble → assemble cycle
+-- between its shots. A mechanical arm never needs the cannon taken apart to
+-- reload: assembled once at the start of the order, it stays assembled and every
+-- later shot is aim → fire → reload. Nothing is disassembled again until the
+-- order is over. An auto-loader reloads BY disassembling, so it always runs the
+-- full cycle, which is the one difference between the two mechanisms.
 --
--- `cmd.burst` marks a shot as part of such a run and `cmd.more` says another
--- shot follows at once, which is what decides whether this one ends with the
--- cannon assembled. `armed` is the computer's own memory of that state, so a
--- command that arrives after the run has been idle still loads properly.
+-- `cmd.more` says another shot for this gun is already queued, which is what
+-- decides whether this one ends with the cannon assembled and reloaded. `armed`
+-- is the computer's own memory of that state, so a command that arrives after
+-- the run has been idle still loads properly. (`cmd.burst` still arrives from the
+-- website but is no longer needed here: `more` alone says there is a next shot.)
 local armed = false   -- assembled, loaded, ready to aim — no cycle needed
 
 local function runCommand(mount, cmd)
   print("Command #" .. tostring(cmd.sequence) .. ": aiming…")
 
-  local burst = cmd.burst == true
   local more  = cmd.more == true
   -- The arm reloaded while we were back at the poll, so this shot is aim and
-  -- fire only. Every shot of a run but the first lands here — including the
+  -- fire only. Every shot of an order but the first lands here — including the
   -- last one, which is no less "another shot of the sequence" for being last:
   -- `more` only decides whether the cannon is left loaded afterwards.
-  local continued = burst and armed and cfg.reloadType == "arm"
+  local continued = armed and cfg.reloadType == "arm"
 
   if not continued then
     -- 1. Disassemble. An auto-loader reloads here, between disassemble and
@@ -1006,7 +1010,7 @@ local function runCommand(mount, cmd)
     lastFired = {
       sequence = cmd.sequence,
       at = nowEpochMs(),
-      reloadMs = reloadWindowMs(burst, more),
+      reloadMs = reloadWindowMs(more),
     }
     print("Fired! (yaw " .. string.format("%.1f", aimYaw) .. ", pitch " .. string.format("%.1f", aimPitch) .. ")")
   else
@@ -1014,11 +1018,13 @@ local function runCommand(mount, cmd)
   end
   sleep(SEQ_AFTER_FIRE)
 
-  -- 7. Stand down — unless another shot of this run follows immediately, in
+  -- 7. Stand down — unless another shot for this gun is already waiting, in
   -- which case the arm reloads now and the cannon is left assembled and loaded,
   -- ready to aim straight at the next target. An auto-loader has to come apart
-  -- to reload, so it is always left disassembled.
-  if burst and more and cfg.reloadType == "arm" then
+  -- to reload, so it is always left disassembled. `more` is read from the queue
+  -- itself, so the last shot of an order (and every shot of a one-shot order)
+  -- ends here with the cannon taken down.
+  if more and cfg.reloadType == "arm" then
     triggerReload()
     sleep(cfg.reloadTime)
     armed = true
