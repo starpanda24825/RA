@@ -776,11 +776,16 @@
   <div id="panel">
     <div class="bc-tabs">
       <button class="bc-tab active" id="tab-calc" type="button">Calculator</button>
+      <button class="bc-tab" id="tab-targets" type="button">Target Registry</button>
       <button class="bc-tab" id="tab-cannons" type="button">Cannon Registry</button>
       <button class="bc-tab" id="tab-vehicles" type="button">Vehicle Registry</button>
       <button class="bc-tab" id="tab-gps" type="button">GPS Network</button>
       <button class="bc-tab" id="tab-presets" type="button">Reload Presets</button>
       <button class="bc-tab" id="tab-log" type="button">Firing Log</button>
+      <!-- Only ever revealed to an account holding 'ballistics-secret' (see
+           applySecretVisibility). Hidden from everyone else outright rather than
+           disabled: the panel is not a thing they are being asked to ignore. -->
+      <button class="bc-tab" id="tab-secret" type="button" style="display:none;">Secret Panel</button>
     </div>
 
     <div class="panel-inner" id="calc-panel">
@@ -808,31 +813,64 @@
            once was two answers to the same question. -->
       <div class="field-group" id="single-target-group">
         <label>Target (X, Y, Z)</label>
+        <!-- The named targets from the Target Registry. Picking one here only
+             FILLS the three fields below: the coordinates remain the input, so
+             a named target and a clicked one are the same thing from this point
+             on, and an unnamed spot is still perfectly fireable. -->
+        <select class="bc-select" id="target-select" style="margin-bottom:8px;">
+          <option value="">— Select a registered target —</option>
+        </select>
         <div class="coord-row">
           <input class="bc-input" id="tx" type="number" placeholder="X"/>
           <input class="bc-input" id="ty" type="number" placeholder="Y" value="64"/>
           <input class="bc-input" id="tz" type="number" placeholder="Z"/>
         </div>
-        <div class="field-hint">Click "Target" then click the map, or type coordinates directly</div>
+        <div class="field-hint">Pick a named target, click "Target" then click the map, or type coordinates directly</div>
+        <!-- Normal's own pass count. Constant has none: it is the mode that runs
+             until it is stopped, which is the whole difference between them. -->
+        <div id="normal-cycles-group" style="margin-top:10px;">
+          <label>Cycles (min 1)</label>
+          <input class="bc-input" id="normal-cycles" type="number" min="1" max="999" value="1"/>
+          <div class="field-hint">Each ticked gun fires this many shots at the target, then the order closes itself. Constant keeps firing until you press Stop, however many cycles are set.</div>
+        </div>
       </div>
 
       <!-- Multi-Target queue. Two ways in, both landing in the same numbered
            list: type a coordinate and add it, or pick each one off the map. -->
       <div class="field-group" id="multi-target-group" style="display:none;">
         <label>Targets (X, Y, Z)</label>
+        <!-- The named targets, ticked. Each tick appends that target to the end
+             of the queue and unticking takes it out again, so this list and the
+             map clicks feed the SAME queue and can be used together. -->
+        <div class="bc-ms" id="target-ms" style="margin-bottom:8px;">
+          <button class="bc-select bc-ms__btn" id="target-ms-btn" type="button" aria-haspopup="true" aria-expanded="false">
+            <span class="bc-ms__label" id="target-ms-label">— No registered targets queued —</span>
+            <span class="bc-ms__caret" aria-hidden="true"></span>
+          </button>
+          <div class="bc-ms__panel" id="target-ms-panel" hidden></div>
+        </div>
         <div class="coord-row">
           <input class="bc-input" id="mt-x" type="number" placeholder="X"/>
           <input class="bc-input" id="mt-y" type="number" placeholder="Y" value="64"/>
           <input class="bc-input" id="mt-z" type="number" placeholder="Z"/>
         </div>
         <div class="field-hint">
-          Type a coordinate and press <b>Add Target</b>, or press <b>Target</b> above the map and
-          click the map — every click adds the next numbered target to the queue.
+          Tick named targets above, type a coordinate and press <b>Add Target</b>, or press <b>Target</b>
+          above the map and click the map — every click adds the next numbered target to the queue.
         </div>
         <button class="map-btn" id="bombard-add-target" type="button" style="margin-top:8px;">+ Add Target</button>
         <div class="bombard-list" id="bombard-targets"></div>
         <label style="margin-top:10px;">Cycles (min 1)</label>
         <input class="bc-input" id="bombard-cycles" type="number" min="1" max="999" value="1"/>
+        <!-- Share versus every-gun. Ticked, the queue stops being split between
+             the guns: each gun works through every target on its own. -->
+        <label style="display:flex;align-items:flex-start;gap:8px;margin-top:12px;cursor:pointer;">
+          <input type="checkbox" id="multi-unsync" style="accent-color:var(--crimson-bright);margin-top:2px;"/>
+          <span style="font-family:var(--font-body);font-size:12.5px;color:var(--parchment-dim);text-transform:none;line-height:1.45;">
+            <b style="color:var(--parchment);">Disable synchronisation</b> — the queue is not shared out.
+            Every ticked gun fires at every target, once per cycle, working through the list on its own.
+          </span>
+        </label>
       </div>
 
       <div class="field-group">
@@ -1020,6 +1058,135 @@
           <span class="field-hint" id="log-count" style="margin-left:8px;"></span>
         </div>
         <div class="registry-list" id="log-list"></div>
+      </div>
+
+    </div>
+
+    <!-- TARGET REGISTRY. Places with names, so the same battery is not re-derived
+         by hand on every page and a scheduled attack (below) has something it can
+         be aimed at. Every officer with clearance shares this list. -->
+    <div class="panel-inner" id="targets-panel" style="display:none;">
+
+      <div class="field-group" style="grid-column:1/-1;">
+        <label>Named Targets</label>
+        <p class="field-hint">
+          Each target is a place with a name. They feed the Calculator two ways: <b>Normal</b> and
+          <b>Constant</b> pick one from a list, and <b>Multi-Target</b> takes them ticked, straight
+          into the queue. Renaming one never changes anything that has already been fired — an order
+          keeps its own copy of the coordinates it was given.
+          <br/><br/>
+          Targets are shared with every officer holding ballistics clearance.
+        </p>
+        <div class="registry-list" id="target-list"></div>
+      </div>
+
+      <div class="field-group" style="grid-column:1/-1;">
+        <label id="target-form-title">Name a Target</label>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+          <input class="bc-input" id="target-name" placeholder="Name — e.g. East Bridge" style="flex:2 1 200px;"/>
+          <input class="bc-input" id="target-x" type="number" placeholder="X" style="flex:1 1 90px;"/>
+          <input class="bc-input" id="target-y" type="number" placeholder="Y" value="64" style="flex:1 1 90px;"/>
+          <input class="bc-input" id="target-z" type="number" placeholder="Z" style="flex:1 1 90px;"/>
+          <button class="map-btn" id="target-pick" type="button">Pick on Map</button>
+        </div>
+        <p class="field-hint">Type the coordinates, or press <b>Pick on Map</b> and click the spot.</p>
+        <div class="registry-actions">
+          <button class="calc-btn" id="target-save" type="button">Save Target</button>
+          <button class="map-btn" id="target-cancel-edit" type="button" style="display:none;">Cancel Edit</button>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- SECRET PANEL. Revealed only to 'ballistics-secret' holders (see
+         applySecretVisibility). It holds the two things the ordinary pages must
+         not show: attacks that fire themselves at a set time, and the entries
+         that have been taken out of the registries. -->
+    <div class="panel-inner" id="secret-panel" style="display:none;">
+
+      <div class="field-group" style="grid-column:1/-1;">
+        <label>Scheduled Attack Plans</label>
+        <p class="field-hint">
+          A standing order: the guns, the targets, the mode, and the moment it should open fire. The
+          server launches it at that moment and keeps feeding it, so it fires with <b>nobody at a
+          screen and no calculator page open</b>. Each gun is re-aimed from where it actually is when
+          its shot is queued, so a battery that has been moved since the plan was written is still
+          aimed at the target. <b>Launch now</b> brings one forward without rewriting it.
+          <br/><br/>
+          A launched plan appears in the Firing Log like any other order. A <b>Constant</b> plan has no
+          natural end, so an unattended one stops itself after a set number of shots per gun.
+        </p>
+        <div class="registry-list" id="attack-list"></div>
+      </div>
+
+      <div class="field-group" style="grid-column:1/-1;">
+        <label id="attack-form-title">Write an Attack Plan</label>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+          <input class="bc-input" id="attack-name" placeholder="Name — e.g. Night Battery" style="flex:2 1 200px;"/>
+          <input class="bc-input" id="attack-when" type="datetime-local" style="flex:1 1 210px;" title="When it should open fire"/>
+          <select class="bc-select" id="attack-mode" style="flex:1 1 150px;">
+            <option value="normal">Normal</option>
+            <option value="constant">Constant</option>
+            <option value="multi">Multi-Target</option>
+          </select>
+          <input class="bc-input" id="attack-cycles" type="number" min="1" max="999" value="1" title="Cycles" style="flex:0 1 90px;"/>
+        </div>
+        <p class="field-hint">Name · date and time · mode · cycles</p>
+
+        <div class="field-group" style="margin-top:12px;">
+          <label>Guns</label>
+          <div class="bc-ms" id="attack-unit-ms">
+            <button class="bc-select bc-ms__btn" id="attack-unit-btn" type="button" aria-haspopup="true" aria-expanded="false">
+              <span class="bc-ms__label" id="attack-unit-label">— None selected —</span>
+              <span class="bc-ms__caret" aria-hidden="true"></span>
+            </button>
+            <div class="bc-ms__panel" id="attack-unit-panel" hidden></div>
+          </div>
+        </div>
+
+        <div class="field-group" style="margin-top:12px;">
+          <label>Targets</label>
+          <div class="bc-ms" id="attack-target-ms">
+            <button class="bc-select bc-ms__btn" id="attack-target-btn" type="button" aria-haspopup="true" aria-expanded="false">
+              <span class="bc-ms__label" id="attack-target-label">— None selected —</span>
+              <span class="bc-ms__caret" aria-hidden="true"></span>
+            </button>
+            <div class="bc-ms__panel" id="attack-target-panel" hidden></div>
+          </div>
+        </div>
+
+        <div class="field-group" style="margin-top:12px;">
+          <label>Shot</label>
+          <select class="bc-select" id="attack-trajectory">
+            <option value="optimal" selected>Optimal — shortest time of flight</option>
+            <option value="direct">Direct — point-blank</option>
+          </select>
+        </div>
+
+        <label style="display:flex;align-items:flex-start;gap:8px;margin-top:12px;cursor:pointer;">
+          <input type="checkbox" id="attack-unsync" style="accent-color:var(--crimson-bright);margin-top:2px;"/>
+          <span style="font-family:var(--font-body);font-size:12.5px;color:var(--parchment-dim);text-transform:none;line-height:1.45;">
+            <b style="color:var(--parchment);">Disable synchronisation</b> (Multi-Target only) — every gun
+            fires at every target, once per cycle.
+          </span>
+        </label>
+
+        <div class="registry-actions">
+          <button class="calc-btn" id="attack-save" type="button">Save Attack Plan</button>
+          <button class="map-btn" id="attack-cancel-edit" type="button" style="display:none;">Cancel Edit</button>
+        </div>
+      </div>
+
+      <div class="field-group" style="grid-column:1/-1;">
+        <label>Hidden Registries</label>
+        <p class="field-hint">
+          Every cannon, ship and target, with a <b>Hide</b> button. A hidden entry is withheld from
+          every officer without this clearance — it leaves their registries, their map and their
+          pickers — but it is not deleted: a hidden cannon goes on being polled, aimed and fired
+          exactly as before, and <b>Show</b> puts it back. Use it for a battery that has not been
+          announced, or a firing position only one crew should know about.
+        </p>
+        <div class="registry-list" id="hidden-list"></div>
       </div>
 
     </div>
@@ -1629,6 +1796,17 @@
   btnClear.addEventListener('click', clearAll);
 
   map.on('click', (e) => {
+    // "Pick on Map" on the Target Registry's form: the click fills the FORM's
+    // coordinates, not the Calculator's target — the place has no name yet, so
+    // there is nothing for the Calculator to aim at until it is saved.
+    if (targetPickArmed) {
+      const pick = llToMc(e.latlng);
+      targetXEl.value = pick.x;
+      targetZEl.value = pick.z;
+      setTargetPickArmed(false);
+      setTab('targets');
+      return;
+    }
     if (!placeMode) return;
     const mc = llToMc(e.latlng);
     // In Multi-Target the very same selection queues targets instead of moving
@@ -1999,6 +2177,19 @@
   let gpsTowers        = [];
   let reloadPresets    = [];
   let editingPresetId  = null;
+  // The named-target registry, shared by every officer with ballistics
+  // clearance. Read here so the Calculator's dropdowns, the Multi-Target queue
+  // and the secret panel's attack plans all describe the same places.
+  let targets          = [];
+  let editingTargetId  = null;   // the registry row being edited in the form
+  let targetPickArmed  = false;  // "Pick on Map" is waiting for a click
+  // 'ballistics-secret': the Secret Panel, the hidden registries and the
+  // scheduled attack plans. Decided once at sign-in, from the account's roles.
+  let hasSecretRole    = false;
+  let attackPlans      = [];     // scheduled attack plans, newest schedule first
+  let editingAttackId  = null;
+  let attackSel        = new Set();  // ticked guns in the plan creator
+  let attackTargetSel  = new Set();  // ticked target ids in the plan creator
   const fireStatus      = document.getElementById('fire-status');
 
   function escHtml(s) {
@@ -2019,6 +2210,9 @@
       renderCannonDots();
       renderBombardUnits();
       refreshSelectedGunMarker();
+      // The secret panel's gun picker and its Hide/Show list describe the same
+      // registry, so they follow it on every poll.
+      if (hasSecretRole) { renderAttackUnits(); renderHiddenRegistries(); }
       if (!light) renderRegistry();
     } catch (e) { console.warn('Could not load cannon registry.', e); }
   }
@@ -2367,6 +2561,10 @@
   let bombardTargets = [];         // Multi-Target queue
   let bombardPlan    = null;       // the local scheduler for the server's plan
   let bombardTimer   = null;
+  // Multi-Target's share-versus-every-gun choice, read from the toggle when an
+  // order opens and carried on the local plan afterwards: changing the box mid-
+  // barrage must not silently change what the queue means.
+  let bombardUnsynced = false;
   let bombardBusy    = false;
 
   // ── What the order looks like on the map ──────────────────────
@@ -2396,10 +2594,50 @@
   const bombardStopBtn   = document.getElementById('bombard-stop');
   const bombardStatusEl  = document.getElementById('bombard-status');
 
+  // ── Named targets: the registry, its two pickers in the Calculator, and the
+  //    secret panel's plan creator. Declared here rather than beside the code
+  //    that uses them because the Calculator's mode switch runs long before the
+  //    registry tab is ever opened, and it repaints the pickers when it does.
+  const targetListEl     = document.getElementById('target-list');
+  const targetNameEl     = document.getElementById('target-name');
+  const targetXEl        = document.getElementById('target-x');
+  const targetYEl        = document.getElementById('target-y');
+  const targetZEl        = document.getElementById('target-z');
+  const targetPickBtn    = document.getElementById('target-pick');
+  const targetSaveBtn    = document.getElementById('target-save');
+  const targetCancelBtn  = document.getElementById('target-cancel-edit');
+  const targetSelectEl   = document.getElementById('target-select');
+  const targetMsEl       = document.getElementById('target-ms');
+  const targetMsBtnEl    = document.getElementById('target-ms-btn');
+  const targetMsLabelEl  = document.getElementById('target-ms-label');
+  const targetMsPanelEl  = document.getElementById('target-ms-panel');
+  const normalCyclesEl   = document.getElementById('normal-cycles');
+  const multiUnsyncEl    = document.getElementById('multi-unsync');
+
+  // ── The secret panel's own controls
+  const attackListEl       = document.getElementById('attack-list');
+  const attackNameEl       = document.getElementById('attack-name');
+  const attackWhenEl       = document.getElementById('attack-when');
+  const attackModeEl       = document.getElementById('attack-mode');
+  const attackCyclesEl     = document.getElementById('attack-cycles');
+  const attackTrajEl       = document.getElementById('attack-trajectory');
+  const attackUnsyncEl     = document.getElementById('attack-unsync');
+  const attackSaveBtn      = document.getElementById('attack-save');
+  const attackCancelEditBtn= document.getElementById('attack-cancel-edit');
+  const attackUnitEl       = document.getElementById('attack-unit-ms');
+  const attackUnitBtnEl    = document.getElementById('attack-unit-btn');
+  const attackUnitLabelEl  = document.getElementById('attack-unit-label');
+  const attackUnitPanelEl  = document.getElementById('attack-unit-panel');
+  const attackTargetEl     = document.getElementById('attack-target-ms');
+  const attackTargetBtnEl  = document.getElementById('attack-target-btn');
+  const attackTargetLabelEl= document.getElementById('attack-target-label');
+  const attackTargetPanelEl= document.getElementById('attack-target-panel');
+  const hiddenListEl       = document.getElementById('hidden-list');
+
   const BOMBARD_MODE_NOTES = {
-    normal:   'Normal — every selected gun that can reach the target fires one shot at it.',
-    constant: 'Constant — the guns fire, reload and fire at one target until you press Stop. A shot in this run skips the disassemble/assemble cycle when the cannon has a mechanical arm: it only needs its reload time.',
-    multi:    'Multi-Target — the queue is split between the guns, and a gun that finishes takes the busiest target still outstanding. Each target is fired at once per cycle.',
+    normal:   'Normal — every selected gun that can reach the target fires its cycles at it, then the order closes itself. Set the cycles above.',
+    constant: 'Constant — the guns fire, reload and fire at one target until you press Stop, however many cycles are set. A shot in this run skips the disassemble/assemble cycle when the cannon has a mechanical arm: it only needs its reload time.',
+    multi:    'Multi-Target — the queue is split between the guns, and a gun that finishes takes the busiest target still outstanding, so each target is fired at once per cycle. Tick "Disable synchronisation" instead and every gun fires at every target, once per cycle.',
   };
 
   function bombardSetStatus(text, isErr) {
@@ -2628,6 +2866,12 @@
     const multi = bombardMode === 'multi';
     document.getElementById('single-target-group').style.display = multi ? 'none' : '';
     document.getElementById('multi-target-group').style.display  = multi ? '' : 'none';
+    // Cycles belong to Normal alone: Constant is the mode defined by NOT having
+    // a stopping count, and Multi-Target has its own field in the queue above.
+    document.getElementById('normal-cycles-group').style.display = (bombardMode === 'normal') ? '' : 'none';
+    // The named-target lists follow the mode too: one to pick in Normal and
+    // Constant, a ticked queue in Multi-Target.
+    renderTargetPicker();
     // The single target marker steps aside for the numbered queue.
     if (targetMarker) targetMarker.setOpacity(multi ? 0 : 1);
     // The same map selection means "append to the queue" in this mode.
@@ -2685,9 +2929,27 @@
     if (!p) return null;
     const target = p.targets[0];
     if (p.mode !== 'multi') {
-      if (p.mode === 'normal' && (p.given[gun.cannonId] || 0) >= 1) return null;
+      // Normal fires each gun its cycle count and then lets it finish; Constant
+      // has no count at all, which is the whole difference between the two.
+      if (p.mode === 'normal' && (p.given[gun.cannonId] || 0) >= p.cycles) return null;
       const sol = bombardSolution(gun, target, p.trajectory, p.drag);
       return sol ? bombardShot(gun, sol, target.key) : null;
+    }
+    // Unsynced: the queue is not shared out, so this gun's next shot is simply
+    // the next place on the list from where its own count has got to — every gun
+    // covers every target, once per cycle, in its own time. A target out of this
+    // gun's range is stepped over rather than stalling it: a gun that is nearly
+    // out of reach should still fire at what it can.
+    if (p.unsynced) {
+      const mine = p.given[gun.cannonId] || 0;
+      if (mine >= p.targets.length * p.cycles) return null;
+      const start = mine % p.targets.length;
+      for (let i = 0; i < p.targets.length; i++) {
+        const t = p.targets[(start + i) % p.targets.length];
+        const sol = bombardSolution(gun, t, p.trajectory, p.drag);
+        if (sol) return bombardShot(gun, sol, t.key);
+      }
+      return null;
     }
     let best = null, bestLeft = 0, bestDist = Infinity;
     for (const t of p.targets) {
@@ -2731,10 +2993,12 @@
     const shotsFired = Object.values(progress.guns || {}).reduce((n, g) => n + Number(g.done || 0), 0);
     const inFlight   = Object.values(progress.guns || {}).reduce((n, g) => n + Number(g.pending || 0) + Number(g.delivered || 0), 0);
     const lines = [
-      'Order #' + plan.id + ' · ' + plan.mode + ' · ' + bombardPlan.guns.length + ' gun' +
+      'Order #' + plan.id + ' · ' + plan.mode + (bombardPlan.unsynced ? ' (unsynced)' : '') +
+        ' · ' + bombardPlan.guns.length + ' gun' +
         (bombardPlan.guns.length === 1 ? '' : 's') + ' · ' + plan.targets.length + ' target' +
         (plan.targets.length === 1 ? '' : 's') +
-        (plan.mode === 'multi' ? ' · ' + plan.cycles + ' cycle' + (plan.cycles === 1 ? '' : 's') : ''),
+        // Normal carries a count now too; Constant is the one mode without one.
+        (plan.mode !== 'constant' ? ' · ' + plan.cycles + ' cycle' + (plan.cycles === 1 ? '' : 's') : ''),
       'Fired ' + shotsFired + ' · queued ' + inFlight + ' · ' + bombardChargesNote() + ', ' + bombardPlan.trajectory + ' trajectory',
     ];
     // Shell timing on the map is taken from the cannon's own report of the
@@ -2749,10 +3013,16 @@
       lines.push('Reload indicators on the map are unavailable — re-run the installer to update the cannon programs.');
     }
     if (plan.mode === 'multi') {
-      const left = bombardPlan.targets
-        .map(t => ({ t: t, n: Math.max(0, plan.cycles - (bombardPlan.targetsAssigned[t.key] || 0)) }))
-        .filter(x => x.n > 0)
-        .map(x => (x.t.label || bombardTargetLabel(x.t)) + ' ×' + x.n);
+      // Unsynced owes every gun every target, so the outstanding figure is a
+      // pass count per gun rather than a share of the list.
+      const left = bombardPlan.unsynced
+        ? bombardPlan.targets.map(t => t).filter(t =>
+            bombardPlan.guns.some(g => (bombardPlan.given[g.cannonId] || 0) < bombardPlan.targets.length * plan.cycles))
+            .map(t => (t.label || bombardTargetLabel(t)) + ' ×' + plan.cycles)
+        : bombardPlan.targets
+            .map(t => ({ t: t, n: Math.max(0, plan.cycles - (bombardPlan.targetsAssigned[t.key] || 0)) }))
+            .filter(x => x.n > 0)
+            .map(x => (x.t.label || bombardTargetLabel(x.t)) + ' ×' + x.n);
       lines.push(left.length ? 'Left: ' + left.join(' · ') : 'Every target has been fired at.');
     }
     return lines.join('\n');
@@ -2850,9 +3120,19 @@
       // Finished? A finite order is over when nothing is left to hand out and
       // nothing is still in the air. Constant runs until the Stop button.
       const busy = Object.values(progress.guns || {}).some(g => Number(g.pending || 0) + Number(g.delivered || 0) > 0);
-      const leftToFeed = bombardPlan.mode === 'normal'
-        ? bombardPlan.guns.some(g => !bombardPlan.idle[g.cannonId] && (bombardPlan.given[g.cannonId] || 0) < 1)
-        : bombardPlan.targets.some(t => (bombardPlan.targetsAssigned[t.key] || 0) < bombardPlan.cycles);
+      // What is still owed, by mode. Normal owes each gun its cycles; unsynced
+      // Multi-Target owes each GUN every target (not the targets a share); shared
+      // Multi-Target owes each target its cycles between the guns.
+      let leftToFeed;
+      if (bombardPlan.mode === 'normal') {
+        leftToFeed = bombardPlan.guns.some(g => !bombardPlan.idle[g.cannonId] &&
+          (bombardPlan.given[g.cannonId] || 0) < bombardPlan.cycles);
+      } else if (bombardPlan.unsynced) {
+        leftToFeed = bombardPlan.guns.some(g => !bombardPlan.idle[g.cannonId] &&
+          (bombardPlan.given[g.cannonId] || 0) < bombardPlan.targets.length * bombardPlan.cycles);
+      } else {
+        leftToFeed = bombardPlan.targets.some(t => (bombardPlan.targetsAssigned[t.key] || 0) < bombardPlan.cycles);
+      }
       const stalled = !shots.length && !busy && leftToFeed;
 
       bombardSetStatus(bombardPlanSummary(plan, progress) +
@@ -2915,6 +3195,15 @@
     const charges = gunCharges(guns[0]);
 
     let targets, cycles = 1;
+    // Normal carries a pass count of its own now. Constant does not: it is the
+    // open-ended mode, and its cycle field is deliberately ignored so the two can
+    // never be confused for one another.
+    if (bombardMode === 'normal') {
+      cycles = Math.max(1, Math.round(parseFloat(normalCyclesEl.value) || 1));
+    }
+    // Multi-Target's share-versus-every-gun choice is read here, when the order
+    // opens, and recorded on it — so it cannot be changed under a running barrage.
+    const unsynced = bombardMode === 'multi' && !!multiUnsyncEl.checked;
     if (bombardMode === 'multi') {
       if (!bombardTargets.length) { bombardSetStatus('Add at least one target to the queue first.', true); return; }
       cycles = Math.max(1, Math.round(parseFloat(bombardCyclesEl.value) || 1));
@@ -2957,6 +3246,7 @@
           drag: drag,
           charges: charges,
           trajectory: trajectory,
+          unsynced: unsynced,
         }),
       });
       const data = await r.json().catch(() => ({}));
@@ -2976,12 +3266,16 @@
       trajectory: trajectory,
       drag: drag,
       charges: charges,
+      // Recorded from the server's own copy where it exists, so a page that
+      // disagrees with the order it just opened cannot feed it the wrong shots.
+      unsynced: (plan.unsynced === undefined ? unsynced : !!plan.unsynced),
       given: {},
       idle: {},
       targetsAssigned: {},
       paused: false,
       seeded: false,
     };
+    bombardUnsynced = bombardPlan.unsynced;
     startBombardTimer();
   }
 
@@ -3004,6 +3298,11 @@
       bombardModeNote.textContent = BOMBARD_MODE_NOTES[plan.mode];
       bombardStartBtn.textContent = (plan.mode === 'constant') ? 'Start Barrage' : 'Fire';
       bombardTargets = (plan.targets || []).slice();
+      // The order's own share-versus-every-gun choice comes back with it, and the
+      // toggle is set to agree — the box describes the running order, it does not
+      // get to change it.
+      bombardUnsynced = !!plan.unsynced;
+      multiUnsyncEl.checked = bombardUnsynced;
       bombardSel = new Set((plan.guns || []).map(g =>
         (g.vehicleId == null) ? ('c' + g.cannonId)
           : (plan.mode === 'multi' ? ('g' + g.cannonId) : ('v' + g.vehicleId))));
@@ -3027,6 +3326,7 @@
           ? Number(plan.drag) : (parseFloat(shell.drag) || 0.99),
         charges: Number.isFinite(Number(plan.charges)) && Number(plan.charges) > 0
           ? Number(plan.charges) : defaultCharges,
+        unsynced: bombardUnsynced,
         given: {},
         idle: {},
         targetsAssigned: {},
@@ -3063,6 +3363,9 @@
     if (!btn) return;
     bombardTargets = bombardTargets.filter(t => t.key !== btn.dataset.bombardTargetDel);
     renderBombardTargets();
+    // Removing a queued target has to untick its name above, or the tickbox list
+    // would go on claiming a target is queued that is not.
+    renderTargetPicker();
   });
   // The order is opened inside an async click handler, where a thrown error
   // would otherwise vanish into an unhandled rejection and the button would
@@ -3103,6 +3406,640 @@
   renderBombardUnits();
   renderBombardTargets();
   updateBombardButtons();
+
+  // ════════════════════════════════════════════
+  // 8c-bis. NAMED TARGETS
+  //    A registry every officer with clearance shares: a place with a name, so
+  //    the same battery is not re-derived by hand on every page. It feeds the
+  //    Calculator three ways — the "select one" dropdown for Normal and
+  //    Constant, the ticked list that fills the Multi-Target queue, and the
+  //    secret panel's attack plans — and it is where a hidden target is created
+  //    and where one is made visible again.
+  // ════════════════════════════════════════════
+
+  // A registered target as a queue entry, in exactly the shape a typed or a
+  // clicked one takes (bombardTargetFrom) — so all three routes into the queue
+  // are the same thing to the scheduler and to the server. The name rides along
+  // as the label, which is what the queue row and the order record show.
+  function targetQueueEntry(t) {
+    const entry = bombardTargetFrom(t.x, t.y, t.z);
+    if (!entry) return null;
+    entry.label = t.name + ' — ' + entry.label;
+    entry.targetId = Number(t.id);
+    return entry;
+  }
+
+  function targetCoordText(t) {
+    return 'X ' + t.x + ' · Y ' + t.y + ' · Z ' + t.z;
+  }
+
+  // `light` refreshes the data without redrawing the registry CARDS, so the
+  // background poll cannot wipe a name or coordinate being typed into one — the
+  // same trick the cannon registry uses. The pickers are always rebuilt: they
+  // hold no typed input, and the whole point of the poll is to keep them in step
+  // with names another officer has changed.
+  async function loadTargets(opts) {
+    const light = !!(opts && opts.light);
+    try {
+      const r = await fetch('/api/ballistics/targets');
+      if (!r.ok) return;
+      const data = await r.json();
+      targets = data.targets || [];
+    } catch (e) {
+      console.warn('Could not load the target registry.', e);
+      return;
+    }
+    if (!light) renderTargets();
+    renderTargetPicker();
+    // A hidden target only exists to a reader entitled to it, so this is also
+    // where the secret panel learns which targets it could reveal.
+    renderHiddenRegistries();
+    if (hasSecretRole) renderAttackTargets();
+  }
+
+  function renderTargets() {
+    targetListEl.innerHTML = targets.length
+      ? targets.map(t =>
+          '<div class="cannon-card" data-target-id="' + t.id + '">' +
+            '<div class="cannon-card__head">' +
+              '<input class="cannon-card__name" data-target-name="' + t.id + '" value="' + escHtml(t.name) + '"/>' +
+              (t.hidden ? '<span class="cannon-badge sublevel">Hidden</span>' : '') +
+            '</div>' +
+            '<div class="cannon-card__meta">' + targetCoordText(t) + '</div>' +
+            '<div class="cannon-card__row">' +
+              '<input class="cannon-mini-input" data-target-x="' + t.id + '" type="number" value="' + t.x + '" title="X"/>' +
+              '<input class="cannon-mini-input" data-target-y="' + t.id + '" type="number" value="' + t.y + '" title="Y"/>' +
+              '<input class="cannon-mini-input" data-target-z="' + t.id + '" type="number" value="' + t.z + '" title="Z"/>' +
+            '</div>' +
+            '<div class="registry-actions">' +
+              '<button class="map-btn" data-target-save="' + t.id + '">Save</button>' +
+              '<button class="map-btn" data-target-fire="' + t.id + '">Fire at this</button>' +
+              '<button class="map-btn" data-target-edit="' + t.id + '">Edit</button>' +
+              '<button class="map-btn danger" data-target-delete="' + t.id + '">Delete</button>' +
+            '</div>' +
+          '</div>')
+        .join('')
+      : '<div class="registry-empty">No named targets yet. Add one below, or press Pick on Map and click the spot.</div>';
+    wireTargetRows();
+  }
+
+  function wireTargetRows() {
+    document.querySelectorAll('[data-target-save]').forEach(b =>
+      b.addEventListener('click', () => saveTargetRow(b.dataset.targetSave)));
+    document.querySelectorAll('[data-target-delete]').forEach(b =>
+      b.addEventListener('click', () => removeTargetRow(b.dataset.targetDelete)));
+    document.querySelectorAll('[data-target-fire]').forEach(b =>
+      b.addEventListener('click', () => useTargetRow(b.dataset.targetFire)));
+    document.querySelectorAll('[data-target-edit]').forEach(b =>
+      b.addEventListener('click', () => editTargetRow(b.dataset.targetEdit)));
+  }
+
+  // Renaming and moving a named target are one-field edits, so they go through
+  // the same partial PUT the cannon registry uses — the server only touches what
+  // it is sent.
+  async function saveTargetRow(id) {
+    const name = document.querySelector('[data-target-name="' + id + '"]').value.trim();
+    const payload = {
+      name: name,
+      x: Number(document.querySelector('[data-target-x="' + id + '"]').value),
+      y: Number(document.querySelector('[data-target-y="' + id + '"]').value),
+      z: Number(document.querySelector('[data-target-z="' + id + '"]').value),
+    };
+    const r = await fetch('/api/ballistics/targets/' + id, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { alert(data.error || 'Could not save the target.'); return; }
+    await loadTargets();
+  }
+
+  async function removeTargetRow(id) {
+    if (!confirm('Delete this target from the registry?')) return;
+    // Take the queue row out with it: a queue entry for a place that no longer
+    // has a name would be a target nothing on screen can explain.
+    const gone = targets.find(t => Number(t.id) === Number(id));
+    if (gone) {
+      const entry = targetQueueEntry(gone);
+      if (entry) {
+        bombardTargets = bombardTargets.filter(x => x.key !== entry.key);
+        renderBombardTargets();
+      }
+    }
+    await fetch('/api/ballistics/targets/' + id, { method: 'DELETE' });
+    await loadTargets();
+  }
+
+  function editTargetRow(id) {
+    const t = targets.find(x => Number(x.id) === Number(id));
+    if (!t) return;
+    editingTargetId = Number(id);
+    targetNameEl.value = t.name;
+    targetXEl.value = t.x;
+    targetYEl.value = t.y;
+    targetZEl.value = t.z;
+    document.getElementById('target-form-title').textContent = 'Edit Target';
+    targetSaveBtn.textContent = 'Save Changes';
+    targetCancelBtn.style.display = '';
+  }
+
+  // Choosing a named target in the Calculator only FILLS the three fields below
+  // it: the coordinates stay the input, so a named target and a clicked one are
+  // the same thing from here on, and an unnamed spot stays perfectly fireable.
+  function applySelectedTarget(id) {
+    const t = targets.find(x => Number(x.id) === Number(id));
+    if (!t) return;
+    document.getElementById('tx').value = t.x;
+    document.getElementById('ty').value = t.y;
+    document.getElementById('tz').value = t.z;
+    placeTarget(t.x, t.z);
+    updateFireControl();
+  }
+
+  function useTargetRow(id) {
+    const t = targets.find(x => Number(x.id) === Number(id));
+    if (!t) return;
+    if (bombardMode === 'multi') {
+      addBombardTarget(targetQueueEntry(t));
+      renderTargetPicker();
+      return;
+    }
+    targetSelectEl.value = String(t.id);
+    applySelectedTarget(t.id);
+    setTab('calc');
+  }
+
+  // The two pickers, rebuilt together because they describe the same list.
+  function renderTargetPicker() {
+    const queued = new Set(bombardTargets.map(t => t.key));
+
+    // The single-target dropdown — Normal and Constant pick one off this list.
+    const current = targetSelectEl.value;
+    targetSelectEl.innerHTML = '<option value="">— Select a registered target —</option>' +
+      targets.map(t => '<option value="' + t.id + '">' + escHtml(t.name) +
+        ' (X ' + t.x + ' · Y ' + t.y + ' · Z ' + t.z + ')' + (t.hidden ? ' — hidden' : '') +
+        '</option>').join('');
+    if (targets.some(t => String(t.id) === current)) targetSelectEl.value = current;
+
+    // The Multi-Target tickbox list. Ticking one appends it to the END of the
+    // queue, so the list and the map clicks build the same queue together.
+    targetMsPanelEl.innerHTML = targets.length
+      ? targets.map(t => {
+          const entry = targetQueueEntry(t);
+          const on = !!entry && queued.has(entry.key);
+          return '<label class="bombard-row">' +
+            '<input type="checkbox" data-target-tick="' + t.id + '"' + (on ? ' checked' : '') + '/>' +
+            '<span class="bombard-row__name">' + escHtml(t.name) + '</span>' +
+            '<span class="bombard-row__note">' + targetCoordText(t) + (t.hidden ? ' · hidden' : '') + '</span>' +
+          '</label>';
+        }).join('')
+      : '<div class="bombard-empty">No named targets yet — add some in the Target Registry tab.</div>';
+
+    const ticked = targets.filter(t => {
+      const entry = targetQueueEntry(t);
+      return !!entry && queued.has(entry.key);
+    }).length;
+    targetMsLabelEl.textContent = ticked
+      ? ticked + ' registered target' + (ticked === 1 ? '' : 's') + ' queued'
+      : '— No registered targets queued —';
+  }
+
+  function setTargetPicker(open) {
+    targetMsEl.classList.toggle('open', open);
+    targetMsPanelEl.hidden = !open;
+    targetMsBtnEl.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+
+  async function saveTargetForm() {
+    const name = targetNameEl.value.trim();
+    if (!name) { alert('Give the target a name.'); return; }
+    const x = parseFloat(targetXEl.value);
+    const z = parseFloat(targetZEl.value);
+    if (!Number.isFinite(x) || !Number.isFinite(z)) { alert('A target needs an X and a Z.'); return; }
+    const y = parseFloat(targetYEl.value);
+    const payload = { name: name, x: x, y: Number.isFinite(y) ? y : 64, z: z };
+    const editing = editingTargetId;
+    const r = await fetch(editing ? '/api/ballistics/targets/' + editing : '/api/ballistics/targets', {
+      method: editing ? 'PUT' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { alert(data.error || 'Could not save the target.'); return; }
+    resetTargetForm();
+    await loadTargets();
+  }
+
+  function resetTargetForm() {
+    editingTargetId = null;
+    targetNameEl.value = '';
+    targetXEl.value = '';
+    targetYEl.value = '';
+    targetZEl.value = '64';
+    document.getElementById('target-form-title').textContent = 'Name a Target';
+    targetSaveBtn.textContent = 'Save Target';
+    targetCancelBtn.style.display = 'none';
+    setTargetPickArmed(false);
+  }
+
+  // "Pick on Map" arms the NEXT map click to fill the form's coordinates rather
+  // than the Calculator's target — this place has not been saved yet, so there is
+  // nothing for the Calculator to aim at.
+  function setTargetPickArmed(on) {
+    targetPickArmed = !!on;
+    targetPickBtn.classList.toggle('active', targetPickArmed);
+    if (targetPickArmed) setMode(null);
+    map.getContainer().style.cursor = (targetPickArmed || placeMode) ? 'crosshair' : '';
+  }
+
+  targetSelectEl.addEventListener('change', () => {
+    if (targetSelectEl.value) applySelectedTarget(targetSelectEl.value);
+  });
+  targetMsBtnEl.addEventListener('click', () => setTargetPicker(targetMsPanelEl.hidden));
+  document.addEventListener('click', (e) => { if (!targetMsEl.contains(e.target)) setTargetPicker(false); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setTargetPicker(false); });
+  targetMsPanelEl.addEventListener('change', (e) => {
+    const box = e.target.closest('[data-target-tick]');
+    if (!box) return;
+    const t = targets.find(x => String(x.id) === box.dataset.targetTick);
+    if (!t) return;
+    const entry = targetQueueEntry(t);
+    if (!entry) return;
+    if (box.checked) {
+      addBombardTarget(entry);
+    } else {
+      bombardTargets = bombardTargets.filter(x => x.key !== entry.key);
+      renderBombardTargets();
+    }
+    renderTargetPicker();
+  });
+  targetPickBtn.addEventListener('click', () => setTargetPickArmed(!targetPickArmed));
+  targetSaveBtn.addEventListener('click', () => { saveTargetForm().catch(() => alert('Could not reach the server.')); });
+  targetCancelBtn.addEventListener('click', resetTargetForm);
+
+  renderTargets();
+  renderTargetPicker();
+
+  // ════════════════════════════════════════════
+  // 8c-ter. SECRET PANEL
+  //    'ballistics-secret' sees two things nobody else does: attacks that fire
+  //    themselves at a set time, and the entries that have been taken out of the
+  //    cannon, ship and target registries. Both are enforced by the WORKER, not
+  //    by hiding markup — a page without the clearance is never sent the rows.
+  // ════════════════════════════════════════════
+
+  function secretTabOpen() {
+    return document.getElementById('secret-panel').style.display !== 'none';
+  }
+
+  function applySecretVisibility() {
+    document.getElementById('tab-secret').style.display = hasSecretRole ? '' : 'none';
+    // A tab that is not there must not stay open: an account whose clearance has
+    // been revoked should not keep staring at the panel.
+    if (!hasSecretRole && secretTabOpen()) setTab('calc');
+  }
+
+  // ── The plan creator's two pickers, built from the same registries as the
+  //    Calculator's — a ship can be taken as one unit (all its guns) or gun by
+  //    gun, and targets are ticked from the named list.
+  function attackRow(token, name, note, isGun, hidden) {
+    return '<label class="bombard-row' + (isGun ? ' bombard-row--gun' : '') + '">' +
+      '<input type="checkbox" data-attack-unit="' + token + '"' + (attackSel.has(token) ? ' checked' : '') + '/>' +
+      '<span class="bombard-row__name">' + name + '</span>' +
+      '<span class="bombard-row__note">' + note + (hidden ? ' · hidden' : '') + '</span>' +
+    '</label>';
+  }
+
+  function renderAttackUnits() {
+    const rows = [];
+    for (const c of cannonsActive) {
+      rows.push(attackRow('c' + c.id, escHtml(c.name || ('Cannon ' + c.id)),
+        (c.sublevel ? 'sublevel · ' : 'static · ') + (cannonOnline(c) ? 'online' : 'offline'), false, c.hidden));
+    }
+    for (const v of vehiclesActive) {
+      const guns = v.cannons || [];
+      const label = escHtml(v.name || ('Vehicle ' + v.id));
+      rows.push(attackRow('v' + v.id, label,
+        guns.length + ' gun' + (guns.length === 1 ? '' : 's') + ' · tick for the whole ship', false, v.hidden));
+      for (const g of guns) {
+        rows.push(attackRow('g' + g.id, escHtml(g.name || ('Cannon ' + g.id)), 'on ' + label, true, g.hidden));
+      }
+    }
+    attackUnitPanelEl.innerHTML = rows.length ? rows.join('')
+      : '<div class="bombard-empty">No accepted cannons or ships yet.</div>';
+    updateAttackUnitLabel();
+  }
+
+  // What is ticked, as the plain list of cannon ids a plan stores. A ship
+  // contributes all of its guns, so the stored plan names guns and never a ship
+  // — which is what the scheduler has to aim.
+  function attackGunIds() {
+    const ids = new Set();
+    for (const token of attackSel) {
+      const head = token.charAt(0);
+      const id = Number(token.slice(1));
+      if (head === 'c' || head === 'g') ids.add(id);
+      else if (head === 'v') {
+        const v = vehiclesActive.find(x => Number(x.id) === id);
+        for (const g of ((v && v.cannons) || [])) ids.add(Number(g.id));
+      }
+    }
+    return [...ids];
+  }
+
+  function updateAttackUnitLabel() {
+    const n = attackGunIds().length;
+    attackUnitLabelEl.textContent = n ? n + ' gun' + (n === 1 ? '' : 's') + ' selected' : '— None selected —';
+  }
+
+  function renderAttackTargets() {
+    attackTargetPanelEl.innerHTML = targets.length
+      ? targets.map(t => '<label class="bombard-row">' +
+          '<input type="checkbox" data-attack-target="' + t.id + '"' + (attackTargetSel.has(Number(t.id)) ? ' checked' : '') + '/>' +
+          '<span class="bombard-row__name">' + escHtml(t.name) + '</span>' +
+          '<span class="bombard-row__note">' + targetCoordText(t) + (t.hidden ? ' · hidden' : '') + '</span>' +
+        '</label>').join('')
+      : '<div class="bombard-empty">No named targets yet — a plan needs at least one.</div>';
+    updateAttackTargetLabel();
+  }
+
+  function updateAttackTargetLabel() {
+    const n = attackTargetSel.size;
+    attackTargetLabelEl.textContent = n ? n + ' target' + (n === 1 ? '' : 's') + ' selected' : '— None selected —';
+  }
+
+  function setAttackPicker(which, open) {
+    const isUnit = which === 'unit';
+    (isUnit ? attackUnitEl : attackTargetEl).classList.toggle('open', open);
+    (isUnit ? attackUnitPanelEl : attackTargetPanelEl).hidden = !open;
+    (isUnit ? attackUnitBtnEl : attackTargetBtnEl).setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+
+  // ── The plans themselves
+  async function loadAttackPlans() {
+    if (!hasSecretRole) return;
+    try {
+      const r = await fetch('/api/ballistics/attack-plans');
+      if (!r.ok) return;
+      const data = await r.json();
+      attackPlans = data.plans || [];
+    } catch (e) { console.warn('Could not load scheduled attacks.', e); return; }
+    renderAttackPlans();
+  }
+
+  function attackStateBadge(state) {
+    const cls = state === 'running' ? 'online' : (state === 'scheduled' ? 'warn' : 'offline');
+    return '<span class="cannon-badge ' + cls + '">' + state + '</span>';
+  }
+
+  function attackPlanCard(p) {
+    const when = p.scheduledAt ? new Date(p.scheduledAt).toLocaleString() : '—';
+    const guns = (p.guns || []).length;
+    const tgts = (p.targets || []).length;
+    const gunNames = (p.guns || []).map(g => escHtml(g.name || ('Cannon ' + g.cannonId))).join(', ');
+    const targetNames = (p.targets || []).map(t => escHtml(t.label || t.key)).join(', ');
+
+    // A launched plan reports what its live order has actually done, so an
+    // unattended attack can be watched from here.
+    let progress = '';
+    if (p.progress) {
+      const fired  = Object.values(p.progress.guns || {}).reduce((n, g) => n + Number(g.done || 0), 0);
+      const queued = Object.values(p.progress.guns || {}).reduce((n, g) => n + Number(g.pending || 0) + Number(g.delivered || 0), 0);
+      progress = '<div class="cannon-card__meta">Live order #' + p.firePlanId + ' (' + p.progress.state +
+        ') — fired ' + fired + ' · queued ' + queued + '</div>';
+    }
+
+    const actions = [];
+    if (p.state === 'scheduled') {
+      actions.push('<button class="calc-btn" data-attack-launch="' + p.id + '">Launch now</button>');
+      actions.push('<button class="map-btn" data-attack-edit="' + p.id + '">Edit</button>');
+      actions.push('<button class="map-btn danger" data-attack-cancel="' + p.id + '">Cancel</button>');
+    } else if (p.state === 'running') {
+      actions.push('<button class="map-btn danger" data-attack-cancel="' + p.id + '">Stop</button>');
+    } else {
+      actions.push('<button class="map-btn danger" data-attack-delete="' + p.id + '">Remove</button>');
+    }
+
+    return '<div class="cannon-card" data-attack-id="' + p.id + '">' +
+      '<div class="cannon-card__head">' +
+        '<span class="cannon-card__name" style="cursor:default;">' + escHtml(p.name) + '</span>' +
+        attackStateBadge(p.state) +
+      '</div>' +
+      '<div class="cannon-card__meta">' +
+        'Fires ' + when + '<br/>' +
+        p.mode + (p.unsynced ? ' (unsynced)' : '') + ' · ' + guns + ' gun' + (guns === 1 ? '' : 's') +
+        ' · ' + tgts + ' target' + (tgts === 1 ? '' : 's') +
+        (p.mode === 'constant' ? ' · open-ended' : ' · ' + p.cycles + ' cycle' + (p.cycles === 1 ? '' : 's')) +
+        (p.createdBy ? ' · written by ' + escHtml(p.createdBy) : '') +
+      '</div>' +
+      '<div class="cannon-card__meta">Guns: ' + (gunNames || '—') + '<br/>Targets: ' + (targetNames || '—') + '</div>' +
+      progress +
+      '<div class="registry-actions">' + actions.join('') + '</div>' +
+    '</div>';
+  }
+
+  function renderAttackPlans() {
+    attackListEl.innerHTML = attackPlans.length
+      ? attackPlans.map(attackPlanCard).join('')
+      : '<div class="registry-empty">No scheduled attacks yet. Write one below — it fires by itself when its moment comes, even with this page closed.</div>';
+    wireAttackButtons();
+  }
+
+  function wireAttackButtons() {
+    document.querySelectorAll('[data-attack-launch]').forEach(b =>
+      b.addEventListener('click', () => attackAction('launch', b.dataset.attackLaunch)));
+    document.querySelectorAll('[data-attack-cancel]').forEach(b =>
+      b.addEventListener('click', () => attackAction('cancel', b.dataset.attackCancel)));
+    document.querySelectorAll('[data-attack-delete]').forEach(b =>
+      b.addEventListener('click', () => attackAction('delete', b.dataset.attackDelete)));
+    document.querySelectorAll('[data-attack-edit]').forEach(b =>
+      b.addEventListener('click', () => editAttackPlan(b.dataset.attackEdit)));
+  }
+
+  async function attackAction(what, id) {
+    if (what === 'launch' && !confirm('Open fire on this plan now?')) return;
+    if (what === 'cancel' && !confirm('Call this attack off? A plan already firing stops like any other order.')) return;
+    if (what === 'delete' && !confirm('Remove this plan from the list?')) return;
+    const path = what === 'delete' ? '/api/ballistics/attack-plans/' + id
+               : '/api/ballistics/attack-plans/' + id + '/' + what;
+    try {
+      const r = await fetch(path, { method: what === 'delete' ? 'DELETE' : 'POST' });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { alert(data.error || 'Could not ' + what + ' that plan.'); return; }
+    } catch (e) { alert('Could not reach the server.'); return; }
+    await loadAttackPlans();
+  }
+
+  function editAttackPlan(id) {
+    const p = attackPlans.find(x => Number(x.id) === Number(id));
+    if (!p) return;
+    editingAttackId = Number(id);
+    attackNameEl.value = p.name;
+    // datetime-local wants a LOCAL wall-clock string, so the ISO the server
+    // stores has to be shifted back into this browser's own timezone.
+    attackWhenEl.value = p.scheduledAt ? localDateTimeValue(new Date(p.scheduledAt)) : '';
+    attackModeEl.value = p.mode;
+    attackCyclesEl.value = p.cycles;
+    attackTrajEl.value = p.trajectory === 'direct' ? 'direct' : 'optimal';
+    attackUnsyncEl.checked = !!p.unsynced;
+    attackSel = new Set();
+    for (const g of (p.guns || [])) attackSel.add('c' + g.cannonId);
+    attackTargetSel = new Set((p.targets || []).map(t => Number(t.targetId)).filter(Number.isFinite));
+    // A target ticked in the registry may have been renamed since; match the
+    // stored coordinates too, so the boxes come back ticked either way.
+    for (const t of (p.targets || [])) {
+      const match = targets.find(x => Number(x.x) === Number(t.x) && Number(x.y) === Number(t.y) && Number(x.z) === Number(t.z));
+      if (match) attackTargetSel.add(Number(match.id));
+    }
+    renderAttackUnits();
+    renderAttackTargets();
+    document.getElementById('attack-form-title').textContent = 'Edit Attack Plan #' + p.id;
+    attackSaveBtn.textContent = 'Save Changes';
+    attackCancelEditBtn.style.display = '';
+  }
+
+  function localDateTimeValue(d) {
+    const pad = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+      'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+
+  function resetAttackForm() {
+    editingAttackId = null;
+    attackNameEl.value = '';
+    attackWhenEl.value = '';
+    attackModeEl.value = 'normal';
+    attackCyclesEl.value = '1';
+    attackTrajEl.value = 'optimal';
+    attackUnsyncEl.checked = false;
+    attackSel = new Set();
+    attackTargetSel = new Set();
+    renderAttackUnits();
+    renderAttackTargets();
+    document.getElementById('attack-form-title').textContent = 'Write an Attack Plan';
+    attackSaveBtn.textContent = 'Save Attack Plan';
+    attackCancelEditBtn.style.display = 'none';
+  }
+
+  async function saveAttackPlan() {
+    const name = attackNameEl.value.trim();
+    if (!name) { alert('Give the attack plan a name.'); return; }
+    if (!attackWhenEl.value) { alert('Give the plan a date and time to fire at.'); return; }
+    const gunIds = attackGunIds();
+    if (!gunIds.length) { alert('Tick the guns this plan should fire.'); return; }
+    if (!attackTargetSel.size) { alert('Tick at least one target for this plan.'); return; }
+
+    const chosen = targets.filter(t => attackTargetSel.has(Number(t.id)));
+    const payload = {
+      name: name,
+      // The browser's local wall-clock is what the officer typed; the ISO instant
+      // is what the server schedules against, so the conversion happens here.
+      scheduledAt: new Date(attackWhenEl.value).toISOString(),
+      mode: attackModeEl.value,
+      cycles: Number(attackCyclesEl.value) || 1,
+      trajectory: attackTrajEl.value === 'direct' ? 'direct' : 'optimal',
+      unsynced: attackModeEl.value === 'multi' && attackUnsyncEl.checked,
+      guns: gunIds.map(id => ({ cannonId: id })),
+      targets: chosen.map(t => targetQueueEntry(t)).filter(Boolean),
+    };
+    const editing = editingAttackId;
+    try {
+      const r = await fetch(editing ? '/api/ballistics/attack-plans/' + editing : '/api/ballistics/attack-plans', {
+        method: editing ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { alert(data.error || 'Could not save the attack plan.'); return; }
+    } catch (e) { alert('Could not reach the server.'); return; }
+    resetAttackForm();
+    await loadAttackPlans();
+  }
+
+  // ── Hidden registries: every cannon, ship and target, with its Hide/Show
+  //    state. Only reachable with the clearance, and every row is something the
+  //    reader can already see — the hidden ones are here precisely because this
+  //    reader IS entitled to them.
+  function renderHiddenRegistries() {
+    const rows = [];
+    for (const c of cannonsActive.concat(cannonsManaged)) {
+      rows.push({ kind: 'cannon', id: c.id, name: c.name || ('Cannon ' + c.id),
+        note: c.sublevel ? 'sublevel cannon' : 'cannon', hidden: !!c.hidden });
+    }
+    for (const v of vehiclesActive) {
+      rows.push({ kind: 'vehicle', id: v.id, name: v.name || ('Vehicle ' + v.id), note: 'ship', hidden: !!v.hidden });
+    }
+    for (const t of targets) {
+      rows.push({ kind: 'target', id: t.id, name: t.name, note: 'target', hidden: !!t.hidden });
+    }
+    hiddenListEl.innerHTML = rows.length
+      ? rows.map(r =>
+          '<div class="bombard-row">' +
+            '<span class="bombard-row__name">' + escHtml(r.name) + '</span>' +
+            '<span class="bombard-row__note">' + r.note + (r.hidden ? ' · hidden from others' : '') + '</span>' +
+            '<button class="map-btn' + (r.hidden ? '' : ' danger') + '" data-secret-kind="' + r.kind +
+              '" data-secret-id="' + r.id + '" data-secret-hidden="' + (r.hidden ? '1' : '0') + '">' +
+              (r.hidden ? 'Show' : 'Hide') + '</button>' +
+          '</div>').join('')
+      : '<div class="registry-empty">Nothing registered to hide yet.</div>';
+    wireSecretButtons();
+  }
+
+  function wireSecretButtons() {
+    document.querySelectorAll('[data-secret-kind]').forEach(b =>
+      b.addEventListener('click', () => toggleHidden(b.dataset.secretKind, b.dataset.secretId, b.dataset.secretHidden !== '1')));
+  }
+
+  // One field, one request — `hidden` is all that is sent, so a hide never has to
+  // repeat the name and coordinates it is not changing.
+  async function toggleHidden(kind, id, hidden) {
+    const url = kind === 'cannon' ? '/api/ballistics/cannons/' + id
+              : kind === 'vehicle' ? '/api/ballistics/vehicles/' + id
+              : '/api/ballistics/targets/' + id;
+    try {
+      const r = await fetch(url, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hidden: hidden }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { alert(data.error || 'Could not change that entry.'); return; }
+    } catch (e) { alert('Could not reach the server.'); return; }
+    if (kind === 'cannon') await loadCannons();
+    else if (kind === 'vehicle') await loadVehicles();
+    else await loadTargets();
+  }
+
+  attackUnitBtnEl.addEventListener('click', () => setAttackPicker('unit', attackUnitPanelEl.hidden));
+  attackTargetBtnEl.addEventListener('click', () => setAttackPicker('target', attackTargetPanelEl.hidden));
+  document.addEventListener('click', (e) => {
+    if (!attackUnitEl.contains(e.target)) setAttackPicker('unit', false);
+    if (!attackTargetEl.contains(e.target)) setAttackPicker('target', false);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    setAttackPicker('unit', false);
+    setAttackPicker('target', false);
+  });
+  attackUnitPanelEl.addEventListener('change', (e) => {
+    const box = e.target.closest('[data-attack-unit]');
+    if (!box) return;
+    const token = box.dataset.attackUnit;
+    if (box.checked) attackSel.add(token); else attackSel.delete(token);
+    updateAttackUnitLabel();
+  });
+  attackTargetPanelEl.addEventListener('change', (e) => {
+    const box = e.target.closest('[data-attack-target]');
+    if (!box) return;
+    const id = Number(box.dataset.attackTarget);
+    if (box.checked) attackTargetSel.add(id); else attackTargetSel.delete(id);
+    updateAttackTargetLabel();
+  });
+  attackSaveBtn.addEventListener('click', () => { saveAttackPlan().catch(() => alert('Could not reach the server.')); });
+  attackCancelEditBtn.addEventListener('click', resetAttackForm);
+
+  renderAttackUnits();
+  renderAttackTargets();
+  renderAttackPlans();
+  renderHiddenRegistries();
 
   function renderRegistry() {
     const activeEl  = document.getElementById('cannon-active-list');
@@ -3324,6 +4261,7 @@
       // whenever this changes.
       renderBombardUnits();
       renderVehicleDots();
+      if (hasSecretRole) { renderAttackUnits(); renderHiddenRegistries(); }
       if (!light) { renderVehicles(); renderRegistry(); }
     } catch (e) { console.warn('Could not load vehicle registry.', e); }
   }
@@ -4351,20 +5289,35 @@
   }
 
   function setTab(which) {
-    const tabs   = { calc: 'tab-calc', cannons: 'tab-cannons', vehicles: 'tab-vehicles', gps: 'tab-gps', presets: 'tab-presets', log: 'tab-log' };
-    const panels = { calc: 'calc-panel', cannons: 'registry-panel', vehicles: 'vehicles-panel', gps: 'gps-panel', presets: 'presets-panel', log: 'log-panel' };
+    const tabs   = { calc: 'tab-calc', targets: 'tab-targets', cannons: 'tab-cannons', vehicles: 'tab-vehicles', gps: 'tab-gps', presets: 'tab-presets', log: 'tab-log', secret: 'tab-secret' };
+    const panels = { calc: 'calc-panel', targets: 'targets-panel', cannons: 'registry-panel', vehicles: 'vehicles-panel', gps: 'gps-panel', presets: 'presets-panel', log: 'log-panel', secret: 'secret-panel' };
     Object.keys(panels).forEach(k => {
       document.getElementById(tabs[k]).classList.toggle('active', k === which);
       document.getElementById(panels[k]).style.display = (k === which) ? '' : 'none';
     });
+    // Leaving the Target Registry cancels a pending map pick, so a click on the
+    // map later is not silently swallowed by a form that is no longer on screen.
+    if (which !== 'targets') setTargetPickArmed(false);
   }
 
   document.getElementById('tab-calc').addEventListener('click', () => setTab('calc'));
+  document.getElementById('tab-targets').addEventListener('click', () => { setTab('targets'); resetTargetForm(); loadTargets(); });
   document.getElementById('tab-cannons').addEventListener('click', () => { setTab('cannons'); loadCannons(); renderGps(); });
   document.getElementById('tab-vehicles').addEventListener('click', () => { setTab('vehicles'); loadCannons().then(loadVehicles); });
   document.getElementById('tab-gps').addEventListener('click', () => { setTab('gps'); loadCannons().then(() => { renderGps(); }); loadTowers(); });
   document.getElementById('tab-presets').addEventListener('click', () => { setTab('presets'); resetPresetForm(); loadPresets(); });
   document.getElementById('tab-log').addEventListener('click', () => { setTab('log'); loadFireLog(); });
+  document.getElementById('tab-secret').addEventListener('click', () => {
+    setTab('secret');
+    // The panel's three lists are built from three registries, so all three are
+    // re-read rather than trusting whatever the Calculator tab happened to load.
+    Promise.resolve()
+      .then(() => loadCannons())
+      .then(() => loadVehicles())
+      .then(() => loadTargets())
+      .then(() => loadAttackPlans())
+      .catch(() => {});
+  });
 
   // Keep the map dots fresh: sublevel cannons push new GPS coordinates every
   // ~3s, so poll on the same cadence. While the registry tab is open we skip
@@ -4389,17 +5342,26 @@
   function logTabOpen() {
     return document.getElementById('log-panel').style.display !== 'none';
   }
+  // The Target Registry's list is only ever changed from this page, so it needs
+  // no poll of its own — the slow refresh below keeps the Calculator's pickers
+  // in step with names changed in another officer's tab.
+  function targetsTabOpen() {
+    return document.getElementById('targets-panel').style.display !== 'none';
+  }
   let cannonsPollBusy = false;
   setInterval(async () => {
     if (cannonsPollBusy) return;
     cannonsPollBusy = true;
     try {
-      await loadCannons({ light: registryTabOpen() || gpsTabOpen() || vehiclesTabOpen() || presetsTabOpen() || logTabOpen() });
+      await loadCannons({ light: registryTabOpen() || gpsTabOpen() || vehiclesTabOpen() || presetsTabOpen() || logTabOpen() || targetsTabOpen() });
       if (gpsTabOpen()) renderGps();
       // A live firing order needs the ships' current headings even when this
       // officer is on the Calculator tab: a sublevel gun's aim is measured
       // against its ship's, and the ship can turn mid-barrage.
       if (vehiclesTabOpen() || bombardPlan) await loadVehicles({ light: true });
+      // Named targets are shared, so another officer may have added or moved one
+      // since this page loaded — the Calculator's pickers follow it.
+      await loadTargets({ light: targetsTabOpen() });
     } finally { cannonsPollBusy = false; }
   }, 3000);
 
@@ -4424,13 +5386,21 @@
     gate.style.display = 'none';
     app.style.display  = 'flex';
     userBadge.textContent = user.username + ' · ' + user.role;
+    // The secret clearance is decided here, once, from the account's own roles —
+    // and the panel is revealed (or hidden, if it was revoked between sessions)
+    // before anything on it is loaded. The WORKER enforces it again on every
+    // route the panel uses, so this is presentation, not the lock.
+    hasSecretRole = userHasRole(user, 'ballistics-secret') || userHasRole(user, 'admin');
+    applySecretVisibility();
     // Load the registries first: a firing order that is still live has to be
     // reattached to the guns it names, so the scheduler needs them to exist.
     Promise.resolve()
       .then(() => loadCannons())
       .then(() => loadVehicles())
+      .then(() => loadTargets())
       .then(() => resumeBombardment())
       .then(() => loadTowers())
+      .then(() => { if (hasSecretRole) return loadAttackPlans(); })
       .catch(() => {});
     setTimeout(() => map.invalidateSize(), 50);
   }

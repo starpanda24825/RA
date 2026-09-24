@@ -1291,7 +1291,7 @@ export async function acceptCannon(env, id) {
 // `charges` is the gun's own powder count and lands in migration 0021; a cannon
 // whose database predates it keeps every other edit rather than failing whole.
 export async function updateCannon(env, id, fields) {
-  const run = async (withCharges) => {
+  const run = async (withCharges, withHidden) => {
     const sets = [];
     const binds = [];
     if (fields.name !== undefined)     { sets.push('name = ?');     binds.push(String(fields.name).slice(0, 80)); }
@@ -1302,17 +1302,35 @@ export async function updateCannon(env, id, fields) {
     if (fields.facing !== undefined)   { sets.push('facing = ?');   binds.push(Number(fields.facing) || 0); }
     if (fields.sublevel !== undefined) { sets.push('sublevel = ?'); binds.push(fields.sublevel ? 1 : 0); }
     if (withCharges)                   { sets.push('charges = ?');  binds.push(clampCharges(fields.charges)); }
+    if (withHidden)                    { sets.push('hidden = ?');   binds.push(fields.hidden ? 1 : 0); }
     if (!sets.length) return;
     sets.push('updated_at = ?');
     binds.push(nowIso(), Number(id));
     await env.DB.prepare(`UPDATE ballistics_cannons SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
   };
-  if (fields.charges === undefined) { await run(false); return findCannonById(env, id); }
-  try {
-    await run(true);
-  } catch (err) {
-    console.warn('Cannon charges unavailable (run migration 0021?) — keeping the other edits.', err);
-    await run(false);
+  // `charges` (0021) and `hidden` (0023) are each a column of their own, and an
+  // unapplied migration must cost only that field, never the rest of the edit —
+  // renaming a cannon on a database that predates 0023 still has to work. So each
+  // optional column is dropped, newest first, and the write is retried.
+  let withCharges = fields.charges !== undefined;
+  let withHidden  = fields.hidden  !== undefined;
+  for (;;) {
+    try {
+      await run(withCharges, withHidden);
+      break;
+    } catch (err) {
+      if (withHidden) {
+        withHidden = false;
+        console.warn('Cannon hidden flag unavailable (run migration 0023?) — keeping the other edits.', err);
+        continue;
+      }
+      if (withCharges) {
+        withCharges = false;
+        console.warn('Cannon charges unavailable (run migration 0021?) — keeping the other edits.', err);
+        continue;
+      }
+      throw err;
+    }
   }
   return findCannonById(env, id);
 }
@@ -1462,13 +1480,9 @@ function planGunIds(gunsJson) {
 // Shots are appended by the operator's page (which is the only place the
 // ballistics solver lives) and handed out one at a time by promoteQueuedShot.
 
-export async function insertFirePlan(env, { mode, cycles, targets, guns, crew, drag, charges, trajectory }) {
+export async function insertFirePlan(env, { mode, cycles, targets, guns, crew, drag, charges, trajectory, unsynced }) {
   const now = nowIso();
-  const result = await env.DB.prepare(
-    `INSERT INTO ballistics_fire_plans
-       (mode, state, cycles, targets, guns, crew, drag, charges, trajectory, created_at, updated_at)
-     VALUES (?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(
+  const values = [
     mode, Math.max(1, Math.min(999, Math.round(Number(cycles) || 1))),
     JSON.stringify(targets || []), JSON.stringify(guns || []),
     crew == null ? null : String(crew).slice(0, 80),
@@ -1482,8 +1496,27 @@ export async function insertFirePlan(env, { mode, cycles, targets, guns, crew, d
     drag == null ? null : (Number.isFinite(Number(drag)) ? Number(drag) : null),
     charges == null ? null : (Number.isFinite(Number(charges)) ? Math.round(Number(charges)) : null),
     trajectory == null ? null : String(trajectory).slice(0, 16),
-    now, now
-  ).run();
+    now, now,
+  ];
+  const insert = (withUnsynced) => env.DB.prepare(
+    withUnsynced
+      ? `INSERT INTO ballistics_fire_plans
+           (mode, state, cycles, targets, guns, crew, drag, charges, trajectory, unsynced, created_at, updated_at)
+         VALUES (?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      : `INSERT INTO ballistics_fire_plans
+           (mode, state, cycles, targets, guns, crew, drag, charges, trajectory, created_at, updated_at)
+         VALUES (?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(...(withUnsynced ? values.slice(0, 9).concat(unsynced ? 1 : 0, values.slice(9)) : values));
+
+  let result;
+  try {
+    result = await insert(true);
+  } catch (err) {
+    // 0024 not applied: the share/every-gun choice cannot be recorded, so the
+    // order falls back to the shared queue this page has always used.
+    console.warn('Fire plan unsynced flag unavailable (run migration 0024?) — the queue stays shared.', err);
+    result = await insert(false);
+  }
   return findFirePlanById(env, result.meta.last_row_id);
 }
 
@@ -1493,11 +1526,32 @@ export async function findFirePlanById(env, id) {
 
 // Plans that are still live, newest first — how a page that was reloaded
 // mid-barrage finds the order it was running.
+//
+// An order opened by a scheduled attack is deliberately NOT in this list. This
+// is what resumeBombardment() adopts, and a page must not adopt a barrage the
+// Worker is feeding: the page would apply its own completion rule to it, and its
+// rule reads a deep server-side queue as "every gun has finished" — which would
+// close a scheduled attack the moment an officer happened to open the
+// calculator. Officers watch those from the Secret Panel instead.
 export async function listActiveFirePlans(env) {
-  const { results } = await env.DB.prepare(
-    "SELECT * FROM ballistics_fire_plans WHERE state IN ('running', 'paused') ORDER BY id DESC LIMIT 20"
-  ).all();
-  return results;
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT p.* FROM ballistics_fire_plans p
+        WHERE p.state IN ('running', 'paused')
+          AND NOT EXISTS (
+            SELECT 1 FROM ballistics_attack_plans a
+             WHERE a.fire_plan_id = p.id AND a.state = 'running')
+        ORDER BY p.id DESC LIMIT 20`
+    ).all();
+    return results;
+  } catch (err) {
+    // 0024 not applied: nothing is scheduled, so every live order is adoptable.
+    console.warn('Scheduled attack plans unavailable (run migration 0024?) — listing every live order.', err);
+    const { results } = await env.DB.prepare(
+      "SELECT * FROM ballistics_fire_plans WHERE state IN ('running', 'paused') ORDER BY id DESC LIMIT 20"
+    ).all();
+    return results;
+  }
 }
 
 // The missing-column warning is worth saying once per worker, not once per shot.
@@ -2227,14 +2281,26 @@ export async function acceptVehicle(env, id) {
 }
 
 export async function updateVehicle(env, id, fields) {
-  const sets = [];
-  const binds = [];
-  if (fields.name !== undefined)    { sets.push('name = ?');    binds.push(String(fields.name).slice(0, 80)); }
-  if (fields.message !== undefined) { sets.push('message = ?'); binds.push(String(fields.message).slice(0, 200)); }
-  if (!sets.length) return findVehicleById(env, id);
-  sets.push('updated_at = ?');
-  binds.push(nowIso(), Number(id));
-  await env.DB.prepare(`UPDATE ballistics_vehicles SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
+  const run = async (withHidden) => {
+    const sets = [];
+    const binds = [];
+    if (fields.name !== undefined)    { sets.push('name = ?');    binds.push(String(fields.name).slice(0, 80)); }
+    if (fields.message !== undefined) { sets.push('message = ?'); binds.push(String(fields.message).slice(0, 200)); }
+    // The secret panel's hide/show toggle. Dropped and retried if 0023 is not
+    // applied, so a rename still lands on a database without the column.
+    if (withHidden)                   { sets.push('hidden = ?');  binds.push(fields.hidden ? 1 : 0); }
+    if (!sets.length) return;
+    sets.push('updated_at = ?');
+    binds.push(nowIso(), Number(id));
+    await env.DB.prepare(`UPDATE ballistics_vehicles SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
+  };
+  try {
+    await run(fields.hidden !== undefined);
+  } catch (err) {
+    if (fields.hidden === undefined) throw err;
+    console.warn('Vehicle hidden flag unavailable (run migration 0023?) — keeping the other edits.', err);
+    await run(false);
+  }
   return findVehicleById(env, id);
 }
 
@@ -2285,5 +2351,170 @@ export async function updateCannonTelemetry(env, id, { x, y, z, gpsOk, yaw, pitc
     await write({ sets: [], binds: [] });
   }
   return findCannonById(env, id);
+}
+
+// ---------- named targets (ballistics) ----------
+//
+// A target is a place, given a name so it can be picked off a list instead of
+// retyped: the calculator's "select one" dropdown for Normal and Constant, the
+// tickbox list that fills the Multi-Target queue, and the scheduled attack plans
+// in the secret panel, which have no page to read coordinates from.
+//
+// `hidden` (0023) takes a target out of every response to a reader without the
+// 'ballistics-secret' role. The filtering is done by the routes, which is the
+// only layer that knows who is asking; this layer returns whole rows.
+export async function listTargets(env) {
+  const { results } = await env.DB.prepare(
+    'SELECT * FROM ballistics_targets ORDER BY name COLLATE NOCASE ASC, id ASC'
+  ).all();
+  return results;
+}
+
+export async function findTargetById(env, id) {
+  return env.DB.prepare('SELECT * FROM ballistics_targets WHERE id = ?').bind(Number(id)).first();
+}
+
+export async function insertTarget(env, { name, x, y, z, hidden, createdBy }) {
+  const now = nowIso();
+  const result = await env.DB.prepare(
+    `INSERT INTO ballistics_targets (name, x, y, z, hidden, created_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    String(name || '').slice(0, 80),
+    Number(x) || 0, targetY(y), Number(z) || 0,
+    hidden ? 1 : 0,
+    createdBy == null ? null : String(createdBy).slice(0, 80),
+    now, now
+  ).run();
+  return findTargetById(env, result.meta.last_row_id);
+}
+
+export async function updateTarget(env, id, fields) {
+  const sets = [];
+  const binds = [];
+  if (fields.name !== undefined)   { sets.push('name = ?');   binds.push(String(fields.name).slice(0, 80)); }
+  if (fields.x !== undefined)      { sets.push('x = ?');      binds.push(Number(fields.x) || 0); }
+  if (fields.y !== undefined)      { sets.push('y = ?');      binds.push(targetY(fields.y)); }
+  if (fields.z !== undefined)      { sets.push('z = ?');      binds.push(Number(fields.z) || 0); }
+  if (fields.hidden !== undefined) { sets.push('hidden = ?'); binds.push(fields.hidden ? 1 : 0); }
+  if (!sets.length) return findTargetById(env, id);
+  sets.push('updated_at = ?');
+  binds.push(nowIso(), Number(id));
+  await env.DB.prepare(`UPDATE ballistics_targets SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
+  return findTargetById(env, id);
+}
+
+export async function deleteTarget(env, id) {
+  await env.DB.prepare('DELETE FROM ballistics_targets WHERE id = ?').bind(Number(id)).run();
+}
+
+// A target with no height given is at sea level, which is what the calculator
+// itself assumes when an officer leaves Y blank.
+function targetY(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 64;
+}
+
+// ---------- scheduled attack plans (ballistics, secret panel) ----------
+//
+// A standing order: guns, targets, mode, and the moment it should open fire.
+// Launched by an authorised officer early, or by the cron when its moment comes
+// with nobody watching — see worker/lib/attack-scheduler.js, which does the
+// aiming that a closed calculator page cannot.
+//
+// Launching opens a row in ballistics_fire_plans and stores its id here, so the
+// attack drains through the ordinary queue: it draws on the live map and lands
+// in the Firing Log exactly like a hand-fired order, with one place that decides
+// how shots are handed out.
+export async function listAttackPlans(env) {
+  const { results } = await env.DB.prepare(
+    'SELECT * FROM ballistics_attack_plans ORDER BY scheduled_at ASC, id ASC'
+  ).all();
+  return results;
+}
+
+export async function findAttackPlanById(env, id) {
+  return env.DB.prepare('SELECT * FROM ballistics_attack_plans WHERE id = ?').bind(Number(id)).first();
+}
+
+// Only the plans whose moment has come. The cron's hot query, hence the index
+// on (state, scheduled_at) in migration 0024.
+export async function listDueAttackPlans(env, now) {
+  const { results } = await env.DB.prepare(
+    "SELECT * FROM ballistics_attack_plans WHERE state = 'scheduled' AND scheduled_at != '' AND scheduled_at <= ? ORDER BY scheduled_at ASC"
+  ).bind(String(now)).all();
+  return results;
+}
+
+// Launched plans the cron is still feeding.
+export async function listRunningAttackPlans(env) {
+  const { results } = await env.DB.prepare(
+    "SELECT * FROM ballistics_attack_plans WHERE state = 'running' ORDER BY id ASC"
+  ).all();
+  return results;
+}
+
+export async function insertAttackPlan(env, fields) {
+  const now = nowIso();
+  const result = await env.DB.prepare(
+    `INSERT INTO ballistics_attack_plans
+       (name, mode, cycles, targets, guns, trajectory, drag, charges, unsynced,
+        scheduled_at, state, created_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?)`
+  ).bind(
+    String(fields.name || '').slice(0, 80),
+    fields.mode === 'constant' || fields.mode === 'multi' ? fields.mode : 'normal',
+    Math.max(1, Math.min(999, Math.round(Number(fields.cycles) || 1))),
+    JSON.stringify(fields.targets || []),
+    JSON.stringify(fields.guns || []),
+    fields.trajectory === 'direct' ? 'direct' : 'optimal',
+    fields.drag == null ? null : (Number.isFinite(Number(fields.drag)) ? Number(fields.drag) : null),
+    fields.charges == null ? null : (Number.isFinite(Number(fields.charges)) ? Math.round(Number(fields.charges)) : null),
+    fields.unsynced ? 1 : 0,
+    String(fields.scheduledAt || '').slice(0, 40),
+    fields.createdBy == null ? null : String(fields.createdBy).slice(0, 80),
+    now, now
+  ).run();
+  return findAttackPlanById(env, result.meta.last_row_id);
+}
+
+// Editing a plan. Callers only ever edit one that has not launched, but the
+// state check is repeated here so no route can rewrite a plan that is already
+// firing.
+export async function updateAttackPlan(env, id, fields) {
+  const plan = await findAttackPlanById(env, id);
+  if (!plan || plan.state !== 'scheduled') return plan || null;
+  const sets = [];
+  const binds = [];
+  if (fields.name !== undefined)        { sets.push('name = ?');        binds.push(String(fields.name).slice(0, 80)); }
+  if (fields.mode !== undefined)        { sets.push('mode = ?');        binds.push(fields.mode === 'constant' || fields.mode === 'multi' ? fields.mode : 'normal'); }
+  if (fields.cycles !== undefined)      { sets.push('cycles = ?');      binds.push(Math.max(1, Math.min(999, Math.round(Number(fields.cycles) || 1)))); }
+  if (fields.targets !== undefined)     { sets.push('targets = ?');     binds.push(JSON.stringify(fields.targets || [])); }
+  if (fields.guns !== undefined)        { sets.push('guns = ?');        binds.push(JSON.stringify(fields.guns || [])); }
+  if (fields.trajectory !== undefined)  { sets.push('trajectory = ?');  binds.push(fields.trajectory === 'direct' ? 'direct' : 'optimal'); }
+  if (fields.drag !== undefined)        { sets.push('drag = ?');        binds.push(fields.drag == null ? null : Number(fields.drag)); }
+  if (fields.charges !== undefined)     { sets.push('charges = ?');     binds.push(fields.charges == null ? null : Math.round(Number(fields.charges))); }
+  if (fields.unsynced !== undefined)    { sets.push('unsynced = ?');    binds.push(fields.unsynced ? 1 : 0); }
+  if (fields.scheduledAt !== undefined) { sets.push('scheduled_at = ?'); binds.push(String(fields.scheduledAt).slice(0, 40)); }
+  if (!sets.length) return plan;
+  sets.push('updated_at = ?');
+  binds.push(nowIso(), Number(id));
+  await env.DB.prepare(`UPDATE ballistics_attack_plans SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
+  return findAttackPlanById(env, id);
+}
+
+// Move a plan through its life. `firePlanId` is written once, when the plan
+// launches, and is what ties the standing order to the live one.
+export async function setAttackPlanState(env, id, state, firePlanId) {
+  const sets = ['state = ?', 'updated_at = ?'];
+  const binds = [String(state), nowIso()];
+  if (firePlanId !== undefined) { sets.push('fire_plan_id = ?', 'launched_at = ?'); binds.push(firePlanId == null ? null : Number(firePlanId), nowIso()); }
+  binds.push(Number(id));
+  await env.DB.prepare(`UPDATE ballistics_attack_plans SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
+  return findAttackPlanById(env, id);
+}
+
+export async function deleteAttackPlan(env, id) {
+  await env.DB.prepare('DELETE FROM ballistics_attack_plans WHERE id = ?').bind(Number(id)).run();
 }
 

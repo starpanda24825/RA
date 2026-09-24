@@ -210,6 +210,7 @@
           <div id="nu-roles-checkboxes" style="display:flex;flex-wrap:wrap;gap:6px 14px;padding-top:3px;">
             <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;color:var(--parchment-dim);text-transform:none;font-family:var(--font-body);cursor:pointer;"><input type="checkbox" value="citizen" checked /> Citizen</label>
             <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;color:var(--parchment-dim);text-transform:none;font-family:var(--font-body);cursor:pointer;"><input type="checkbox" value="ballistics" /> Ballistics Clearance</label>
+            <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;color:var(--parchment-dim);text-transform:none;font-family:var(--font-body);cursor:pointer;"><input type="checkbox" value="ballistics-secret" /> Ballistics — Secret</label>
             <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;color:var(--parchment-dim);text-transform:none;font-family:var(--font-body);cursor:pointer;"><input type="checkbox" value="editor" /> Editor</label>
             <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;color:var(--parchment-dim);text-transform:none;font-family:var(--font-body);cursor:pointer;"><input type="checkbox" value="banker" /> Banker</label>
             <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;color:var(--parchment-dim);text-transform:none;font-family:var(--font-body);cursor:pointer;"><input type="checkbox" value="adapter" /> Adapter</label>
@@ -1123,7 +1124,9 @@
   }
 
   // ── Users management (admin only) ──────────────────────────────
-  function roleLabel(r) { return r.charAt(0).toUpperCase() + r.slice(1); }
+  // The one role whose name is two words: split on the dash and title-case each
+  // part, so it reads as "Ballistics Secret" rather than "Ballistics-secret".
+  function roleLabel(r) { return String(r).split('-').map(function(p) { return p.charAt(0).toUpperCase() + p.slice(1); }).join(' '); }
 
   async function loadUsers() {
     if (!me || !userHasRole(me, 'admin')) return;
@@ -1139,7 +1142,7 @@
         <td>
           <select class="a-select role-select" data-id="${u.id}" data-roles="${escapeHtml(u.role)}" style="font-size:11px;padding:4px 8px;">
             <option value="">+ Add role…</option>
-            ${['citizen','ballistics','editor','banker','adapter','admin'].map(function(r) { return '<option value="' + r + '">' + roleLabel(r) + '</option>'; }).join('')}
+            ${['citizen','ballistics','ballistics-secret','editor','banker','adapter','admin'].map(function(r) { return '<option value="' + r + '">' + roleLabel(r) + '</option>'; }).join('')}
           </select>
           <button class="a-btn danger" data-del="${u.id}">Delete</button>
         </td>

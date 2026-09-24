@@ -24,6 +24,10 @@
 		}
 	],
 	"triggers": {
-		"crons": ["*/5 * * * *", "0 * * * *", "0 20 * * *", "0 8 * * *"]
+		// Every minute drives the scheduled attack plans (worker/lib/attack-scheduler.js):
+		// it launches any plan whose moment has come and keeps every launched plan's
+		// shot queue topped up, so an attack fires with no calculator page open. The
+		// rest are the market, banking and settlement timers.
+		"crons": ["* * * * *", "*/5 * * * *", "0 * * * *", "0 20 * * *", "0 8 * * *"]
 	}
 }

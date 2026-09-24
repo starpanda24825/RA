@@ -7,6 +7,7 @@
    ============================================================ */
 
 import * as store from '../lib/store.js';
+import * as attackScheduler from '../lib/attack-scheduler.js';
 import { getCurrentUser, hasRole } from './auth.js';
 
 function json(data, init = {}) {
@@ -22,6 +23,40 @@ async function requireBallistics(request, env) {
     return { error: json({ error: 'Your account does not have Crown clearance for this system.' }, { status: 403 }) };
   }
   return { user };
+}
+
+// The second, narrower clearance: the Secret Panel, the hidden registries and
+// the scheduled attack plans. Admin holds it implicitly — an admin can grant
+// themselves the role anyway, so pretending otherwise would only be theatre.
+function isSecret(user) {
+  return hasRole(user, 'ballistics-secret') || hasRole(user, 'admin');
+}
+
+async function requireSecret(request, env) {
+  const auth = await requireBallistics(request, env);
+  if (auth.error) return auth;
+  if (!isSecret(auth.user)) {
+    return { error: json({ error: 'This panel requires the secret ordnance clearance.' }, { status: 403 }) };
+  }
+  return auth;
+}
+
+// A hidden entry is withheld from everyone without the secret clearance. The
+// column only exists from migration 0023, and an absent column must read as
+// "visible": on a database that predates it there is nothing being hidden.
+function isHidden(row) {
+  return Number(row && row.hidden) === 1;
+}
+
+function hideFrom(rows, canSeeHidden) {
+  return canSeeHidden ? rows : rows.filter((r) => !isHidden(r));
+}
+
+// The registry rows carry `hidden` through to the page so the secret panel can
+// draw its toggle, and so an officer who CAN see a hidden entry knows it is
+// one. Booleans rather than 0/1 keep the page's checks readable.
+function withHidden(row) {
+  return { ...row, hidden: isHidden(row) };
 }
 
 // GET /api/ballistics/cannons → { active: [...], managed: [...], pending: [...] }
@@ -52,10 +87,15 @@ export async function listCannons(request, env) {
   const isManaged = (r) =>
     r.status === 'active' && r.vehicle_id != null && activeVehicleIds.has(Number(r.vehicle_id));
 
+  // Hidden cannons are withheld here and ONLY here: the CC bridge keeps polling
+  // them by id, so an entry the secret panel has taken out of the registry goes
+  // on being aimed and fired exactly as before.
+  const visible = hideFrom(rows, isSecret(auth.user)).map(withHidden);
+
   return json({
-    active:  rows.filter((r) => r.status === 'active' && !isManaged(r)),
-    managed: rows.filter(isManaged),
-    pending: rows.filter((r) => r.status === 'pending'),
+    active:  visible.filter((r) => r.status === 'active' && !isManaged(r)),
+    managed: visible.filter(isManaged),
+    pending: visible.filter((r) => r.status === 'pending'),
   });
 }
 
@@ -117,8 +157,13 @@ export async function listVehicles(request, env) {
     console.warn('Could not list vehicles (run migration 0016?)', err);
   }
 
+  // A hidden cannon is withheld from this listing too, and from the gun list of
+  // the ship it is on: withholding the gun but not the ship would leak it, and
+  // the ship's complement is part of what the clearance protects.
+  const canSeeHidden = isSecret(auth.user);
+
   const byVehicle = new Map();
-  for (const c of cannonRows || []) {
+  for (const c of hideFrom(cannonRows || [], canSeeHidden)) {
     if (c.vehicle_id == null) continue;
     const key = Number(c.vehicle_id);
     if (!byVehicle.has(key)) byVehicle.set(key, []);
@@ -143,13 +188,14 @@ export async function listVehicles(request, env) {
   }
 
   const shape = (v) => ({
-    ...v,
+    ...withHidden(v),
     cannons: byVehicle.get(Number(v.id)) || [],
   });
 
+  const visible = hideFrom(rows || [], canSeeHidden);
   return json({
-    active:  (rows || []).filter((v) => v.status === 'active').map(shape),
-    pending: (rows || []).filter((v) => v.status !== 'active').map(shape),
+    active:  visible.filter((v) => v.status === 'active').map(shape),
+    pending: visible.filter((v) => v.status !== 'active').map(shape),
   });
 }
 
@@ -178,6 +224,8 @@ export async function updateVehicle(request, env, id) {
   if (body.name !== undefined && !fields.name) {
     return json({ error: 'Vehicle name cannot be empty.' }, { status: 400 });
   }
+  // Secret panel only — see the note on updateCannon.
+  if (body.hidden !== undefined && isSecret(auth.user)) fields.hidden = !!body.hidden;
 
   const vehicle = await store.updateVehicle(env, id, fields);
   return json(vehicle);
@@ -256,6 +304,11 @@ export async function updateCannon(request, env, id) {
   if (body.facing !== undefined)   fields.facing   = Number(body.facing);
   if (body.sublevel !== undefined) fields.sublevel = !!body.sublevel;
   if (body.charges !== undefined)  fields.charges  = Number(body.charges);
+  // Hiding is the secret panel's, and only the secret panel's. Filtering the
+  // flag here rather than rejecting the request keeps an ordinary edit — a
+  // rename, a charges slider — working for a caller that merely echoed a row
+  // back, while an unauthorised attempt to hide something simply does nothing.
+  if (body.hidden !== undefined && isSecret(auth.user)) fields.hidden = !!body.hidden;
 
   // A name that is SENT may not be blank; a request that says nothing about the
   // name is an edit of something else — moving a charges slider must not be
@@ -411,6 +464,9 @@ function planView(plan) {
     drag:       plan.drag == null ? null : Number(plan.drag),
     charges:    plan.charges == null ? null : Number(plan.charges),
     trajectory: plan.trajectory || null,
+    // Multi-Target's share-versus-every-gun choice. Absent (0024 outstanding)
+    // reads as false, which is the shared queue the page used before it existed.
+    unsynced:   Number(plan.unsynced) === 1,
   };
 }
 
@@ -439,6 +495,23 @@ async function resolvePlanGuns(env, guns) {
   return { guns: out };
 }
 
+// Targets arrive as loose objects from two different pages (the calculator's
+// queue and the secret panel's plan creator), so the shape is normalised in one
+// place: a key that is stable enough to count against, a Y that defaults to sea
+// level, and every field bounded so a rogue label cannot grow a row.
+function parsePlanTargets(raw) {
+  const out = [];
+  for (const t of (Array.isArray(raw) ? raw : []).slice(0, 200)) {
+    const x = Number(t && t.x);
+    const z = Number(t && t.z);
+    if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
+    const y = Number.isFinite(Number(t && t.y)) ? Number(t.y) : 64;
+    const key = String((t && t.key) || (x + ',' + y + ',' + z)).slice(0, 48);
+    out.push({ key, x, y, z, label: String((t && t.label) || key).slice(0, 60) });
+  }
+  return out;
+}
+
 // POST /api/ballistics/fire-plans — open a firing order.
 // Body: { mode, cycles, targets: [{ key, x, y, z, label }], guns: [{ cannonId }] }
 export async function createFirePlan(request, env) {
@@ -452,20 +525,19 @@ export async function createFirePlan(request, env) {
   const mode = FIRE_MODES.includes(String(body.mode)) ? String(body.mode) : null;
   if (!mode) return json({ error: 'mode must be normal, constant or multi.' }, { status: 400 });
 
+  // Multi-Target only: fire at every target with every gun rather than splitting
+  // the queue. Stored on the order because it changes what the queue means, and
+  // the server side of a scheduled attack has nobody to ask.
+  const unsynced = mode === 'multi' && !!body.unsynced;
+
   const resolved = await resolvePlanGuns(env, body.guns);
   if (resolved.error) return json({ error: resolved.error }, { status: 400 });
 
   // Targets are kept so a reloaded page can carry on with the same order. They
-  // are never used to aim: every shot arrives with its own yaw and pitch.
-  const targets = [];
-  for (const t of (Array.isArray(body.targets) ? body.targets : []).slice(0, 200)) {
-    const x = Number(t && t.x);
-    const z = Number(t && t.z);
-    if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
-    const y = Number.isFinite(Number(t && t.y)) ? Number(t.y) : 64;
-    const key = String((t && t.key) || (x + ',' + y + ',' + z)).slice(0, 48);
-    targets.push({ key, x, y, z, label: String((t && t.label) || key).slice(0, 60) });
-  }
+  // are never used to aim: every shot arrives with its own yaw and pitch. A
+  // scheduled attack is the exception the shape was chosen for — it works its
+  // aim out server-side, from these very coordinates.
+  const targets = parsePlanTargets(body.targets);
   if (!targets.length) return json({ error: 'A firing order needs at least one target.' }, { status: 400 });
 
   // The launch parameters the operator's page solved with. Frozen here rather
@@ -477,13 +549,20 @@ export async function createFirePlan(request, env) {
   try {
     const plan = await store.insertFirePlan(env, {
       mode,
-      cycles: mode === 'multi' ? Math.max(1, Math.min(999, Math.round(Number(body.cycles) || 1))) : 1,
+      // Normal carries a pass count too (0023's arithmetic is the same as
+      // Constant's, minus the waiting): the order fires each gun that many times
+      // and then closes itself, where Constant runs until it is stopped.
+      // Constant is the one mode with no count — it is open-ended by definition.
+      cycles: mode === 'constant'
+        ? 1
+        : Math.max(1, Math.min(999, Math.round(Number(body.cycles) || 1))),
       targets,
       guns: resolved.guns,
       crew: auth.user && auth.user.username,
       drag: Number.isFinite(drag) && drag > 0 && drag <= 1 ? drag : null,
       charges: Number.isFinite(charges) && charges > 0 ? Math.min(99, Math.round(charges)) : null,
       trajectory: body.trajectory === 'direct' ? 'direct' : 'optimal',
+      unsynced: unsynced,
     });
     return json({ ok: true, plan: planView(plan) });
   } catch (err) {
@@ -692,5 +771,333 @@ export async function deletePreset(request, env, id) {
   const existing = await store.findReloadPresetById(env, id);
   if (!existing) return json({ error: 'Preset not found.' }, { status: 404 });
   await store.deleteReloadPreset(env, id);
+  return json({ ok: true });
+}
+
+// ════════════════════════════════════════════
+//  Named targets
+//    A place with a name, so it can be picked off a list rather than retyped:
+//    the Calculator's "select a target" dropdown for Normal and Constant, the
+//    tickbox list that fills the Multi-Target queue, and the scheduled attack
+//    plans, which have no page to read coordinates off.
+//
+//    Targets are shared, like every other registry here — an officer naming a
+//    battery is giving the name to everyone with clearance. `hidden` (migration
+//    0023) is the exception: a hidden target is withheld from every reader
+//    without the 'ballistics-secret' role, and the filtering happens here rather
+//    than in the page, so the coordinates never reach an unentitled client.
+// ════════════════════════════════════════════
+
+function targetView(t) {
+  return {
+    id:        Number(t.id),
+    name:      t.name || '',
+    x:         Number(t.x),
+    y:         Number(t.y),
+    z:         Number(t.z),
+    hidden:    isHidden(t),
+    createdBy: t.created_by || null,
+    createdAt: t.created_at,
+    updatedAt: t.updated_at,
+  };
+}
+
+// A target name is the whole point of the registry, so it is required — but it
+// need not be unique: an officer may well want "Bridge" and "Bridge (east)",
+// and refusing a duplicate name would be refusing to let them think in their own
+// terms. The map is what distinguishes them.
+function targetFields(body) {
+  const fields = {};
+  if (body.name !== undefined)   fields.name = String(body.name).trim().slice(0, 80);
+  if (body.x !== undefined)      fields.x = Number(body.x);
+  if (body.y !== undefined)      fields.y = Number(body.y);
+  if (body.z !== undefined)      fields.z = Number(body.z);
+  if (body.hidden !== undefined) fields.hidden = !!body.hidden;
+  return fields;
+}
+
+// GET /api/ballistics/targets → { targets: [...] }
+export async function listTargets(request, env) {
+  const auth = await requireBallistics(request, env);
+  if (auth.error) return auth.error;
+  let rows = [];
+  try {
+    rows = await store.listTargets(env);
+  } catch (err) {
+    // Telemetry-adjacent: an unapplied migration reads as "no targets yet" and
+    // must not take the calculator down with it.
+    console.warn('Could not list targets (run migration 0023?)', err);
+  }
+  return json({ targets: hideFrom(rows || [], isSecret(auth.user)).map(targetView) });
+}
+
+// POST /api/ballistics/targets — name a new target.
+export async function createTarget(request, env) {
+  const auth = await requireBallistics(request, env);
+  if (auth.error) return auth.error;
+
+  let body;
+  try { body = await request.json(); }
+  catch { return json({ error: 'Invalid request body.' }, { status: 400 }); }
+
+  const fields = targetFields(body);
+  if (!fields.name) return json({ error: 'Give the target a name.' }, { status: 400 });
+  if (!Number.isFinite(fields.x) || !Number.isFinite(fields.z)) {
+    return json({ error: 'A target needs an X and a Z.' }, { status: 400 });
+  }
+  // Only the secret panel may create a target already hidden; an ordinary officer
+  // creating one gets it public, whatever the request says.
+  if (fields.hidden && !isSecret(auth.user)) delete fields.hidden;
+
+  try {
+    const target = await store.insertTarget(env, {
+      ...fields, createdBy: auth.user && auth.user.username,
+    });
+    return json({ ok: true, target: targetView(target) });
+  } catch (err) {
+    console.warn('Could not save target (run migration 0023?)', err);
+    return json({ error: 'Could not save the target — is migration 0023 applied?' }, { status: 500 });
+  }
+}
+
+// PUT /api/ballistics/targets/:id — rename / move / hide. See updateCannon for
+// why an unauthorised `hidden` is dropped rather than rejected.
+export async function updateTarget(request, env, id) {
+  const auth = await requireBallistics(request, env);
+  if (auth.error) return auth.error;
+  const existing = await store.findTargetById(env, id);
+  if (!existing) return json({ error: 'Target not found.' }, { status: 404 });
+
+  let body;
+  try { body = await request.json(); }
+  catch { return json({ error: 'Invalid request body.' }, { status: 400 }); }
+
+  const fields = targetFields(body);
+  if (fields.name !== undefined && !fields.name) {
+    return json({ error: 'Target name cannot be empty.' }, { status: 400 });
+  }
+  if (fields.hidden !== undefined && !isSecret(auth.user)) delete fields.hidden;
+
+  return json({ ok: true, target: targetView(await store.updateTarget(env, id, fields)) });
+}
+
+// DELETE /api/ballistics/targets/:id — forget a named place. Orders already
+// fired keep their own copy of the coordinates, so the log is unaffected.
+export async function deleteTarget(request, env, id) {
+  const auth = await requireBallistics(request, env);
+  if (auth.error) return auth.error;
+  const existing = await store.findTargetById(env, id);
+  if (!existing) return json({ error: 'Target not found.' }, { status: 404 });
+  await store.deleteTarget(env, id);
+  return json({ ok: true });
+}
+
+// ════════════════════════════════════════════
+//  Scheduled attack plans (Secret Panel)
+//    Standing orders that fire themselves. Everything here needs the
+//    'ballistics-secret' clearance, which is also what decides who may see the
+//    hidden registries they are usually aimed from.
+//
+//    The firing itself is in worker/lib/attack-scheduler.js — shared with the
+//    cron, so the button and the clock take exactly the same path.
+// ════════════════════════════════════════════
+
+function attackPlanView(plan, progress) {
+  return {
+    id:          Number(plan.id),
+    name:        plan.name || '',
+    mode:        plan.mode,
+    cycles:      Number(plan.cycles),
+    targets:     parseJsonArray(plan.targets),
+    guns:        parseJsonArray(plan.guns),
+    trajectory:  plan.trajectory || null,
+    drag:        plan.drag == null ? null : Number(plan.drag),
+    charges:     plan.charges == null ? null : Number(plan.charges),
+    unsynced:    Number(plan.unsynced) === 1,
+    scheduledAt: plan.scheduled_at || '',
+    state:       plan.state,
+    firePlanId:  plan.fire_plan_id == null ? null : Number(plan.fire_plan_id),
+    createdBy:   plan.created_by || null,
+    launchedAt:  plan.launched_at || null,
+    createdAt:   plan.created_at,
+    updatedAt:   plan.updated_at,
+    // What each gun has actually been given, on the live order this plan opened.
+    // Absent while the plan is still waiting for its moment.
+    progress:    progress || null,
+  };
+}
+
+// How far a launched plan has got. A read failure is not worth failing the whole
+// listing over — the plan's own row is still true and still useful.
+async function attackProgress(env, plan) {
+  if (!plan || plan.fire_plan_id == null || plan.state !== 'running') return null;
+  try {
+    const fire = await store.findFirePlanById(env, plan.fire_plan_id);
+    if (!fire) return null;
+    const progress = await store.firePlanProgress(env, plan.fire_plan_id);
+    return { state: fire.state, mode: fire.mode, cycles: Number(fire.cycles), guns: progress.guns, targets: progress.targets };
+  } catch (err) {
+    console.warn('Could not read scheduled attack progress', err);
+    return null;
+  }
+}
+
+// GET /api/ballistics/attack-plans → { plans: [...] }
+export async function listAttackPlans(request, env) {
+  const auth = await requireSecret(request, env);
+  if (auth.error) return auth.error;
+  let rows = [];
+  try {
+    rows = await store.listAttackPlans(env);
+  } catch (err) {
+    console.warn('Could not list attack plans (run migration 0024?)', err);
+  }
+  const plans = [];
+  for (const plan of rows || []) plans.push(attackPlanView(plan, await attackProgress(env, plan)));
+  return json({ plans });
+}
+
+// POST /api/ballistics/attack-plans — write a standing order.
+export async function createAttackPlan(request, env) {
+  const auth = await requireSecret(request, env);
+  if (auth.error) return auth.error;
+
+  let body;
+  try { body = await request.json(); }
+  catch { return json({ error: 'Invalid request body.' }, { status: 400 }); }
+
+  const name = String(body.name || '').trim().slice(0, 80);
+  if (!name) return json({ error: 'Give the attack plan a name.' }, { status: 400 });
+
+  const mode = FIRE_MODES.includes(String(body.mode)) ? String(body.mode) : null;
+  if (!mode) return json({ error: 'mode must be normal, constant or multi.' }, { status: 400 });
+
+  const when = Date.parse(String(body.scheduledAt || ''));
+  if (!Number.isFinite(when)) {
+    return json({ error: 'Give the plan a date and time to fire at.' }, { status: 400 });
+  }
+
+  const targets = parsePlanTargets(body.targets);
+  if (!targets.length) return json({ error: 'A plan needs at least one target.' }, { status: 400 });
+
+  // Guns are resolved against the registry now, at the moment the plan is
+  // written: a plan that names a cannon which is not an accepted cannon is a
+  // mistake worth catching while an officer is looking at the screen, not at
+  // four in the morning when it comes due.
+  const resolved = await resolvePlanGuns(env, body.guns);
+  if (resolved.error) return json({ error: resolved.error }, { status: 400 });
+
+  const drag = Number(body.drag);
+  const charges = Number(body.charges);
+
+  try {
+    const plan = await store.insertAttackPlan(env, {
+      name,
+      mode,
+      cycles: mode === 'constant' ? 1 : Math.max(1, Math.min(999, Math.round(Number(body.cycles) || 1))),
+      targets,
+      guns: resolved.guns,
+      trajectory: body.trajectory === 'direct' ? 'direct' : 'optimal',
+      drag: Number.isFinite(drag) && drag > 0 && drag <= 1 ? drag : null,
+      charges: Number.isFinite(charges) && charges > 0 ? Math.min(99, Math.round(charges)) : null,
+      unsynced: mode === 'multi' && !!body.unsynced,
+      scheduledAt: new Date(when).toISOString(),
+      createdBy: auth.user && auth.user.username,
+    });
+    return json({ ok: true, plan: attackPlanView(plan, null) });
+  } catch (err) {
+    console.warn('Could not save attack plan (run migration 0024?)', err);
+    return json({ error: 'Could not save the attack plan — is migration 0024 applied?' }, { status: 500 });
+  }
+}
+
+// PUT /api/ballistics/attack-plans/:id — edit a plan that has not fired yet.
+export async function updateAttackPlan(request, env, id) {
+  const auth = await requireSecret(request, env);
+  if (auth.error) return auth.error;
+  const existing = await store.findAttackPlanById(env, id);
+  if (!existing) return json({ error: 'Attack plan not found.' }, { status: 404 });
+  if (existing.state !== 'scheduled') {
+    return json({ error: 'This plan has already been fired or called off.' }, { status: 409 });
+  }
+
+  let body;
+  try { body = await request.json(); }
+  catch { return json({ error: 'Invalid request body.' }, { status: 400 }); }
+
+  const fields = {};
+  if (body.name !== undefined) {
+    fields.name = String(body.name).trim().slice(0, 80);
+    if (!fields.name) return json({ error: 'Plan name cannot be empty.' }, { status: 400 });
+  }
+  if (body.mode !== undefined) {
+    fields.mode = FIRE_MODES.includes(String(body.mode)) ? String(body.mode) : null;
+    if (!fields.mode) return json({ error: 'mode must be normal, constant or multi.' }, { status: 400 });
+  }
+  if (body.cycles !== undefined) {
+    fields.cycles = Math.max(1, Math.min(999, Math.round(Number(body.cycles) || 1)));
+  }
+  if (body.targets !== undefined) {
+    fields.targets = parsePlanTargets(body.targets);
+    if (!fields.targets.length) return json({ error: 'A plan needs at least one target.' }, { status: 400 });
+  }
+  if (body.guns !== undefined) {
+    const resolved = await resolvePlanGuns(env, body.guns);
+    if (resolved.error) return json({ error: resolved.error }, { status: 400 });
+    fields.guns = resolved.guns;
+  }
+  if (body.trajectory !== undefined) fields.trajectory = body.trajectory === 'direct' ? 'direct' : 'optimal';
+  if (body.drag !== undefined)     fields.drag = Number(body.drag);
+  if (body.charges !== undefined)  fields.charges = Number(body.charges);
+  if (body.unsynced !== undefined) fields.unsynced = !!body.unsynced;
+  if (body.scheduledAt !== undefined) {
+    const when = Date.parse(String(body.scheduledAt));
+    if (!Number.isFinite(when)) return json({ error: 'That is not a valid date and time.' }, { status: 400 });
+    fields.scheduledAt = new Date(when).toISOString();
+  }
+
+  const plan = await store.updateAttackPlan(env, id, fields);
+  return json({ ok: true, plan: attackPlanView(plan, null) });
+}
+
+// POST /api/ballistics/attack-plans/:id/launch — open fire early.
+// The cron fires plans when their moment arrives; this is the officer's hand on
+// the same trigger, so an attack does not have to be re-written to be brought
+// forward.
+export async function launchAttackPlan(request, env, id) {
+  const auth = await requireSecret(request, env);
+  if (auth.error) return auth.error;
+  const plan = await store.findAttackPlanById(env, id);
+  if (!plan) return json({ error: 'Attack plan not found.' }, { status: 404 });
+
+  const res = await attackScheduler.launchAttackPlan(env, plan);
+  if (res.error) return json({ error: res.error }, { status: 400 });
+  return json({ ok: true, plan: attackPlanView(res.attack, await attackProgress(env, res.attack)) });
+}
+
+// POST /api/ballistics/attack-plans/:id/cancel — call it off. A plan that has not
+// fired becomes 'cancelled'; one already firing is stopped like any other order,
+// which withdraws the round each gun is holding rather than letting it fly.
+export async function cancelAttackPlan(request, env, id) {
+  const auth = await requireSecret(request, env);
+  if (auth.error) return auth.error;
+  const plan = await store.findAttackPlanById(env, id);
+  if (!plan) return json({ error: 'Attack plan not found.' }, { status: 404 });
+  const updated = await attackScheduler.cancelAttackPlan(env, plan);
+  return json({ ok: true, plan: attackPlanView(updated, null) });
+}
+
+// DELETE /api/ballistics/attack-plans/:id — remove a plan from the list. A plan
+// that is still firing is refused: stop it first, so the record keeps the order
+// it opened rather than losing it to a tidy-up.
+export async function deleteAttackPlan(request, env, id) {
+  const auth = await requireSecret(request, env);
+  if (auth.error) return auth.error;
+  const plan = await store.findAttackPlanById(env, id);
+  if (!plan) return json({ error: 'Attack plan not found.' }, { status: 404 });
+  if (plan.state === 'running') {
+    return json({ error: 'Stop this plan before deleting it.' }, { status: 409 });
+  }
+  await store.deleteAttackPlan(env, id);
   return json({ ok: true });
 }

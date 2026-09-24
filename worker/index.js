@@ -23,6 +23,7 @@ import * as exchangeCC from './routes/exchange-cc.js';
 import * as ballistics from './routes/ballistics.js';
 import * as ballisticsCC from './routes/ballistics-cc.js';
 import { runMarketTick, syncFundamentalsFromBank } from './lib/market-engine.js';
+import { runAttackScheduler } from './lib/attack-scheduler.js';
 import * as store from './lib/store.js';
 
 function json(data, init = {}) {
@@ -447,6 +448,28 @@ export default {
         if (m && method === 'PUT') return await ballistics.updatePreset(request, env, m[1]);
         if (m && method === 'DELETE') return await ballistics.deletePreset(request, env, m[1]);
 
+        // ---- Ballistic Calculator: named targets ----
+        if (pathname === '/api/ballistics/targets' && method === 'GET') return await ballistics.listTargets(request, env);
+        if (pathname === '/api/ballistics/targets' && method === 'POST') return await ballistics.createTarget(request, env);
+
+        m = pathname.match(/^\/api\/ballistics\/targets\/(\d+)$/);
+        if (m && method === 'PUT') return await ballistics.updateTarget(request, env, m[1]);
+        if (m && method === 'DELETE') return await ballistics.deleteTarget(request, env, m[1]);
+
+        // ---- Ballistic Calculator: scheduled attack plans (secret clearance) ----
+        if (pathname === '/api/ballistics/attack-plans' && method === 'GET') return await ballistics.listAttackPlans(request, env);
+        if (pathname === '/api/ballistics/attack-plans' && method === 'POST') return await ballistics.createAttackPlan(request, env);
+
+        m = pathname.match(/^\/api\/ballistics\/attack-plans\/(\d+)\/launch$/);
+        if (m && method === 'POST') return await ballistics.launchAttackPlan(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/ballistics\/attack-plans\/(\d+)\/cancel$/);
+        if (m && method === 'POST') return await ballistics.cancelAttackPlan(request, env, m[1]);
+
+        m = pathname.match(/^\/api\/ballistics\/attack-plans\/(\d+)$/);
+        if (m && method === 'PUT') return await ballistics.updateAttackPlan(request, env, m[1]);
+        if (m && method === 'DELETE') return await ballistics.deleteAttackPlan(request, env, m[1]);
+
         // ---- Ballistic Calculator / Land Registry: BlueMap proxy ----
         if (pathname === '/api/bluemap-config' && method === 'GET') return await bluemap.getConfig(request, env);
         if (pathname === '/api/maptile' && method === 'GET') return await bluemap.getTile(request, env);
@@ -465,6 +488,22 @@ export default {
   async scheduled(event, env, ctx) {
     const cron = event.cron;
     const now = new Date();
+
+    // Every minute: the scheduled attack plans. This is the ONLY thing that
+    // fires the guns when nobody has the calculator open — an attack plan whose
+    // moment has come is launched here, and every launched plan is topped up with
+    // its next shots here too. Nothing else in the worker touches the queue, so a
+    // battery aimed by the clock and one aimed by a button drain identically.
+    if (cron === '* * * * *') {
+      try {
+        const summary = await runAttackScheduler(env);
+        if (summary.launched.length || summary.fed || summary.closed) {
+          console.log('Scheduled attacks:', JSON.stringify(summary));
+        }
+      } catch (err) {
+        console.error('Scheduled attack error:', err);
+      }
+    }
 
     if (cron === '*/5 * * * *') {
       // 5-minute market tick

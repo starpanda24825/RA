@@ -9,7 +9,14 @@ import * as store from '../lib/store.js';
 import { getCurrentUser, USERNAME_RE, hasRole } from './auth.js';
 import { hash } from '../lib/passwords.js';
 
-const VALID_ROLES = ['citizen', 'ballistics', 'editor', 'banker', 'admin', 'adapter'];
+// 'ballistics-secret' is a SECOND, narrower clearance that sits inside the
+// ballistics one: it reveals the Secret Panel on the calculator, the hidden
+// registries, and the scheduled attack plans. It is deliberately its own role
+// rather than a flag on the user, so it is granted and revoked with the same
+// button as every other clearance. Note that it does NOT imply 'ballistics' —
+// an account holding only the secret role is still refused by the calculator's
+// own gate, so grant both when the officer needs the page as well.
+const VALID_ROLES = ['citizen', 'ballistics', 'ballistics-secret', 'editor', 'banker', 'admin', 'adapter'];
 
 function json(data, init = {}) {
   const headers = new Headers(init.headers || {});

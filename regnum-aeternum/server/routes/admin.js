@@ -5,7 +5,10 @@ const store   = require('../store');
 
 const router = express.Router();
 
-const VALID_ROLES = ['citizen', 'ballistics', 'editor', 'banker', 'admin', 'adapter'];
+// Kept in step with worker/routes/admin.js, which is the live copy: this Node
+// mirror is only used when the app is served that way. 'ballistics-secret' is
+// the calculator's second, narrower clearance (secret panel + hidden registries).
+const VALID_ROLES = ['citizen', 'ballistics', 'ballistics-secret', 'editor', 'banker', 'admin', 'adapter'];
 
 function hasRole(session, role) {
   return (session.role || '').split(',').map(function(r) { return r.trim(); }).indexOf(role) !== -1;
