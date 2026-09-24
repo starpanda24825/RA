@@ -929,8 +929,14 @@ function attackPlanView(plan, progress) {
 
 // How far a launched plan has got. A read failure is not worth failing the whole
 // listing over — the plan's own row is still true and still useful.
+//
+// Progress is reported for any plan that has opened an order, a finished one
+// included: those numbers are what an unattended attack actually did, which is
+// what the Secret Panel wants to show once it is over, and the only way to see
+// whether a Constant order stopped on its own ceiling. A plan that has never
+// fired has no order to read, and gets nothing.
 async function attackProgress(env, plan) {
-  if (!plan || plan.fire_plan_id == null || plan.state !== 'running') return null;
+  if (!plan || plan.fire_plan_id == null) return null;
   try {
     const fire = await store.findFirePlanById(env, plan.fire_plan_id);
     if (!fire) return null;

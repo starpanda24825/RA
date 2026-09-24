@@ -642,6 +642,71 @@
   padding: 8px 10px;
   margin: 8px 0 0;
 }
+/* The Secret Panel's live status for a launched attack: a bar for the whole
+   order, a one-line summary of it, then a row per gun and per target. Sized and
+   coloured to sit inside the registry card it is part of. */
+.attack-status { margin-top: 10px; }
+.attack-status:empty { display: none; }
+.attack-progress__note {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--parchment-faint);
+  line-height: 1.6;
+}
+.attack-progress__bar {
+  height: 7px;
+  border-radius: 100px;
+  border: 1px solid var(--slate-line);
+  background: rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+}
+.attack-progress__bar > span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--teal-bright), var(--gold-bright));
+  transition: width 0.4s ease;
+}
+/* Constant has no end to measure against, so its bar is a striped placeholder
+   rather than a length that would be a lie. */
+.attack-progress__bar--open > span {
+  background: repeating-linear-gradient(45deg,
+    var(--gold-dim) 0 5px, rgba(201, 162, 39, 0.12) 5px 10px);
+  opacity: 0.7;
+}
+.attack-progress__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--parchment-dim);
+  margin-top: 7px;
+}
+.attack-progress__rows { margin-top: 7px; display: flex; flex-direction: column; gap: 4px; }
+.attack-progress__row {
+  display: grid;
+  grid-template-columns: minmax(80px, 1.3fr) minmax(50px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--parchment-dim);
+}
+.attack-progress__flag { color: var(--parchment-faint); font-style: normal; }
+.attack-progress__track {
+  display: flex;
+  height: 5px;
+  border-radius: 100px;
+  background: rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+}
+.attack-progress__track > i { display: block; height: 100%; }
+.attack-progress__track > i.fired { background: var(--teal-bright); }
+.attack-progress__track > i.inflight { background: var(--gold-bright); }
+.attack-progress__track > i.queued { background: var(--slate-soft); }
+.attack-progress__count { white-space: nowrap; }
+
 .cannon-card__row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; align-items: center; }
 .cannon-mini-input {
   font-family: var(--font-mono);
@@ -1115,6 +1180,11 @@
           <br/><br/>
           A launched plan appears in the Firing Log like any other order. A <b>Constant</b> plan has no
           natural end, so an unattended one stops itself after a set number of shots per gun.
+          <br/><br/>
+          A plan that has opened fire reports its own progress here — how many shots each gun has
+          <b>fired</b>, how many the gun has <b>in flight</b>, and how many are still <b>queued</b>, against
+          what the plan owes in total — and is refreshed every few seconds while this panel is open,
+          so an attack nobody is standing next to can still be watched.
         </p>
         <div class="registry-list" id="attack-list"></div>
       </div>
@@ -3786,9 +3856,181 @@
     renderAttackPlans();
   }
 
+  // ── Keeping the panel live. The cron feeds a launched attack whether or not
+  //    anybody is looking, so while the panel is the open tab the plans are
+  //    re-read on the registries' own cadence. Only the NUMBERS are replaced —
+  //    swapped into the status block that is already on screen — and the list is
+  //    redrawn only when a card's own contents have changed (a plan launched,
+  //    finished, was renamed, or another officer wrote one). Rebuilding the whole
+  //    list every few seconds would take the buttons out from under a click and
+  //    drop whatever text was being selected in the panel.
+  function attackPlanSignature(list) {
+    return (list || []).map(p => [p.id, p.state, p.name, p.mode, p.cycles, p.unsynced,
+      p.scheduledAt, p.launchedAt, p.firePlanId,
+      (p.guns || []).length, (p.targets || []).length].join('|')).join('~');
+  }
+
+  function patchAttackStatus() {
+    for (const p of attackPlans) {
+      const el = document.querySelector('[data-attack-status="' + p.id + '"]');
+      if (el) el.innerHTML = attackStatusBlock(p);
+    }
+  }
+
+  async function refreshAttackPlans() {
+    if (!hasSecretRole || !secretTabOpen()) return;
+    let next;
+    try {
+      const r = await fetch('/api/ballistics/attack-plans');
+      if (!r.ok) return;
+      next = (await r.json()).plans || [];
+    } catch (e) { return; }
+    const changed = attackPlanSignature(next) !== attackPlanSignature(attackPlans);
+    attackPlans = next;
+    if (changed) renderAttackPlans();
+    else patchAttackStatus();
+  }
+
   function attackStateBadge(state) {
     const cls = state === 'running' ? 'online' : (state === 'scheduled' ? 'warn' : 'offline');
     return '<span class="cannon-badge ' + cls + '">' + state + '</span>';
+  }
+
+  // ── Live status. A launched attack is fed by the server's own cron, so its
+  //    queue moves with nobody watching; these read the order back and show how
+  //    far every gun and every target has got. The counts are the queue's OWN
+  //    states — queued (worked out, not handed over yet), in flight (the gun has
+  //    taken it) and fired — so nothing here is inferred from wall-clock time.
+  //
+  //    How many shots a plan owes is knowable up front for every mode except
+  //    Constant, which is why its bar is open-ended rather than inventing a
+  //    figure: Normal owes each GUN its passes, an unsynced Multi-Target owes
+  //    each gun every target, and a synchronised one owes each TARGET its passes
+  //    between all the guns.
+  function attackShotTotal(p) {
+    const guns = (p.guns || []).length;
+    const tgts = (p.targets || []).length;
+    if (!guns || !tgts || p.mode === 'constant') return null;
+    const cycles = Math.max(1, Number(p.cycles) || 1);
+    if (p.mode === 'normal') return guns * cycles;
+    return p.unsynced ? guns * tgts * cycles : tgts * cycles;
+  }
+
+  function attackGunQuota(p) {
+    if (p.mode === 'constant' || !(p.targets || []).length) return null;
+    const cycles = Math.max(1, Number(p.cycles) || 1);
+    if (p.mode === 'normal') return cycles;
+    return p.unsynced ? (p.targets || []).length * cycles : null;
+  }
+
+  // Everybody shooting at a target counts towards it: Normal has all the guns
+  // firing at the one target, and an unsynced Multi-Target has every gun work
+  // through the whole list on its own.
+  function attackTargetQuota(p, gunCount) {
+    if (p.mode === 'constant') return null;
+    const cycles = Math.max(1, Number(p.cycles) || 1);
+    if (p.mode === 'multi' && !p.unsynced) return cycles;
+    return Math.max(1, gunCount) * cycles;
+  }
+
+  // One line: a name, a three-part bar, and the count that goes with it. The bar
+  // is scaled to what that gun or target owes, so a full bar means finished
+  // rather than merely busy.
+  function attackProgressRow(name, counts, quota) {
+    const fired    = Number(counts.fired) || 0;
+    const inflight = Number(counts.inflight) || 0;
+    const queued   = Number(counts.queued) || 0;
+    const scale = quota || Math.max(fired + inflight + queued, 1);
+    const w = (n) => (n ? (100 * n / scale).toFixed(2) + '%' : '0%');
+    const count = quota != null ? fired + ' / ' + quota
+      : fired + (inflight + queued ? ' +' + (inflight + queued) : '');
+    return '<div class="attack-progress__row">' +
+      '<span>' + name + '</span>' +
+      '<span class="attack-progress__track">' +
+        '<i class="fired" title="fired" style="width:' + w(fired) + '"></i>' +
+        '<i class="inflight" title="in flight" style="width:' + w(inflight) + '"></i>' +
+        '<i class="queued" title="queued" style="width:' + w(queued) + '"></i>' +
+      '</span>' +
+      '<span class="attack-progress__count">' + count + '</span>' +
+    '</div>';
+  }
+
+  // Coarse on purpose: this is read at a glance and repainted every few seconds.
+  function attackSpan(ms) {
+    const mins = Math.round(Math.abs(ms) / 60000);
+    if (mins < 1) return 'under a minute';
+    const h = Math.floor(mins / 60), m = mins % 60;
+    return (h ? h + 'h ' : '') + m + 'm';
+  }
+
+  function attackStatusBlock(p) {
+    // Waiting. The one live thing to say is how long is left — and an overdue
+    // plan says so rather than showing a negative count, because that means the
+    // scheduler has not made its pass yet and will open fire on the next one.
+    if (p.state === 'scheduled') {
+      if (!p.scheduledAt) return '';
+      const ms = new Date(p.scheduledAt).getTime() - Date.now();
+      const note = !Number.isFinite(ms) ? ''
+        : ms <= 0 ? 'Due now — the scheduler opens fire on its next pass.'
+        : 'Opens fire in ' + attackSpan(ms) + '.';
+      return note ? '<div class="attack-progress__note">' + escHtml(note) + '</div>' : '';
+    }
+    if (p.state === 'cancelled') return '<div class="attack-progress__note">Called off before it ever fired.</div>';
+
+    const pr = p.progress;
+    if (!pr) {
+      return p.state === 'done'
+        ? '<div class="attack-progress__note">Order closed — its shots are in the Firing Log.</div>' : '';
+    }
+
+    let fired = 0, inflight = 0, queued = 0;
+    for (const g of Object.values(pr.guns || {})) {
+      fired    += Number(g.done || 0);
+      inflight += Number(g.delivered || 0);
+      queued   += Number(g.pending || 0);
+    }
+    const total = attackShotTotal(p);
+    const pct = total ? Math.min(100, Math.round(100 * fired / total)) : null;
+
+    const bits = [];
+    if (pct !== null) bits.push(fired + ' of ' + total + ' shots fired · ' + pct + '%');
+    else bits.push(fired + ' shots fired · open-ended');
+    if (inflight) bits.push(inflight + ' in flight');
+    if (queued) bits.push(queued + ' queued');
+    bits.push('live order #' + p.firePlanId);
+    if (pr.state && pr.state !== 'running') bits.push('order ' + pr.state + ' — nothing further will be queued');
+
+    const rows = [];
+    for (const g of (p.guns || [])) {
+      const have = (pr.guns || {})[String(g.cannonId)] || {};
+      // A gun that has stopped reporting is worth flagging here of all places: an
+      // unattended attack aimed at a dead cannon is otherwise hard to tell apart
+      // from one that is simply waiting its turn.
+      const flag = bombardGunOnline(g.cannonId) ? ''
+        : ' <em class="attack-progress__flag">not reporting</em>';
+      rows.push(attackProgressRow(escHtml(g.name || ('Cannon ' + g.cannonId)) + flag,
+        { fired: have.done, inflight: have.delivered, queued: have.pending }, attackGunQuota(p)));
+    }
+
+    // The guns that have actually been fed decide what a target owes, which is
+    // the honest denominator for an order whose guns have been dropping out.
+    const gunCount = Object.keys(pr.guns || {}).length || (p.guns || []).length;
+    for (const t of (p.targets || [])) {
+      rows.push(attackProgressRow(
+        escHtml(t.label || ('X ' + t.x + ' · Z ' + t.z)),
+        { fired: (pr.targets || {})[String(t.key)], inflight: 0, queued: 0 },
+        attackTargetQuota(p, gunCount)));
+    }
+
+    const opened = p.launchedAt ? attackSpan(Date.now() - new Date(p.launchedAt).getTime()) + ' ago' : '';
+    return '<div class="attack-progress__bar' + (pct === null ? ' attack-progress__bar--open' : '') + '">' +
+        '<span style="width:' + (pct === null ? 100 : pct) + '%"></span>' +
+      '</div>' +
+      '<div class="attack-progress__head">' +
+        '<span>' + bits.join(' · ') + '</span>' +
+        (opened ? '<span>' + escHtml(opened) + '</span>' : '') +
+      '</div>' +
+      (rows.length ? '<div class="attack-progress__rows">' + rows.join('') + '</div>' : '');
   }
 
   function attackPlanCard(p) {
@@ -3797,16 +4039,6 @@
     const tgts = (p.targets || []).length;
     const gunNames = (p.guns || []).map(g => escHtml(g.name || ('Cannon ' + g.cannonId))).join(', ');
     const targetNames = (p.targets || []).map(t => escHtml(t.label || t.key)).join(', ');
-
-    // A launched plan reports what its live order has actually done, so an
-    // unattended attack can be watched from here.
-    let progress = '';
-    if (p.progress) {
-      const fired  = Object.values(p.progress.guns || {}).reduce((n, g) => n + Number(g.done || 0), 0);
-      const queued = Object.values(p.progress.guns || {}).reduce((n, g) => n + Number(g.pending || 0) + Number(g.delivered || 0), 0);
-      progress = '<div class="cannon-card__meta">Live order #' + p.firePlanId + ' (' + p.progress.state +
-        ') — fired ' + fired + ' · queued ' + queued + '</div>';
-    }
 
     const actions = [];
     if (p.state === 'scheduled') {
@@ -3832,7 +4064,9 @@
         (p.createdBy ? ' · written by ' + escHtml(p.createdBy) : '') +
       '</div>' +
       '<div class="cannon-card__meta">Guns: ' + (gunNames || '—') + '<br/>Targets: ' + (targetNames || '—') + '</div>' +
-      progress +
+      // The live status. Kept as an addressable block so the poll can replace its
+      // numbers without rebuilding the card around it.
+      '<div class="attack-status" data-attack-status="' + p.id + '">' + attackStatusBlock(p) + '</div>' +
       '<div class="registry-actions">' + actions.join('') + '</div>' +
     '</div>';
   }
@@ -5353,7 +5587,7 @@
     if (cannonsPollBusy) return;
     cannonsPollBusy = true;
     try {
-      await loadCannons({ light: registryTabOpen() || gpsTabOpen() || vehiclesTabOpen() || presetsTabOpen() || logTabOpen() || targetsTabOpen() });
+      await loadCannons({ light: registryTabOpen() || gpsTabOpen() || vehiclesTabOpen() || presetsTabOpen() || logTabOpen() || targetsTabOpen() || secretTabOpen() });
       if (gpsTabOpen()) renderGps();
       // A live firing order needs the ships' current headings even when this
       // officer is on the Calculator tab: a sublevel gun's aim is measured
@@ -5362,6 +5596,10 @@
       // Named targets are shared, so another officer may have added or moved one
       // since this page loaded — the Calculator's pickers follow it.
       await loadTargets({ light: targetsTabOpen() });
+      // A launched attack is being fed by the server's own cron, so its progress
+      // moves with nobody here doing anything. The Secret Panel watches it while
+      // it is the open tab (the call itself checks that).
+      await refreshAttackPlans();
     } finally { cannonsPollBusy = false; }
   }, 3000);
 
