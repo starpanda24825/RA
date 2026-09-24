@@ -1506,16 +1506,27 @@ export async function insertFirePlan(env, { mode, cycles, targets, guns, crew, d
       : `INSERT INTO ballistics_fire_plans
            (mode, state, cycles, targets, guns, crew, drag, charges, trajectory, created_at, updated_at)
          VALUES (?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(...(withUnsynced ? values.slice(0, 9).concat(unsynced ? 1 : 0, values.slice(9)) : values));
+  // `values` is mode, cycles, targets, guns, crew, drag, charges, trajectory,
+  // created_at, updated_at. The unsynced variant puts the flag between
+  // trajectory and the two timestamps, so the split is after trajectory (index
+  // 7) — take the first eight, insert the flag, then the two `now`s. Getting
+  // this split wrong is silent and nasty: the flag lands on `created_at` and the
+  // timestamp on `unsynced`, which D1 rejects as a type mismatch.
+  ).bind(...(withUnsynced
+    ? values.slice(0, 8).concat(unsynced ? 1 : 0, values.slice(8))
+    : values));
 
   let result;
   try {
-    result = await insert(true);
+    // .run(), not just awaiting the bound statement: a D1PreparedStatement is
+    // not thenable, so awaiting it hands back the statement itself and every
+    // column below reads `undefined`. The statement has to be executed.
+    result = await insert(true).run();
   } catch (err) {
     // 0024 not applied: the share/every-gun choice cannot be recorded, so the
     // order falls back to the shared queue this page has always used.
     console.warn('Fire plan unsynced flag unavailable (run migration 0024?) — the queue stays shared.', err);
-    result = await insert(false);
+    result = await insert(false).run();
   }
   return findFirePlanById(env, result.meta.last_row_id);
 }
