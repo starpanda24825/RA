@@ -463,10 +463,56 @@
   border-color: var(--slate-line) !important;
 }
 
+/* ---------- Map symbols ----------
+   One shape per kind of thing, so the map can be read without a key:
+     cannon          → red circle      sublevel cannon → yellow circle
+     vehicle         → blue square     radar tower     → green wifi mark
+   Anything that is offline draws grey, whatever its shape was, so a dead
+   gun or a quiet tower reads at a glance instead of looking alive. */
 .cannon-icon { width:18px; height:18px; background:var(--crimson-bright); border:2px solid var(--parchment); border-radius:50%; }
+.cannon-icon--mobile { background:var(--gold-bright); border-color:var(--ink); }
+.cannon-icon--offline { background:var(--slate-soft); border-color:var(--parchment-faint); }
 .target-icon { width:18px; height:18px; background:var(--gold-bright);    border:2px solid var(--ink);        border-radius:50%; }
 .cannon-dot { width:12px; height:12px; background:var(--crimson-bright); border:2px solid var(--parchment); border-radius:50%; }
 .cannon-dot--mobile { background:var(--gold-bright); border-color:var(--ink); }
+.cannon-dot--offline { background:var(--slate-soft); border-color:var(--parchment-faint); }
+/* A vehicle has no block of its own on record, so its square sits at the centre
+   of the guns assigned to it — the shape says "ship", the position says where. */
+.vehicle-dot { width:14px; height:14px; box-sizing:border-box; background:#3b82f6; border:2px solid var(--parchment); border-radius:3px; }
+.vehicle-dot--offline { background:var(--slate-soft); border-color:var(--parchment-faint); }
+/* Radar (GPS) tower: a green wifi mark, greyed the moment it goes quiet. */
+.tower-dot { width:20px; height:20px; color:#4cc46a; filter:drop-shadow(0 1px 2px rgba(0,0,0,0.85)); }
+.tower-dot--offline { color:var(--slate-soft); }
+.tower-dot svg { display:block; width:100%; height:100%; }
+/* A queued multi-target: a red circle carrying its place in the queue. */
+.queue-target {
+  width:22px; height:22px; box-sizing:border-box; border-radius:50%;
+  background:var(--crimson-bright); border:2px solid var(--parchment); color:#fff;
+  font-family:var(--font-mono); font-size:11px; font-weight:600; line-height:18px;
+  text-align:center; box-shadow:0 1px 3px rgba(0,0,0,0.65);
+}
+.bombard-row__num {
+  flex:none; width:18px; height:18px; box-sizing:border-box; border-radius:50%;
+  background:var(--crimson-bright); border:1px solid var(--parchment); color:#fff;
+  font-size:9.5px; line-height:16px; text-align:center;
+}
+/* A standing key for those symbols, so the shapes do not have to be guessed. */
+.map-legend {
+  position:absolute; bottom:14px; left:12px; z-index:500;
+  display:flex; flex-direction:column; gap:4px;
+  font-family:var(--font-mono); font-size:9.5px; color:var(--parchment-faint);
+  background:rgba(18,17,19,0.78); backdrop-filter:blur(6px);
+  border:1px solid var(--slate-line); border-radius:8px; padding:7px 9px;
+}
+.map-legend__row { display:flex; align-items:center; gap:6px; }
+.map-legend__swatch { width:10px; height:10px; flex:none; box-sizing:border-box; }
+.map-legend__swatch--cannon   { border-radius:50%; background:var(--crimson-bright); border:1.5px solid var(--parchment); }
+.map-legend__swatch--sublevel { border-radius:50%; background:var(--gold-bright); border:1.5px solid var(--ink); }
+.map-legend__swatch--vehicle  { border-radius:2px; background:#3b82f6; border:1.5px solid var(--parchment); }
+.map-legend__swatch--tower    { color:#4cc46a; }
+.map-legend__swatch--tower svg { display:block; width:100%; height:100%; }
+.map-legend__swatch--offline  { border-radius:50%; background:var(--slate-soft); border:1.5px solid var(--parchment-faint); }
+@media (max-width:520px) { .map-legend { display:none; } }
 /* ---------- Tabs ---------- */
 .bc-tabs {
   display: flex;
@@ -689,6 +735,13 @@
       <div class="reload-legend__row"><span class="reload-legend__dot reload-legend__dot--loaded"></span><span>Loaded and ready</span></div>
       <div class="reload-legend__row"><span class="reload-legend__dot reload-legend__dot--empty"></span><span>Not loaded — reloads inside the next order</span></div>
     </div>
+    <div class="map-legend" id="map-legend">
+      <div class="map-legend__row"><span class="map-legend__swatch map-legend__swatch--cannon"></span><span>Cannon</span></div>
+      <div class="map-legend__row"><span class="map-legend__swatch map-legend__swatch--sublevel"></span><span>Sublevel cannon</span></div>
+      <div class="map-legend__row"><span class="map-legend__swatch map-legend__swatch--vehicle"></span><span>Vehicle</span></div>
+      <div class="map-legend__row"><span class="map-legend__swatch map-legend__swatch--tower"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M3 9.2a13.2 13.2 0 0 1 18 0"/><path d="M6.4 12.9a8.4 8.4 0 0 1 11.2 0"/><path d="M9.7 16.4a4 4 0 0 1 4.6 0"/><circle cx="12" cy="19.6" r="1.4" fill="currentColor" stroke="none"/></svg></span><span>Radar tower</span></div>
+      <div class="map-legend__row"><span class="map-legend__swatch map-legend__swatch--offline"></span><span>Offline</span></div>
+    </div>
     <div class="coord-pill" id="cursor-coords">X — Z —</div>
     <button class="source-pill" id="source-status" type="button">Detecting map source…</button>
 
@@ -750,7 +803,10 @@
         </div>
       </div>
 
-      <div class="field-group">
+      <!-- Single target — the one target Normal and Constant fire at. It steps
+           aside for the queue in Multi-Target, because having both on screen at
+           once was two answers to the same question. -->
+      <div class="field-group" id="single-target-group">
         <label>Target (X, Y, Z)</label>
         <div class="coord-row">
           <input class="bc-input" id="tx" type="number" placeholder="X"/>
@@ -758,6 +814,25 @@
           <input class="bc-input" id="tz" type="number" placeholder="Z"/>
         </div>
         <div class="field-hint">Click "Target" then click the map, or type coordinates directly</div>
+      </div>
+
+      <!-- Multi-Target queue. Two ways in, both landing in the same numbered
+           list: type a coordinate and add it, or pick each one off the map. -->
+      <div class="field-group" id="multi-target-group" style="display:none;">
+        <label>Targets (X, Y, Z)</label>
+        <div class="coord-row">
+          <input class="bc-input" id="mt-x" type="number" placeholder="X"/>
+          <input class="bc-input" id="mt-y" type="number" placeholder="Y" value="64"/>
+          <input class="bc-input" id="mt-z" type="number" placeholder="Z"/>
+        </div>
+        <div class="field-hint">
+          Type a coordinate and press <b>Add Target</b>, or press <b>Target</b> above the map and
+          click the map — every click adds the next numbered target to the queue.
+        </div>
+        <button class="map-btn" id="bombard-add-target" type="button" style="margin-top:8px;">+ Add Target</button>
+        <div class="bombard-list" id="bombard-targets"></div>
+        <label style="margin-top:10px;">Cycles (min 1)</label>
+        <input class="bc-input" id="bombard-cycles" type="number" min="1" max="999" value="1"/>
       </div>
 
       <div class="field-group">
@@ -778,28 +853,24 @@
           <option value="optimal" selected>Optimal — shortest time of flight</option>
           <option value="direct">Direct — point-blank</option>
         </select>
-
-        <div id="bombard-multi" style="display:none;">
-          <label style="margin-top:12px;">Target Queue</label>
-          <div class="bombard-list" id="bombard-targets"></div>
-          <button class="map-btn" id="bombard-add-target" type="button" style="margin-top:8px;">Add target from X / Y / Z above</button>
-          <label style="margin-top:10px;">Cycles (min 1)</label>
-          <input class="bc-input" id="bombard-cycles" type="number" min="1" max="999" value="1"/>
-        </div>
-
-        <div class="registry-actions" style="margin-top:10px;">
-          <button class="calc-btn" id="bombard-start" type="button">Fire</button>
-          <button class="map-btn" id="bombard-pause" type="button" disabled>Pause</button>
-          <button class="map-btn danger" id="bombard-stop" type="button" disabled>Stop</button>
-        </div>
-        <div class="bombard-status" id="bombard-status"></div>
       </div>
 
       <div class="field-group">
         <label>Shell Type</label>
         <select class="bc-select" id="shell-select"></select>
         <div class="field-hint">Powder charges are set per cannon in the Cannon Registry.</div>
-        <button class="calc-btn" id="calc-btn" disabled>Calculate Trajectory</button>
+        <!-- The one action row. Which controls it carries is decided by the
+             mode, so a mode never offers two ways to fire the same shot:
+               Normal   → solve and preview, the preview's buttons fire.
+               Constant → run / hold / stop the barrage.
+               Multi    → run / hold / stop the barrage. -->
+        <div class="registry-actions" id="fire-controls" style="margin-top:10px;">
+          <button class="calc-btn" id="calc-btn" disabled>Calculate Trajectory</button>
+          <button class="calc-btn" id="bombard-start" type="button" style="display:none;">Fire</button>
+          <button class="map-btn" id="bombard-pause" type="button" disabled style="display:none;">Pause</button>
+          <button class="map-btn danger" id="bombard-stop" type="button" disabled style="display:none;">Stop</button>
+        </div>
+        <div class="bombard-status" id="bombard-status"></div>
       </div>
 
       <div class="results-wrap" id="results-wrap">
@@ -1371,11 +1442,43 @@
     cursorEl.textContent = `X ${mc.x}  Z ${mc.z}`;
   });
 
-  const cannonIcon = L.divIcon({ className: '', html: '<div class="cannon-icon"></div>', iconSize: [18,18], iconAnchor: [9,9] });
+  // One icon per kind of thing, and a grey twin of each for when it is offline.
+  // The shape is the type (see the CSS block); the colour is the state.
   const targetIcon = L.divIcon({ className: '', html: '<div class="target-icon"></div>', iconSize: [18,18], iconAnchor: [9,9] });
-  const cannonDotIcon       = L.divIcon({ className: '', html: '<div class="cannon-dot"></div>', iconSize: [14,14], iconAnchor: [7,7] });
-  const cannonDotMobileIcon = L.divIcon({ className: '', html: '<div class="cannon-dot cannon-dot--mobile"></div>', iconSize: [14,14], iconAnchor: [7,7] });
-  const registeredCannonMarkers = {}; // cannon id -> L.marker
+
+  const cannonIcon               = L.divIcon({ className: '', html: '<div class="cannon-icon"></div>', iconSize: [18,18], iconAnchor: [9,9] });
+  const cannonIconMobile         = L.divIcon({ className: '', html: '<div class="cannon-icon cannon-icon--mobile"></div>', iconSize: [18,18], iconAnchor: [9,9] });
+  const cannonIconOffline        = L.divIcon({ className: '', html: '<div class="cannon-icon cannon-icon--offline"></div>', iconSize: [18,18], iconAnchor: [9,9] });
+  const cannonIconMobileOffline  = L.divIcon({ className: '', html: '<div class="cannon-icon cannon-icon--mobile cannon-icon--offline"></div>', iconSize: [18,18], iconAnchor: [9,9] });
+
+  const cannonDotIcon            = L.divIcon({ className: '', html: '<div class="cannon-dot"></div>', iconSize: [14,14], iconAnchor: [7,7] });
+  const cannonDotMobileIcon      = L.divIcon({ className: '', html: '<div class="cannon-dot cannon-dot--mobile"></div>', iconSize: [14,14], iconAnchor: [7,7] });
+  const cannonDotOfflineIcon     = L.divIcon({ className: '', html: '<div class="cannon-dot cannon-dot--offline"></div>', iconSize: [14,14], iconAnchor: [7,7] });
+  const cannonDotMobileOfflineIcon = L.divIcon({ className: '', html: '<div class="cannon-dot cannon-dot--mobile cannon-dot--offline"></div>', iconSize: [14,14], iconAnchor: [7,7] });
+
+  const vehicleDotIcon           = L.divIcon({ className: '', html: '<div class="vehicle-dot"></div>', iconSize: [14,14], iconAnchor: [7,7] });
+  const vehicleDotOfflineIcon    = L.divIcon({ className: '', html: '<div class="vehicle-dot vehicle-dot--offline"></div>', iconSize: [14,14], iconAnchor: [7,7] });
+
+  // The radar (GPS) tower mark: a green wifi symbol, or grey once it is quiet.
+  const TOWER_WIFI_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round">'
+    + '<path d="M3 9.2a13.2 13.2 0 0 1 18 0"/>'
+    + '<path d="M6.4 12.9a8.4 8.4 0 0 1 11.2 0"/>'
+    + '<path d="M9.7 16.4a4 4 0 0 1 4.6 0"/>'
+    + '<circle cx="12" cy="19.6" r="1.3" fill="currentColor" stroke="none"/></svg>';
+  const towerDotIcon        = L.divIcon({ className: '', html: '<div class="tower-dot">' + TOWER_WIFI_SVG + '</div>', iconSize: [20,20], iconAnchor: [10,10] });
+  const towerDotOfflineIcon = L.divIcon({ className: '', html: '<div class="tower-dot tower-dot--offline">' + TOWER_WIFI_SVG + '</div>', iconSize: [20,20], iconAnchor: [10,10] });
+
+  // A queued multi-target: a red ring carrying its place in the queue.
+  function queueTargetIcon(n) {
+    return L.divIcon({ className: '', html: '<div class="queue-target">' + n + '</div>', iconSize: [22,22], iconAnchor: [11,11] });
+  }
+
+  const registeredCannonMarkers  = {}; // cannon id  -> L.marker
+  const registeredVehicleMarkers = {}; // vehicle id -> L.marker
+  const registeredTowerMarkers   = {}; // tower key  -> L.marker
+  const bombardTargetMarkers     = {}; // target key -> L.marker (Multi-Target queue)
+  let   bombardTargetLayer       = null;
+  let   cannonMarkerState        = { sublevel: false, online: true };
 
   // ════════════════════════════════════════════════════════════
   // 3a. MAP SIZING
@@ -1528,20 +1631,35 @@
   map.on('click', (e) => {
     if (!placeMode) return;
     const mc = llToMc(e.latlng);
+    // In Multi-Target the very same selection queues targets instead of moving
+    // the single one, and it stays armed: each click adds the next target.
+    if (placeMode === 'target' && bombardMode === 'multi') {
+      const ty = document.getElementById('mt-y').value;
+      addBombardTarget(bombardTargetFrom(mc.x, ty, mc.z));
+      return;
+    }
     placeTarget(mc.x, mc.z);
     if (placeMode === 'cannon') setMode('target'); else setMode(null);
   });
 
   // The cannon end of the line, drawn where the REGISTRY says the gun is. It is
   // no longer placed by hand — the selection decides it — so a marker can never
-  // disagree with the mount the shots are actually solved from.
-  function placeCannon(x, z, name) {
+  // disagree with the mount the shots are actually solved from. It carries the
+  // same shape and offline colour as the gun's dot on the map.
+  function placeCannon(x, z, name, sublevel, online) {
     const fx = Number(x), fz = Number(z);
     if (!Number.isFinite(fx) || !Number.isFinite(fz)) return;
+    const sub = !!sublevel;
+    const live = online !== false;
+    const icon = sub
+      ? (live ? cannonIconMobile : cannonIconMobileOffline)
+      : (live ? cannonIcon : cannonIconOffline);
     if (cannonMarker) cannonMarker.remove();
-    cannonMarker = L.marker(mcToLL(fx, fz), { icon: cannonIcon, zIndexOffset: 200 }).addTo(map)
+    cannonMarker = L.marker(mcToLL(fx, fz), { icon: icon, zIndexOffset: 200 }).addTo(map)
       .bindPopup('<span style="font-family:\'IBM Plex Mono\',monospace;font-size:12px;">' +
-        escHtml(name || 'Cannon') + ' — X ' + fx + '  Z ' + fz + '</span>');
+        escHtml(name || 'Cannon') + (sub ? ' — sublevel' : '') + '<br/>X ' + fx + '  Z ' + fz +
+        ' · ' + (live ? 'online' : 'offline') + '</span>');
+    cannonMarkerState = { sublevel: sub, online: live };
     updateCalcBtn();
   }
 
@@ -1566,6 +1684,12 @@
   function clearAll() {
     if (targetMarker)  targetMarker.remove();  targetMarker  = null;
     if (trajLayer) trajLayer.remove(); trajLayer = null;
+    // Clear clears what is on the map for the CURRENT mode: the single target,
+    // or the whole queue when Multi-Target is the mode in force.
+    if (bombardMode === 'multi' && bombardTargets.length) {
+      bombardTargets = [];
+      renderBombardTargets();
+    }
     ['tx','tz'].forEach(id => { const el = document.getElementById(id); el.value = ''; el.classList.remove('set'); });
     document.getElementById('results-wrap').classList.remove('visible');
     lastOptimal = null; lastDirect = null;
@@ -1936,7 +2060,12 @@
       const key = String(c.id);
       seen.add(key);
       const latlng = mcToLL(Number(c.x) || 0, Number(c.z) || 0);
-      const icon = c.sublevel ? cannonDotMobileIcon : cannonDotIcon;
+      // Shape says what it is (circle = cannon), colour says whether it is
+      // alive: red/yellow online, grey the moment the computer goes quiet.
+      const live = cannonOnline(c);
+      const icon = c.sublevel
+        ? (live ? cannonDotMobileIcon : cannonDotMobileOfflineIcon)
+        : (live ? cannonDotIcon       : cannonDotOfflineIcon);
       const content = cannonDotPopup(c);
       if (registeredCannonMarkers[key]) {
         registeredCannonMarkers[key].setLatLng(latlng);
@@ -1950,6 +2079,50 @@
       if (!seen.has(key)) {
         map.removeLayer(registeredCannonMarkers[key]);
         delete registeredCannonMarkers[key];
+      }
+    }
+    renderVehicleDots();
+  }
+
+  // One blue square per active vehicle, at the centre of the guns that belong
+  // to it — a vehicle has no block of its own on record, and the guns are what
+  // it is. A vehicle with no guns yet has nowhere to be drawn.
+  function renderVehicleDots() {
+    const seen = new Set();
+    for (const v of vehiclesActive) {
+      // The gun rows under the ship refresh with every cannon poll, so the
+      // square tracks the ship even when the Vehicle Registry itself is not
+      // being re-read. The registry's own copy is the fallback.
+      const held = cannonsManaged.filter(c => Number(c.vehicle_id) === Number(v.id));
+      const guns = (held.length ? held : (v.cannons || [])).filter(g =>
+        Number.isFinite(Number(g.x)) && Number.isFinite(Number(g.z)));
+      if (!guns.length) continue;
+      const key = String(v.id);
+      seen.add(key);
+      const x = guns.reduce((s, g) => s + Number(g.x), 0) / guns.length;
+      const z = guns.reduce((s, g) => s + Number(g.z), 0) / guns.length;
+      const live = cannonOnline(v);
+      const icon = live ? vehicleDotIcon : vehicleDotOfflineIcon;
+      const content = '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:12px;">' +
+        escHtml(v.name || ('Vehicle ' + v.id)) + ' — vehicle<br/>' +
+        guns.length + ' gun' + (guns.length === 1 ? '' : 's') +
+        (v.ship_yaw != null ? ' · heading ' + Number(v.ship_yaw).toFixed(0) + '°' : '') + '<br/>' +
+        '<span style="color:' + (live ? 'var(--teal-bright)' : 'var(--parchment-faint)') + ';">' +
+        (live ? 'Online' : 'Offline') + '</span></span>';
+      const latlng = mcToLL(x, z);
+      if (registeredVehicleMarkers[key]) {
+        registeredVehicleMarkers[key].setLatLng(latlng);
+        registeredVehicleMarkers[key].setIcon(icon);
+        registeredVehicleMarkers[key].setPopupContent(content);
+      } else {
+        registeredVehicleMarkers[key] = L.marker(latlng, { icon: icon, zIndexOffset: 145 })
+          .addTo(map).bindPopup(content);
+      }
+    }
+    for (const key of Object.keys(registeredVehicleMarkers)) {
+      if (!seen.has(key)) {
+        map.removeLayer(registeredVehicleMarkers[key]);
+        delete registeredVehicleMarkers[key];
       }
     }
   }
@@ -2017,12 +2190,15 @@
   function refreshSelectedGunMarker() {
     const gun = leadSelectedGun();
     if (!gun) return;
+    const sublevel = !!gun.sublevel;
+    const online   = bombardGunOnline(gun.cannonId);
     if (cannonMarker) {
       const here = cannonMarker.getLatLng();
       const want = mcToLL(Number(gun.x) || 0, Number(gun.z) || 0);
-      if (here.lat === want.lat && here.lng === want.lng) return;
+      if (here.lat === want.lat && here.lng === want.lng &&
+          cannonMarkerState.sublevel === sublevel && cannonMarkerState.online === online) return;
     }
-    placeCannon(gun.x, gun.z, gun.name);
+    placeCannon(gun.x, gun.z, gun.name, sublevel, online);
   }
 
   // The ticked set changed. The label and the cannon marker follow it, and the
@@ -2032,7 +2208,10 @@
     updateUnitLabel();
     refreshSelectedGunMarker();
     updateCalcBtn();
-    if (document.getElementById('results-wrap').classList.contains('visible') &&
+    // Multi-Target has no single-target preview to keep in step, so it only
+    // refreshes the fire buttons.
+    if (bombardMode !== 'multi' &&
+        document.getElementById('results-wrap').classList.contains('visible') &&
         document.getElementById('tx').value && document.getElementById('tz').value) {
       runCalc();
     } else {
@@ -2209,7 +2388,6 @@
   const unitLabelEl      = document.getElementById('unit-ms-label');
   const unitPanelEl      = document.getElementById('unit-ms-panel');
   const bombardTargetsEl = document.getElementById('bombard-targets');
-  const bombardMultiEl   = document.getElementById('bombard-multi');
   const bombardModeNote  = document.getElementById('bombard-mode-note');
   const bombardCyclesEl  = document.getElementById('bombard-cycles');
   const bombardTrajEl    = document.getElementById('bombard-trajectory');
@@ -2317,22 +2495,91 @@
     return 'X ' + t.x + ' · Y ' + t.y + ' · Z ' + t.z;
   }
 
+  // One target, from three loose values, with the same key shape wherever it
+  // came from — so a target added by clicking the map and one typed in are the
+  // same thing to the queue and to the server.
+  function bombardTargetFrom(x, y, z) {
+    const xs = (x == null ? '' : String(x)).trim();
+    const zs = (z == null ? '' : String(z)).trim();
+    const fx = parseFloat(xs), fz = parseFloat(zs);
+    if (xs === '' || zs === '' || !Number.isFinite(fx) || !Number.isFinite(fz)) return null;
+    const ys = (y == null ? '' : String(y)).trim();
+    const yn = parseFloat(ys);
+    const fy = (ys !== '' && Number.isFinite(yn)) ? yn : 64;
+    return {
+      key: fx + ',' + fy + ',' + fz, x: fx, y: fy, z: fz,
+      label: 'X ' + fx + ' · Y ' + fy + ' · Z ' + fz,
+    };
+  }
+
+  // The coordinate fields of whichever targeting area is in force: the queue's
+  // in Multi-Target, the single target's otherwise. Only one of the two is ever
+  // on screen, so there is no second set of numbers to disagree with.
+  function bombardTargetFromInputs() {
+    const multi = bombardMode === 'multi';
+    return bombardTargetFrom(
+      document.getElementById(multi ? 'mt-x' : 'tx').value,
+      document.getElementById(multi ? 'mt-y' : 'ty').value,
+      document.getElementById(multi ? 'mt-z' : 'tz').value,
+    );
+  }
+
+  // Add one target to the queue. Shared by the button and by the map, so both
+  // routes land here and both report the same way.
+  function addBombardTarget(t) {
+    if (!t) { bombardSetStatus('Enter the target X / Z first.', true); return false; }
+    if (bombardTargets.some(x => x.key === t.key)) { bombardSetStatus('That target is already in the queue.'); return false; }
+    if (bombardTargets.length >= BOMBARD_MAX_TARGETS) {
+      bombardSetStatus('The queue is full (' + BOMBARD_MAX_TARGETS + ').', true);
+      return false;
+    }
+    bombardTargets.push(t);
+    renderBombardTargets();
+    bombardSetStatus('Target ' + bombardTargets.length + ' added — ' + bombardTargets.length + ' in the queue.');
+    return true;
+  }
+
   function renderBombardTargets() {
     bombardTargetsEl.innerHTML = bombardTargets.length
-      ? bombardTargets.map(t => '<div class="bombard-row">' +
+      ? bombardTargets.map((t, i) => '<div class="bombard-row">' +
+          '<span class="bombard-row__num">' + (i + 1) + '</span>' +
           '<span class="bombard-row__name">' + escHtml(t.label || bombardTargetLabel(t)) + '</span>' +
           '<button class="map-btn danger" data-bombard-target-del="' + escHtml(t.key) + '" type="button">Remove</button>' +
         '</div>').join('')
-      : '<div class="bombard-empty">No targets queued yet. Enter X / Y / Z above and add them, one per target.</div>';
+      : '<div class="bombard-empty">No targets queued yet. Type a coordinate and press Add Target, or pick them off the map.</div>';
+    renderBombardTargetMap();
   }
 
-  function bombardTargetFromInputs() {
-    const x = parseFloat(document.getElementById('tx').value);
-    const z = parseFloat(document.getElementById('tz').value);
-    const y = parseFloat(document.getElementById('ty').value);
-    if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
-    const ty = Number.isFinite(y) ? y : 64;
-    return { key: x + ',' + ty + ',' + z, x: x, y: ty, z: z, label: 'X ' + x + ' · Y ' + ty + ' · Z ' + z };
+  // Draw the queue on the map: each target is a red circle carrying its place
+  // in the queue, so the list and the map always read the same order. Only shown
+  // in Multi-Target — in the other modes the single target is the one on screen.
+  function renderBombardTargetMap() {
+    if (!bombardTargetLayer) bombardTargetLayer = L.layerGroup().addTo(map);
+    const show = bombardMode === 'multi';
+    const seen = new Set();
+    if (show) {
+      bombardTargets.forEach((t, i) => {
+        const key = String(t.key);
+        seen.add(key);
+        const latlng = mcToLL(t.x, t.z);
+        const content = '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:12px;">Target ' +
+          (i + 1) + '<br/>X ' + t.x + ' · Y ' + t.y + ' · Z ' + t.z + '</span>';
+        if (bombardTargetMarkers[key]) {
+          bombardTargetMarkers[key].setLatLng(latlng);
+          bombardTargetMarkers[key].setIcon(queueTargetIcon(i + 1));
+          bombardTargetMarkers[key].setPopupContent(content);
+        } else {
+          bombardTargetMarkers[key] = L.marker(latlng, { icon: queueTargetIcon(i + 1), zIndexOffset: 210 })
+            .addTo(bombardTargetLayer).bindPopup(content);
+        }
+      });
+    }
+    for (const key of Object.keys(bombardTargetMarkers)) {
+      if (!seen.has(key)) {
+        bombardTargetLayer.removeLayer(bombardTargetMarkers[key]);
+        delete bombardTargetMarkers[key];
+      }
+    }
   }
 
   function setBombardMode(mode) {
@@ -2364,16 +2611,47 @@
     bombardMode = mode;
     document.querySelectorAll('[data-bombard-mode]').forEach(btn =>
       btn.classList.toggle('active', btn.dataset.bombardMode === mode));
-    bombardMultiEl.style.display = (mode === 'multi') ? '' : 'none';
     bombardModeNote.textContent = BOMBARD_MODE_NOTES[mode];
     bombardStartBtn.textContent = (mode === 'constant') ? 'Start Barrage' : 'Fire';
     renderBombardUnits();
-    renderBombardTargets();
+    applyModeUI();
     updateBombardButtons();
     // Changing mode changes what a tick MEANS (a ship becomes its guns), so the
     // buttons that depend on the ticked set are refreshed with it.
     updateCalcBtn();
     updateFireControl();
+  }
+
+  // The mode decides which targeting area and which action controls are shown,
+  // so a mode never offers a button that does not apply to it.
+  function applyModeUI() {
+    const multi = bombardMode === 'multi';
+    document.getElementById('single-target-group').style.display = multi ? 'none' : '';
+    document.getElementById('multi-target-group').style.display  = multi ? '' : 'none';
+    // The single target marker steps aside for the numbered queue.
+    if (targetMarker) targetMarker.setOpacity(multi ? 0 : 1);
+    // The same map selection means "append to the queue" in this mode.
+    btnTarget.title = multi
+      ? 'Click the map to add each target to the queue'
+      : 'Click on map to set target position';
+    // A single-target preview has nothing to say about a queue firing, so it is
+    // taken down rather than left hanging over the map.
+    if (multi) document.getElementById('results-wrap').classList.remove('visible');
+    renderBombardTargets();
+    applyFireControls();
+  }
+
+  // The one action row, filled by the mode. Normal fires from the solved
+  // trajectory cards, so its Solve button is the whole control; Constant and
+  // Multi-Target run a firing order, so their controls are run / hold / stop.
+  // A live order keeps its controls whatever the mode says, so it can always be
+  // stopped.
+  function applyFireControls() {
+    const order = bombardMode !== 'normal' || !!bombardPlan;
+    document.getElementById('calc-btn').style.display = order ? 'none' : '';
+    bombardStartBtn.style.display = order ? '' : 'none';
+    bombardPauseBtn.style.display = order ? '' : 'none';
+    bombardStopBtn.style.display  = order ? '' : 'none';
   }
 
   // One gun's aim at one target, solved from the gun's own mount — the same
@@ -2595,6 +2873,7 @@
     bombardPauseBtn.disabled = !active;
     bombardStopBtn.disabled = !active;
     bombardPauseBtn.textContent = (active && bombardPlan.paused) ? 'Resume' : 'Pause';
+    applyFireControls();
   }
 
   // Open a firing order. The shot parameters (the shell's drag, and each gun's
@@ -2701,14 +2980,14 @@
       bombardMode = plan.mode;
       document.querySelectorAll('[data-bombard-mode]').forEach(btn =>
         btn.classList.toggle('active', btn.dataset.bombardMode === plan.mode));
-      bombardMultiEl.style.display = (plan.mode === 'multi') ? '' : 'none';
       bombardModeNote.textContent = BOMBARD_MODE_NOTES[plan.mode];
+      bombardStartBtn.textContent = (plan.mode === 'constant') ? 'Start Barrage' : 'Fire';
       bombardTargets = (plan.targets || []).slice();
       bombardSel = new Set((plan.guns || []).map(g =>
         (g.vehicleId == null) ? ('c' + g.cannonId)
           : (plan.mode === 'multi' ? ('g' + g.cannonId) : ('v' + g.vehicleId))));
       renderBombardUnits();
-      renderBombardTargets();
+      applyModeUI();
       bombardPlan = {
         id: plan.id,
         mode: plan.mode,
@@ -2756,13 +3035,7 @@
   document.querySelectorAll('[data-bombard-mode]').forEach(btn =>
     btn.addEventListener('click', () => setBombardMode(btn.dataset.bombardMode)));
   document.getElementById('bombard-add-target').addEventListener('click', () => {
-    const t = bombardTargetFromInputs();
-    if (!t) { bombardSetStatus('Enter the target X / Z first.', true); return; }
-    if (bombardTargets.some(x => x.key === t.key)) { bombardSetStatus('That target is already in the queue.'); return; }
-    if (bombardTargets.length >= BOMBARD_MAX_TARGETS) { bombardSetStatus('The queue is full (' + BOMBARD_MAX_TARGETS + ').', true); return; }
-    bombardTargets.push(t);
-    renderBombardTargets();
-    bombardSetStatus('Target added — ' + bombardTargets.length + ' in the queue.');
+    addBombardTarget(bombardTargetFromInputs());
   });
   bombardTargetsEl.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-bombard-target-del]');
@@ -3020,8 +3293,10 @@
       vehiclesActive  = data.active  || [];
       vehiclesPending = data.pending || [];
       // A ship's guns come from here, not the cannon registry, so the
-      // bombardment picker has to be rebuilt whenever this changes.
+      // bombardment picker and the vehicle squares on the map are rebuilt
+      // whenever this changes.
       renderBombardUnits();
+      renderVehicleDots();
       if (!light) { renderVehicles(); renderRegistry(); }
     } catch (e) { console.warn('Could not load vehicle registry.', e); }
   }
@@ -3235,6 +3510,7 @@
       const data = await r.json();
       gpsTowers = data.towers || [];
       renderGps();
+      renderTowerDots();
     } catch (e) { console.warn('Could not load GPS towers.', e); }
   }
 
@@ -3308,6 +3584,46 @@
           ? new Date(t.lastSeenAt).toLocaleString() + ' (' + agoText(ageMs) + ')' : 'never') +
       '</div>' +
     '</div>';
+  }
+
+  // A tower is live while the computers are still reporting it. The map uses
+  // the same rule as the list, so a green wifi mark and a "Live" badge always
+  // say the same thing.
+  function towerLive(t) {
+    if (!t || !t.lastSeenAt) return false;
+    return (Date.now() - new Date(t.lastSeenAt).getTime()) < GPS_TOWER_LIVE_MS;
+  }
+
+  // Radar (GPS) towers on the map: a green wifi mark at the block the modem
+  // sits on, grey once the computers stop hearing it.
+  function renderTowerDots() {
+    const seen = new Set();
+    for (const t of gpsTowers) {
+      if (t.key == null || !Number.isFinite(Number(t.x)) || !Number.isFinite(Number(t.z))) continue;
+      const key = String(t.key);
+      seen.add(key);
+      const live = towerLive(t);
+      const icon = live ? towerDotIcon : towerDotOfflineIcon;
+      const content = '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:12px;">' +
+        'Radar tower ' + escHtml(t.key) + '<br/>X ' + t.x + ' · Y ' + t.y + ' · Z ' + t.z + '<br/>' +
+        '<span style="color:' + (live ? 'var(--teal-bright)' : 'var(--parchment-faint)') + ';">' +
+        (live ? 'Live' : 'Quiet') + '</span></span>';
+      const latlng = mcToLL(Number(t.x), Number(t.z));
+      if (registeredTowerMarkers[key]) {
+        registeredTowerMarkers[key].setLatLng(latlng);
+        registeredTowerMarkers[key].setIcon(icon);
+        registeredTowerMarkers[key].setPopupContent(content);
+      } else {
+        registeredTowerMarkers[key] = L.marker(latlng, { icon: icon, zIndexOffset: 140 })
+          .addTo(map).bindPopup(content);
+      }
+    }
+    for (const key of Object.keys(registeredTowerMarkers)) {
+      if (!seen.has(key)) {
+        map.removeLayer(registeredTowerMarkers[key]);
+        delete registeredTowerMarkers[key];
+      }
+    }
   }
 
   function receiverCard(c) {
@@ -4052,8 +4368,9 @@
     } finally { cannonsPollBusy = false; }
   }, 3000);
 
-  // The tower registry changes far more slowly than positions do.
-  setInterval(() => { if (gpsTabOpen()) loadTowers(); }, 15000);
+  // Towers change far more slowly than positions do, but the map draws them, so
+  // they are read on a slow timer whether or not the GPS tab is open.
+  setInterval(loadTowers, 15000);
   setInterval(() => { if (logTabOpen()) loadFireLog(); }, 15000);
 
   // 9. AUTH — last, because showApp() needs `map` to already exist
@@ -4078,6 +4395,7 @@
       .then(() => loadCannons())
       .then(() => loadVehicles())
       .then(() => resumeBombardment())
+      .then(() => loadTowers())
       .catch(() => {});
     setTimeout(() => map.invalidateSize(), 50);
   }
