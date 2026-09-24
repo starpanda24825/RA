@@ -2888,7 +2888,7 @@
     const shellIdx = parseInt(document.getElementById('shell-select').value, 10);
     const shell = shells[shellIdx] || { drag: 0.99 };
     const drag = parseFloat(shell.drag) || 0.99;
-    const trajectory = bombardTrajectoryEl.value === 'direct' ? 'direct' : 'optimal';
+    const trajectory = bombardTrajEl.value === 'direct' ? 'direct' : 'optimal';
     // The order's own count is only a fallback, for a shot queued before
     // migration 0021 that carries none of its own.
     const charges = gunCharges(guns[0]);
@@ -3043,7 +3043,13 @@
     bombardTargets = bombardTargets.filter(t => t.key !== btn.dataset.bombardTargetDel);
     renderBombardTargets();
   });
-  bombardStartBtn.addEventListener('click', startBombardment);
+  // The order is opened inside an async click handler, where a thrown error
+  // would otherwise vanish into an unhandled rejection and the button would
+  // simply look dead. Anything unexpected is reported in the status line.
+  bombardStartBtn.addEventListener('click', () => {
+    startBombardment().catch((e) =>
+      bombardSetStatus('Could not open the firing order: ' + String((e && e.message) || e), true));
+  });
   bombardPauseBtn.addEventListener('click', async () => {
     if (!bombardPlan) return;
     const state = bombardPlan.paused ? 'running' : 'paused';
