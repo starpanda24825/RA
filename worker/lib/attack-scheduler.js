@@ -47,6 +47,34 @@ const MAX_CONSTANT_SHOTS_PER_GUN = 200;
 // reconnects, aimed from where it used to be.
 const FRESH_MS = 30000;
 
+// A battery that has stopped reporting cannot drain: a shot only leaves the
+// queue when a cannon acks it, so if EVERY gun an order names has gone quiet its
+// remaining shots are stuck there for ever. Thirty seconds of silence is a blip,
+// already tolerated by the freshness check above; this is the much longer window
+// that says the battery is GONE rather than merely slow, after which the order
+// withdraws what is left instead of holding it. Set with an ATTACK_SILENCE_MS
+// var; ten minutes by default, which is twenty cron passes.
+const DEFAULT_SILENCE_MS = 10 * 60 * 1000;
+
+function silenceMs(env) {
+  const n = Number(env && env.ATTACK_SILENCE_MS);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_SILENCE_MS;
+}
+
+// What the Secret Panel shows for an order that stopped because its battery went
+// dark. Kept next to the decision that uses it, so the note and the action
+// cannot drift apart.
+const SILENCE_REASON = 'Stopped — every gun in this order had stopped reporting, so its remaining shots were withdrawn.';
+
+// Is every gun the order names silent — or gone — for longer than the window?
+// `anyLive` is whether even one of them is still an accepted cannon; a plan
+// whose whole battery has been deleted can never fire either.
+function allSilent(anyLive, newestSeen, ms) {
+  if (!anyLive) return true;                     // nothing left that could fire them
+  if (!Number.isFinite(newestSeen)) return true; // not one of them ever reported
+  return Date.now() - newestSeen > ms;
+}
+
 function parseJsonArray(text) {
   try {
     const value = JSON.parse(text || '[]');
@@ -200,11 +228,20 @@ export async function feedAttackPlan(env, attackPlan) {
   }
   const targetsAssigned = Object.assign({}, progress.targets || {});
 
-  // Only guns that still exist, are still accepted, and are actually there.
+  // Only guns that still exist, are still accepted, and are actually there. The
+  // two flags remember the rest: whether any named gun is still an accepted
+  // cannon at all, and how recently the most recent of them checked in. A plan
+  // whose every gun is merely stale is not "waiting its turn" — it is stuck, and
+  // the flags are what let the pass below tell that apart from a quiet minute.
   const guns = [];
+  let anyLive = false;          // at least one named gun is still an accepted cannon
+  let newestSeen = -Infinity;   // the most recent check-in among those cannons
   for (const ref of gunRefs) {
     const row = await store.findCannonById(env, ref.cannonId);
     if (!row || row.status !== 'active') continue;
+    anyLive = true;
+    const seen = Date.parse(row.last_seen_at || '');
+    if (Number.isFinite(seen) && seen > newestSeen) newestSeen = seen;
     if (!isFresh(row.last_seen_at)) continue;
     guns.push(gunForSolver(row, plan));
   }
@@ -240,6 +277,17 @@ export async function feedAttackPlan(env, attackPlan) {
   if (!more && !busy) {
     await store.setFirePlanState(env, firePlanId, 'done');
     await store.setAttackPlanState(env, attackPlan.id, 'done');
+  } else if (!guns.length && busy && allSilent(anyLive, newestSeen, silenceMs(env))) {
+    // Work is queued, but there is no gun left to hand it to, and the whole
+    // battery has been dark for longer than the grace window. The order is over.
+    //
+    // Stopping the fire plan (rather than just marking the attack plan done)
+    // withdraws the queue, which matters: those rows were aimed from where the
+    // guns were when they last reported, and a Stop is exactly what keeps one
+    // that reconnects later from firing a stale barrage nobody asked for.
+    await store.setFirePlanState(env, firePlanId, 'stopped');
+    await store.setAttackPlanState(env, attackPlan.id, 'done', undefined, SILENCE_REASON);
+    console.warn('Scheduled attack #' + attackPlan.id + ' stopped: every gun stopped reporting.');
   }
   return shots.length;
 }

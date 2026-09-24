@@ -3866,7 +3866,7 @@
   //    drop whatever text was being selected in the panel.
   function attackPlanSignature(list) {
     return (list || []).map(p => [p.id, p.state, p.name, p.mode, p.cycles, p.unsynced,
-      p.scheduledAt, p.launchedAt, p.firePlanId,
+      p.scheduledAt, p.launchedAt, p.firePlanId, p.closedReason,
       (p.guns || []).length, (p.targets || []).length].join('|')).join('~');
   }
 
@@ -3978,7 +3978,12 @@
     if (p.state === 'cancelled') return '<div class="attack-progress__note">Called off before it ever fired.</div>';
 
     const pr = p.progress;
+    // A done order can say WHY it stopped. The scheduler writes a note when an
+    // unattended attack gives up because its whole battery went dark, and that
+    // is worth showing instead of the generic "closed" line.
+    const reason = p.closedReason ? '<div class="attack-progress__note">' + escHtml(p.closedReason) + '</div>' : '';
     if (!pr) {
+      if (reason) return reason;
       return p.state === 'done'
         ? '<div class="attack-progress__note">Order closed — its shots are in the Firing Log.</div>' : '';
     }
@@ -4030,7 +4035,8 @@
         '<span>' + bits.join(' · ') + '</span>' +
         (opened ? '<span>' + escHtml(opened) + '</span>' : '') +
       '</div>' +
-      (rows.length ? '<div class="attack-progress__rows">' + rows.join('') + '</div>' : '');
+      (rows.length ? '<div class="attack-progress__rows">' + rows.join('') + '</div>' : '') +
+      reason;
   }
 
   function attackPlanCard(p) {

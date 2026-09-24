@@ -1,0 +1,23 @@
+-- 0025_attack_plan_closed_reason.sql
+-- Why a scheduled attack stopped.
+--
+-- A standing order is normally closed by one of two things: it fires everything
+-- it owed, or an officer presses Stop. The Secret Panel can tell those apart from
+-- the fire plan's own state. But there is a third ending, and it is the one an
+-- unattended order is most likely to meet: every gun the order names has stopped
+-- reporting. A shot only leaves the queue when a cannon acks it, so a battery
+-- that has gone dark cannot drain — the order would sit queued for ever, its
+-- rows aimed from where the guns used to be and ready to fire the moment one
+-- reconnected. The scheduler now withdraws those shots and closes the order, and
+-- this column is where it writes down WHY, so the panel can say so instead of
+-- showing a plan that merely stopped.
+--
+-- It is a plain text note, not an enum: the scheduler owns the wording, it is
+-- only ever read back for display, and a future ending (say, ammunition running
+-- out) can use the same column without a schema change. Empty for every order
+-- that ended the ordinary way.
+--
+-- Apply with:
+--   npx wrangler d1 migrations apply regnum-aeternum-db --remote
+
+ALTER TABLE ballistics_attack_plans ADD COLUMN closed_reason TEXT NOT NULL DEFAULT '';

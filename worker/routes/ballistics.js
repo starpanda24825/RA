@@ -921,6 +921,10 @@ function attackPlanView(plan, progress) {
     launchedAt:  plan.launched_at || null,
     createdAt:   plan.created_at,
     updatedAt:   plan.updated_at,
+    // Why an unattended order stopped, when it stopped for a reason other than
+    // firing out or being called off (migration 0025). Empty otherwise, and
+    // absent entirely on a database that has not run it yet.
+    closedReason: plan.closed_reason || '',
     // What each gun has actually been given, on the live order this plan opened.
     // Absent while the plan is still waiting for its moment.
     progress:    progress || null,

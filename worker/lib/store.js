@@ -2505,12 +2505,26 @@ export async function updateAttackPlan(env, id, fields) {
 
 // Move a plan through its life. `firePlanId` is written once, when the plan
 // launches, and is what ties the standing order to the live one.
-export async function setAttackPlanState(env, id, state, firePlanId) {
+//
+// `reason` is for the endings that are neither "fired out" nor "called off":
+// the scheduler writes why an unattended order gave up (see
+// worker/lib/attack-scheduler.js), and the panel shows it. It is a separate
+// statement so that a database which has not yet run migration 0025 still
+// closes the plan — it just closes it without a note.
+export async function setAttackPlanState(env, id, state, firePlanId, reason) {
   const sets = ['state = ?', 'updated_at = ?'];
   const binds = [String(state), nowIso()];
   if (firePlanId !== undefined) { sets.push('fire_plan_id = ?', 'launched_at = ?'); binds.push(firePlanId == null ? null : Number(firePlanId), nowIso()); }
   binds.push(Number(id));
   await env.DB.prepare(`UPDATE ballistics_attack_plans SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
+  if (reason !== undefined) {
+    try {
+      await env.DB.prepare('UPDATE ballistics_attack_plans SET closed_reason = ? WHERE id = ?')
+        .bind(String(reason || '').slice(0, 300), Number(id)).run();
+    } catch (err) {
+      console.warn('Could not record why attack plan #' + id + ' closed (run migration 0025?)', err);
+    }
+  }
   return findAttackPlanById(env, id);
 }
 
