@@ -2758,6 +2758,23 @@
     return lines.join('\n');
   }
 
+  // Re-read every gun of a live order from the registries, in place. The list
+  // was a snapshot of the guns the moment the order was opened, but a sublevel
+  // cannon — and the ship carrying it, whose heading its aim is measured
+  // against — can be driven somewhere else while the order runs. Solving the
+  // next shot from that snapshot would keep aiming at where the gun used to be
+  // and along the heading it used to have. The objects are updated rather than
+  // replaced so the snapshot survives a registry hiccup that leaves a gun
+  // briefly missing: the last known position is far better than none.
+  function refreshBombardGuns(liveGuns) {
+    if (!bombardPlan) return;
+    const byId = liveGuns || new Map(bombardGunList().map(g => [g.cannonId, g]));
+    for (const gun of bombardPlan.guns || []) {
+      const live = byId.get(gun.cannonId);
+      if (live) Object.assign(gun, live);
+    }
+  }
+
   // One scheduler pass: ask the server how far the order has got, then top up
   // every gun that is short of its look-ahead. Offline guns are skipped — shots
   // queued at a computer nobody is reading would just pile up.
@@ -2795,6 +2812,10 @@
         return;
       }
       bombardPlan.paused = false;
+
+      // Aim the shot that is queued now, not the one that was queued when the
+      // order opened: the guns may have moved since the last pass.
+      refreshBombardGuns();
 
       const shots = [];
       for (const gun of bombardPlan.guns) {
@@ -4305,6 +4326,11 @@
       const plan = bombardPlan;
       const now  = Date.now();
       const byId = new Map(bombardGunList().map(g => [g.cannonId, g]));
+      // The preview solves the shots still to come, so it has to solve them
+      // from the guns the scheduler will: an order whose guns have moved since
+      // its last pass would otherwise draw its grey dotted lines from where
+      // they used to be, while the live dots sat somewhere else.
+      refreshBombardGuns(byId);
       const positions = new Map();
       for (const g of plan.guns) {
         const live = byId.get(g.cannonId);
@@ -4370,7 +4396,10 @@
     try {
       await loadCannons({ light: registryTabOpen() || gpsTabOpen() || vehiclesTabOpen() || presetsTabOpen() || logTabOpen() });
       if (gpsTabOpen()) renderGps();
-      if (vehiclesTabOpen()) await loadVehicles({ light: true });
+      // A live firing order needs the ships' current headings even when this
+      // officer is on the Calculator tab: a sublevel gun's aim is measured
+      // against its ship's, and the ship can turn mid-barrage.
+      if (vehiclesTabOpen() || bombardPlan) await loadVehicles({ light: true });
     } finally { cannonsPollBusy = false; }
   }, 3000);
 
