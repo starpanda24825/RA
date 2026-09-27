@@ -41,14 +41,32 @@ function gaussianRandom() {
   return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
 }
 
-async function getSetting(db, key, fallback) {
-  const row = await db.prepare('SELECT value FROM fdx_settings WHERE key = ?').bind(key).first();
-  return row ? row.value : String(fallback);
+// Read every exchange setting in a single query. A market tick needs several
+// settings per company (sector P/E, base volatility, fees); loading them once
+// per tick instead of once per company removes thousands of single-row
+// `fdx_settings` reads per day.
+async function loadSettings(db) {
+  const { results } = await db.prepare('SELECT key, value FROM fdx_settings').all();
+  const settings = {};
+  for (const row of (results || [])) settings[row.key] = row.value;
+  return settings;
 }
 
-async function getSettingNum(db, key, fallback) {
-  const v = await getSetting(db, key, fallback);
-  return Number(v);
+function settingNum(settings, key, fallback) {
+  if (settings && settings[key] !== undefined) {
+    const n = Number(settings[key]);
+    return Number.isFinite(n) ? n : fallback;
+  }
+  return fallback;
+}
+
+// Fetch the active company set. Callers running inside a market tick pass their
+// already-loaded array so the whole tick shares a single query.
+async function fetchActiveCompanies(db) {
+  const { results } = await db.prepare(
+    "SELECT * FROM fdx_companies WHERE status = 'active'"
+  ).all();
+  return results || [];
 }
 
 // ---------- fair value ----------
@@ -94,15 +112,17 @@ export function calculateFairValue(company, sectorOverrides = {}) {
 
 // ---------- price drift simulation ----------
 
-export async function runPriceDrift(db, company) {
+export async function runPriceDrift(db, company, settings) {
   const lastPrice = company.current_price || company.ipo_price;
   if (!lastPrice || lastPrice <= 0) return lastPrice;
 
+  // Settings are loaded once per tick; fall back to a single load when this
+  // function is invoked on its own.
+  if (!settings) settings = await loadSettings(db);
+
   const sectorPEOverrides = {};
-  const sectors = Object.keys(SECTOR_PE_RATIOS);
-  for (const s of sectors) {
-    const pe = await getSettingNum(db, 'sector_pe_' + s, SECTOR_PE_RATIOS[s]);
-    sectorPEOverrides[s] = pe;
+  for (const s of Object.keys(SECTOR_PE_RATIOS)) {
+    sectorPEOverrides[s] = settingNum(settings, 'sector_pe_' + s, SECTOR_PE_RATIOS[s]);
   }
 
   // 1. Fundamental pull
@@ -111,7 +131,7 @@ export async function runPriceDrift(db, company) {
 
   // 2. Sentiment noise
   const beta = company.fundamental_beta || 1.0;
-  const baseVol = await getSettingNum(db, 'base_volatility', BASE_VOLATILITY);
+  const baseVol = settingNum(settings, 'base_volatility', BASE_VOLATILITY);
   const sigma = beta * baseVol;
   const epsilon = gaussianRandom();
   const sentimentNoise = lastPrice * sigma * epsilon;
@@ -159,16 +179,15 @@ export async function runMarketTick(db) {
   const afterHours = isAfterHours(now);
   const preMarket = isPreMarket(now);
 
-  // Get all active companies
-  const { results: companies } = await db.prepare(
-    "SELECT * FROM fdx_companies WHERE status = 'active'"
-  ).all();
+  // Load settings and the active company set once; the whole tick shares them.
+  const settings = await loadSettings(db);
+  const companies = await fetchActiveCompanies(db);
 
   for (const company of companies) {
     // Only run price drift during market hours
     let newPrice = company.current_price || company.ipo_price;
     if (marketOpen) {
-      newPrice = await runPriceDrift(db, company);
+      newPrice = await runPriceDrift(db, company, settings);
     }
 
     // Update company price and high/low during market hours
@@ -182,6 +201,13 @@ export async function runMarketTick(db) {
            current_price = ?, day_high = ?, day_low = ?, market_cap = ?, updated_at = ?
          WHERE id = ?`
       ).bind(newPrice, dayHigh, dayLow, marketCap, nowIso(), company.id).run();
+
+      // Keep the in-memory snapshot current so later passes in this tick see
+      // the same prices we just wrote, without re-querying every company.
+      company.current_price = newPrice;
+      company.day_high = dayHigh;
+      company.day_low = dayLow;
+      company.market_cap = marketCap;
     }
 
     // Always update candles regardless of session (preserves full day's data)
@@ -194,29 +220,32 @@ export async function runMarketTick(db) {
 
   if (marketOpen) {
     // Activate any stop orders whose prices have been crossed
-    await activateStopOrders(db);
+    await activateStopOrders(db, companies);
 
     // Run matching engine on newly activated orders
-    await runMatchingEngine(db);
+    await runMatchingEngine(db, settings, companies);
 
     // Check circuit breakers
-    await checkCircuitBreakers(db);
+    await checkCircuitBreakers(db, settings, companies);
 
     // DAY order expiry is handled by the EOD cron trigger (0 20 * * *),
     // not per-tick, since market hours end at 20:00 UTC
   }
 
   // Auto-resume companies whose halt duration has elapsed
-  await autoResumeHaltedCompanies(db, now);
+  const resumed = await autoResumeHaltedCompanies(db, now, settings);
 
   // Inject market maker orders during all active sessions
   if (marketOpen || afterHours || preMarket) {
-    await injectMarketMakerOrders(db);
+    // A company resumed this tick is not in the array yet; refresh only when
+    // that actually happened (rare) so the market maker still sees it.
+    const mmCompanies = resumed > 0 ? await fetchActiveCompanies(db) : companies;
+    await injectMarketMakerOrders(db, settings, mmCompanies);
   }
 
   // Compute index during market hours only
   if (marketOpen) {
-    await computeAndSnapshotIndex(db);
+    await computeAndSnapshotIndex(db, companies);
   }
 }
 
@@ -287,10 +316,9 @@ function isAfterHours(now) {
 
 // ---------- order matching engine ----------
 
-export async function runMatchingEngine(db) {
-  const { results: companies } = await db.prepare(
-    "SELECT * FROM fdx_companies WHERE status = 'active'"
-  ).all();
+export async function runMatchingEngine(db, settings, companies) {
+  if (!settings) settings = await loadSettings(db);
+  if (!companies) companies = await fetchActiveCompanies(db);
 
   for (const company of companies) {
     // Skip market maker self-matching by cancelling old MM orders first
@@ -298,12 +326,12 @@ export async function runMatchingEngine(db) {
       `UPDATE fdx_orders SET status = 'cancelled', cancelled_at = ?
        WHERE company_id = ? AND account_id = '__exchange_treasury__' AND status IN ('open','partial')`
     ).bind(nowIso(), company.id).run();
-    await matchCompanyOrders(db, company);
+    await matchCompanyOrders(db, company, settings);
   }
 }
 
-async function matchCompanyOrders(db, company) {
-  const feeRate = await getSettingNum(db, 'exchange_fee_rate', 0.005);
+async function matchCompanyOrders(db, company, settings) {
+  const feeRate = settingNum(settings, 'exchange_fee_rate', 0.005);
 
   // Get open buy orders sorted by price DESC, time ASC
   const { results: buyOrders } = await db.prepare(
@@ -424,6 +452,15 @@ async function matchCompanyOrders(db, company) {
            WHERE id = ?`
         ).bind(executionPrice, dayHigh, dayLow, dayVol, totalVol, marketCap, nowIso(), company.id).run();
 
+        // Reflect the fill in the shared in-memory snapshot so later passes in
+        // this tick (circuit breakers, index) see the traded price.
+        company.current_price = executionPrice;
+        company.day_high = dayHigh;
+        company.day_low = dayLow;
+        company.day_volume = dayVol;
+        company.total_volume = totalVol;
+        company.market_cap = marketCap;
+
         // Update candle
         await updateCandle(db, company.id, '5m', executionPrice, matchQty, 1);
         await updateCandle(db, company.id, '1h', executionPrice, matchQty, 1);
@@ -444,10 +481,8 @@ async function matchCompanyOrders(db, company) {
 
 // ---------- stop order activation ----------
 
-async function activateStopOrders(db) {
-  const { results: companies } = await db.prepare(
-    "SELECT * FROM fdx_companies WHERE status = 'active'"
-  ).all();
+async function activateStopOrders(db, companies) {
+  if (!companies) companies = await fetchActiveCompanies(db);
 
   for (const company of companies) {
     const price = company.current_price || company.ipo_price;
@@ -502,17 +537,18 @@ async function expireDayOrders(db, now) {
 
 // ---------- circuit breakers ----------
 
-async function checkCircuitBreakers(db) {
-  const l3Pct = await getSettingNum(db, 'circuit_breaker_l3_pct', 35);    const l2Pct = await getSettingNum(db, 'circuit_breaker_l2_pct', 20);
-    const l1Pct = await getSettingNum(db, 'circuit_breaker_l1_pct', 10);
-    const volPct = await getSettingNum(db, 'volatility_pause_pct', 5);
-    const volMins = await getSettingNum(db, 'volatility_pause_mins', 2);
+async function checkCircuitBreakers(db, settings, companies) {
+  if (!settings) settings = await loadSettings(db);
+  if (!companies) companies = await fetchActiveCompanies(db);
 
-  const { results: companies } = await db.prepare(
-    "SELECT * FROM fdx_companies WHERE status = 'active'"
-  ).all();
+  const l3Pct = settingNum(settings, 'circuit_breaker_l3_pct', 35);
+  const l2Pct = settingNum(settings, 'circuit_breaker_l2_pct', 20);
+  const l1Pct = settingNum(settings, 'circuit_breaker_l1_pct', 10);
+  const volPct = settingNum(settings, 'volatility_pause_pct', 5);
+  const volMins = settingNum(settings, 'volatility_pause_mins', 2);
 
   for (const company of companies) {
+    if (company.status !== 'active') continue;
     const price = company.current_price || company.ipo_price;
     const prevClose = company.prev_close_price;
     if (!prevClose || prevClose <= 0) continue;
@@ -523,6 +559,7 @@ async function checkCircuitBreakers(db) {
     if (changePct >= l3Pct) {
       await haltCompany(db, company.id, 'CIRCUIT_BREAKER_' + (price > prevClose ? 'UP' : 'DOWN'),
         `Price moved ${changePct.toFixed(1)}% today. Trading halted for rest of day.`, 'system');
+      company.status = 'halted';
       continue;
     }
 
@@ -530,6 +567,7 @@ async function checkCircuitBreakers(db) {
     if (changePct >= l2Pct) {
       await haltCompany(db, company.id, 'CIRCUIT_BREAKER_' + (price > prevClose ? 'UP' : 'DOWN'),
         `Price moved ${changePct.toFixed(1)}% today. 60-min halt.`, 'system');
+      company.status = 'halted';
       continue;
     }
 
@@ -541,6 +579,7 @@ async function checkCircuitBreakers(db) {
       if (!recentHalt) {
         await haltCompany(db, company.id, 'CIRCUIT_BREAKER_' + (price > prevClose ? 'UP' : 'DOWN'),
           `Price moved ${changePct.toFixed(1)}% today. 15-min halt.`, 'system');
+        company.status = 'halted';
       }
       continue;
     }
@@ -562,18 +601,20 @@ async function checkCircuitBreakers(db) {
         if (!recentVolPause) {
           await haltCompany(db, company.id, 'VOLATILITY_PAUSE',
             `Price moved ${fiveMinChange.toFixed(1)}% in 5 minutes. ${volMins}-min pause.`, 'system');
+          company.status = 'halted';
         }
       }
     }
   }
 }
 
-async function autoResumeHaltedCompanies(db, now) {
+async function autoResumeHaltedCompanies(db, now, settings) {
   // Resume companies halted by circuit breakers or volatility pauses
   // after their duration has passed (based on halt type and settings)
-  const volMins = await getSettingNum(db, 'volatility_pause_mins', 2);
-  const l1Mins = await getSettingNum(db, 'circuit_breaker_l1_mins', 15);
-  const l2Mins = await getSettingNum(db, 'circuit_breaker_l2_mins', 60);
+  if (!settings) settings = await loadSettings(db);
+  const volMins = settingNum(settings, 'volatility_pause_mins', 2);
+  const l1Mins = settingNum(settings, 'circuit_breaker_l1_mins', 15);
+  const l2Mins = settingNum(settings, 'circuit_breaker_l2_mins', 60);
 
   const { results: halted } = await db.prepare(
     `SELECT h.*, c.ticker FROM fdx_halt_log h
@@ -581,6 +622,8 @@ async function autoResumeHaltedCompanies(db, now) {
      WHERE h.resumed_at IS NULL AND h.company_id IS NOT NULL
      ORDER BY h.halted_at ASC`
   ).all();
+
+  let resumedCount = 0;
 
   for (const halt of (halted || [])) {
     let durationMins = null;
@@ -593,9 +636,9 @@ async function autoResumeHaltedCompanies(db, now) {
       ).bind(halt.company_id).first();
       if (company && company.prev_close_price) {
         const changePct = Math.abs((company.current_price - company.prev_close_price) / company.prev_close_price) * 100;
-        const l3Pct = await getSettingNum(db, 'circuit_breaker_l3_pct', 35);
-        const l2Pct = await getSettingNum(db, 'circuit_breaker_l2_pct', 20);
-        const l1Pct = await getSettingNum(db, 'circuit_breaker_l1_pct', 10);
+        const l3Pct = settingNum(settings, 'circuit_breaker_l3_pct', 35);
+        const l2Pct = settingNum(settings, 'circuit_breaker_l2_pct', 20);
+        const l1Pct = settingNum(settings, 'circuit_breaker_l1_pct', 10);
         if (changePct >= l3Pct) durationMins = null; // L3: rest of day, no auto-resume
         else if (changePct >= l2Pct) durationMins = l2Mins;
         else if (changePct >= l1Pct) durationMins = l1Mins;
@@ -619,10 +662,14 @@ async function autoResumeHaltedCompanies(db, now) {
            WHERE id = ?`
         ).bind(nowIso(), durationMins, halt.id).run();
 
+        resumedCount++;
+
         // Market maker will inject fresh orders on the next tick for the resumed company
       }
     }
   }
+
+  return resumedCount;
 }
 
 async function haltCompany(db, companyId, haltType, reason, triggeredBy) {
@@ -642,17 +689,16 @@ async function haltCompany(db, companyId, haltType, reason, triggeredBy) {
 
 // ---------- market maker orders ----------
 
-async function injectMarketMakerOrders(db) {
-  const feeRate = await getSettingNum(db, 'exchange_fee_rate', 0.005);
-  const spreadPct = await getSettingNum(db, 'market_maker_spread_pct', 3) / 100;
-  const mmQty = await getSettingNum(db, 'market_maker_qty', 50);
+async function injectMarketMakerOrders(db, settings, companies) {
+  if (!settings) settings = await loadSettings(db);
+  if (!companies) companies = await fetchActiveCompanies(db);
+
+  const spreadPct = settingNum(settings, 'market_maker_spread_pct', 3) / 100;
+  const mmQty = settingNum(settings, 'market_maker_qty', 50);
   const treasuryKey = '__exchange_treasury__';
 
-  const { results: companies } = await db.prepare(
-    "SELECT * FROM fdx_companies WHERE status = 'active'"
-  ).all();
-
   for (const company of companies) {
+    if (company.status !== 'active') continue;
     const price = company.current_price || company.ipo_price;
     if (price <= 0) continue;
 
@@ -845,12 +891,14 @@ export async function getAvailableBalance(db, accountKey) {
 
 // ---------- index computation ----------
 
-export async function computeAndSnapshotIndex(db) {
-  const { results: companies } = await db.prepare(
-    "SELECT * FROM fdx_companies WHERE status = 'active'"
-  ).all();
+export async function computeAndSnapshotIndex(db, companies) {
+  // Inside a tick the shared array may include companies halted moments ago;
+  // index membership still reflects the freshly-halted state.
+  const active = companies
+    ? companies.filter(c => c.status === 'active')
+    : await fetchActiveCompanies(db);
 
-  if (!companies || companies.length === 0) {
+  if (!active || active.length === 0) {
     await db.prepare(
       'INSERT INTO fdx_index_snapshots (index_value, total_market_cap, advancing, declining, unchanged) VALUES (?, ?, ?, ?, ?)'
     ).bind(1000, 0, 0, 0, 0).run();
@@ -860,7 +908,7 @@ export async function computeAndSnapshotIndex(db) {
   let totalMarketCap = 0;
   let advancing = 0, declining = 0, unchanged = 0;
 
-  for (const company of companies) {
+  for (const company of active) {
     const price = company.current_price || company.ipo_price;
     const shares = company.total_shares || 0;
     totalMarketCap += price * shares;

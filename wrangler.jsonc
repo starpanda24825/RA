@@ -27,7 +27,8 @@
 		// Every minute drives the scheduled attack plans (worker/lib/attack-scheduler.js):
 		// it launches any plan whose moment has come and keeps every launched plan's
 		// shot queue topped up, so an attack fires with no calculator page open. The
-		// rest are the market, banking and settlement timers.
-		"crons": ["* * * * *", "*/5 * * * *", "0 * * * *", "0 20 * * *", "0 8 * * *"]
+		// rest are the market, banking and settlement timers. The 03:00 pass is the
+		// daily value-history snapshot (one row per company, pruned to 7 days).
+		"crons": ["* * * * *", "*/5 * * * *", "0 * * * *", "0 20 * * *", "0 8 * * *", "0 3 * * *"]
 	}
 }

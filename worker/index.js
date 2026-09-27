@@ -602,14 +602,23 @@ export default {
       console.error('Tax check error:', err);
     }
 
-    // Insert value history snapshots for all companies
-    try {
-      const companies = await store.listBankingAccounts(env, { type: 'company' });
-      for (const co of companies) {
-        await store.insertCompanyValueSnapshot(env, co.key, co.balance);
+    // Value history snapshots are a DAILY reading per company (migration 0006:
+    // "one row per live company ... daily at 03:00 UTC"), which is all the 7-day
+    // sparkline and the 24h change on the leaderboard ever read.
+    //
+    // This must NOT run on every cron trigger: the every-minute attack cron
+    // makes this fire 1,440 times a day, and each pass prunes every company's
+    // history — an amount of rows read that grows with how long the server has
+    // been up and blows straight through the D1 free tier.
+    if (cron === '0 3 * * *') {
+      try {
+        const companies = await store.listBankingAccounts(env, { type: 'company' });
+        for (const co of companies) {
+          await store.insertCompanyValueSnapshot(env, co.key, co.balance);
+        }
+      } catch (err) {
+        console.error('Value snapshot error:', err);
       }
-    } catch (err) {
-      console.error('Value snapshot error:', err);
     }
   },
 };
